@@ -1,0 +1,26 @@
+{
+  "name": "Quincena",
+  "short_name": "Quincena",
+  "description": "Ordena tu quincena y sabe si tus metas de ahorro alcanzan.",
+  "lang": "es-MX",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#14171A",
+  "theme_color": "#1f8a55",
+  "icons": [
+    {
+      "src": "./icono-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icono-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
