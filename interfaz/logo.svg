@@ -1,0 +1,14 @@
+<!-- Quincena — anillo de progreso.
+     El arco avanza tres cuartos: una quincena que corre, un ahorro que sube.
+     Geométrico a propósito: se lee igual a 512 px que a 32, que es donde vive un ícono.
+
+     El fondo es un cuadrado completo, sin esquinas redondeadas: Android e iOS aplican SU
+     propia máscara al ícono, y darles ya redondeado deja un borde recortado. El dibujo cabe
+     dentro del 80% central, así que sobrevive al recorte circular sin comerse nada. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" fill="#14171A"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#252B31" stroke-width="44"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#30A46C" stroke-width="44"
+          stroke-linecap="round" stroke-dasharray="706.86 235.62"
+          transform="rotate(-90 256 256)"/>
+</svg>

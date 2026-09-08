@@ -1,2 +1,5 @@
-# Aquí no entra ningún dato: la app guarda todo en el dispositivo de quien la usa.
+# Los datos reales NUNCA entran al repositorio: ni en el working tree ni en el historial.
+# Lo público es el motor; los montos viven en el dispositivo de quien usa la app.
 *.json
+respaldos/
+datos/

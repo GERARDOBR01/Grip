@@ -1,0 +1,232 @@
+/* Estilos — minimalismo con un trabajo que hacer.
+   Una sola tinta de acento, tipografía del sistema, mucho aire y números grandes.
+   El número que importa en cada pantalla es el más grande; lo demás se calla. */
+
+:root {
+  --fondo: #fbfbfa;
+  --superficie: #ffffff;
+  --superficie-2: #f4f4f2;
+  --borde: #e4e4e1;
+  --tinta: #1f2328;
+  --tinta-2: #6b7280;
+  --tinta-3: #9ca3af;
+  --acento: #1f8a55;
+  --acento-suave: #e8f4ed;
+  --mal-suave: #fdecea;
+  --bien: #1f8a55;
+  --ajustado: #b26a00;
+  --mal: #c0392f;
+  --sombra: 0 1px 2px rgba(16, 24, 40, .05), 0 4px 16px rgba(16, 24, 40, .04);
+  --radio: 14px;
+  --ancho: 560px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-tema="claro"]) {
+    --fondo: #14171a;
+    --superficie: #1b1f23;
+    --superficie-2: #23282d;
+    --borde: #2d3339;
+    --tinta: #e9edf1;
+    --tinta-2: #9aa4ae;
+    --tinta-3: #6e7781;
+    --acento: #30a46c;
+    --acento-suave: #16281f;
+    --mal-suave: #2a1a1b;
+    --bien: #30a46c;
+    --ajustado: #f5a524;
+    --mal: #e5484d;
+    --sombra: none;
+    color-scheme: dark;
+  }
+}
+
+:root[data-tema="oscuro"] {
+  --fondo: #14171a;
+  --superficie: #1b1f23;
+  --superficie-2: #23282d;
+  --borde: #2d3339;
+  --tinta: #e9edf1;
+  --tinta-2: #9aa4ae;
+  --tinta-3: #6e7781;
+  --acento: #30a46c;
+  --acento-suave: #16281f;
+  --mal-suave: #2a1a1b;
+  --bien: #30a46c;
+  --ajustado: #f5a524;
+  --mal: #e5484d;
+  --sombra: none;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--tinta);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: 132px;
+}
+
+.envoltura { max-width: var(--ancho); margin: 0 auto; padding: 0 16px; }
+
+/* --- Barra superior --- */
+.barra {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--fondo);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--borde);
+}
+.barra .envoltura { display: flex; align-items: center; justify-content: space-between; height: 52px; gap: 12px; }
+.barra h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+.barra .ciclo { color: var(--tinta-2); font-size: 12.5px; font-weight: 400; }
+
+.estado {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--tinta-2);
+  background: var(--superficie-2); border: 1px solid var(--borde);
+  padding: 4px 9px; border-radius: 999px; cursor: pointer;
+}
+.punto { width: 7px; height: 7px; border-radius: 50%; background: var(--tinta-3); }
+.punto.vivo { background: var(--acento); }
+
+/* --- Tarjetas --- */
+.tarjeta {
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: var(--radio); padding: 18px; margin-bottom: 12px; box-shadow: var(--sombra);
+}
+.tarjeta.plana { box-shadow: none; }
+.titulo-seccion {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--tinta-3); font-weight: 600; margin: 22px 4px 10px;
+}
+
+/* --- El número grande --- */
+.cifra {
+  font-size: 44px; font-weight: 650; letter-spacing: -.03em; line-height: 1.1;
+  font-variant-numeric: tabular-nums; margin: 2px 0 4px; white-space: nowrap;
+}
+.cifra.mal { color: var(--mal); }
+.cifra.vacia { color: var(--tinta-3); }
+.rotulo { font-size: 12.5px; color: var(--tinta-2); }
+.dato { font-variant-numeric: tabular-nums; }
+
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.duo .tarjeta { margin: 0; }
+.duo .cifra { font-size: 26px; }
+
+/* --- Veredictos: el motivo y su fuente, siempre a la vista --- */
+.veredicto {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--tinta-2); margin-top: 10px;
+  padding-top: 10px; border-top: 1px dashed var(--borde);
+}
+.marca { font-weight: 650; font-size: 11px; letter-spacing: .04em; }
+.marca.VA_BIEN { color: var(--bien); }
+.marca.AJUSTADO { color: var(--ajustado); }
+.marca.NO_ALCANZA { color: var(--mal); }
+.marca.SIN_DATOS_SUFICIENTES, .marca.SIN_TOPE { color: var(--tinta-3); }
+.fuente { color: var(--tinta-3); font-size: 10.5px; letter-spacing: .04em; }
+
+/* --- Filas --- */
+.fila {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 2px; border-bottom: 1px solid var(--borde);
+}
+.fila:last-child { border-bottom: 0; }
+.fila .crece { flex: 1; min-width: 0; }
+.fila .nombre { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fila .sub { font-size: 12px; color: var(--tinta-2); }
+.fila .monto { font-variant-numeric: tabular-nums; font-weight: 550; white-space: nowrap; }
+.emoji { width: 30px; text-align: center; font-size: 17px; flex: none; }
+
+.barra-progreso { height: 5px; border-radius: 3px; background: var(--superficie-2); overflow: hidden; margin-top: 7px; }
+.barra-progreso i { display: block; height: 100%; border-radius: 3px; background: var(--acento); }
+.barra-progreso i.AJUSTADO { background: var(--ajustado); }
+.barra-progreso i.NO_ALCANZA { background: var(--mal); }
+.barra-progreso i.SIN_TOPE { background: var(--tinta-3); }
+
+/* --- Botones --- */
+button { font: inherit; cursor: pointer; }
+.boton {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  background: var(--acento); color: #fff; border: 0; border-radius: 11px;
+  padding: 12px 16px; font-weight: 550; font-size: 14.5px; width: 100%;
+}
+.boton.tenue { background: var(--superficie-2); color: var(--tinta); border: 1px solid var(--borde); }
+.boton.chico { width: auto; padding: 7px 12px; font-size: 13px; border-radius: 9px; }
+.boton.peligro { background: transparent; color: var(--mal); border: 1px solid var(--borde); }
+.boton:active { transform: scale(.985); }
+.acciones { display: flex; gap: 8px; margin-top: 12px; }
+
+/* --- Navegación inferior --- */
+.nav {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+  background: var(--fondo);
+  backdrop-filter: blur(12px); border-top: 1px solid var(--borde);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.nav .envoltura { display: flex; justify-content: space-around; padding: 0; }
+.nav button {
+  flex: 1; background: none; border: 0; padding: 9px 4px 11px;
+  color: var(--tinta-3); font-size: 10.5px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.nav button span { font-size: 17px; line-height: 1; }
+.nav button[aria-current="true"] { color: var(--acento); }
+
+.flotante {
+  position: fixed; right: max(16px, calc(50vw - var(--ancho) / 2 + 16px)); bottom: 78px; z-index: 21;
+  width: 54px; height: 54px; border-radius: 50%; border: 0;
+  background: var(--acento); color: #fff; font-size: 27px; line-height: 1;
+  box-shadow: 0 6px 20px rgba(31, 138, 85, .35);
+}
+
+/* --- Hoja (formularios) --- */
+.velo {
+  position: fixed; inset: 0; z-index: 30; background: rgba(15, 20, 25, .45);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.hoja {
+  background: var(--superficie); width: 100%; max-width: var(--ancho);
+  border-radius: 18px 18px 0 0; padding: 18px 16px calc(20px + env(safe-area-inset-bottom, 0));
+  max-height: 92vh; overflow-y: auto;
+}
+.hoja h2 { font-size: 17px; margin: 0 0 14px; }
+.campo { margin-bottom: 14px; }
+.campo label { display: block; font-size: 12.5px; color: var(--tinta-2); margin-bottom: 6px; }
+input, select {
+  width: 100%; font: inherit; color: var(--tinta); background: var(--superficie-2);
+  border: 1px solid var(--borde); border-radius: 10px; padding: 11px 12px;
+}
+input:focus, select:focus { outline: 2px solid var(--acento); outline-offset: -1px; }
+input.monto { font-size: 30px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; padding: 14px 12px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  background: var(--superficie-2); border: 1px solid var(--borde); color: var(--tinta);
+  border-radius: 999px; padding: 8px 12px; font-size: 13.5px;
+}
+.chip[aria-pressed="true"] { background: var(--acento-suave); border-color: var(--acento); color: var(--acento); font-weight: 550; }
+
+/* --- Avisos --- */
+.aviso {
+  background: var(--acento-suave); border: 1px solid var(--acento);
+  border-radius: var(--radio); padding: 12px 14px; font-size: 13px; margin-bottom: 12px;
+}
+.aviso.malo { background: var(--mal-suave); border-color: var(--mal); }
+.vacio { text-align: center; color: var(--tinta-2); padding: 26px 10px; font-size: 13.5px; }
+.pie { text-align: center; color: var(--tinta-3); font-size: 11.5px; padding: 22px 70px 8px; }
+
+/* Una fila que se puede tocar para corregir lo que se capturó */
+.toque { background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; }
+.toque:active { opacity: .6; }
+
+/* Filas de dos líneas: en un teléfono, nombre + monto + botones en la misma línea
+   deja el nombre partido a la mitad. */
+.fila.apilada { display: block; }
+.fila.apilada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.fila.apilada .nombre { flex: 1; min-width: 0; }
+.fila.apilada .acciones-fila { display: flex; gap: 8px; justify-content: flex-end; margin-top: 9px; }

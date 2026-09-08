@@ -1,0 +1,3465 @@
+<title>Quincena</title>
+<meta name="description" content="Ordena tu quincena, controla tus gastos y sabe si tus metas de ahorro de verdad alcanzan.">
+<style>
+/* Estilos — minimalismo con un trabajo que hacer.
+   Una sola tinta de acento, tipografía del sistema, mucho aire y números grandes.
+   El número que importa en cada pantalla es el más grande; lo demás se calla. */
+
+:root {
+  --fondo: #fbfbfa;
+  --superficie: #ffffff;
+  --superficie-2: #f4f4f2;
+  --borde: #e4e4e1;
+  --tinta: #1f2328;
+  --tinta-2: #6b7280;
+  --tinta-3: #9ca3af;
+  --acento: #1f8a55;
+  --acento-suave: #e8f4ed;
+  --mal-suave: #fdecea;
+  --bien: #1f8a55;
+  --ajustado: #b26a00;
+  --mal: #c0392f;
+  --sombra: 0 1px 2px rgba(16, 24, 40, .05), 0 4px 16px rgba(16, 24, 40, .04);
+  --radio: 14px;
+  --ancho: 560px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-tema="claro"]) {
+    --fondo: #14171a;
+    --superficie: #1b1f23;
+    --superficie-2: #23282d;
+    --borde: #2d3339;
+    --tinta: #e9edf1;
+    --tinta-2: #9aa4ae;
+    --tinta-3: #6e7781;
+    --acento: #30a46c;
+    --acento-suave: #16281f;
+    --mal-suave: #2a1a1b;
+    --bien: #30a46c;
+    --ajustado: #f5a524;
+    --mal: #e5484d;
+    --sombra: none;
+    color-scheme: dark;
+  }
+}
+
+:root[data-tema="oscuro"] {
+  --fondo: #14171a;
+  --superficie: #1b1f23;
+  --superficie-2: #23282d;
+  --borde: #2d3339;
+  --tinta: #e9edf1;
+  --tinta-2: #9aa4ae;
+  --tinta-3: #6e7781;
+  --acento: #30a46c;
+  --acento-suave: #16281f;
+  --mal-suave: #2a1a1b;
+  --bien: #30a46c;
+  --ajustado: #f5a524;
+  --mal: #e5484d;
+  --sombra: none;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fondo);
+  color: var(--tinta);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: 132px;
+}
+
+.envoltura { max-width: var(--ancho); margin: 0 auto; padding: 0 16px; }
+
+/* --- Barra superior --- */
+.barra {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--fondo);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--borde);
+}
+.barra .envoltura { display: flex; align-items: center; justify-content: space-between; height: 52px; gap: 12px; }
+.barra h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -.01em; }
+.barra .ciclo { color: var(--tinta-2); font-size: 12.5px; font-weight: 400; }
+
+.estado {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11.5px; color: var(--tinta-2);
+  background: var(--superficie-2); border: 1px solid var(--borde);
+  padding: 4px 9px; border-radius: 999px; cursor: pointer;
+}
+.punto { width: 7px; height: 7px; border-radius: 50%; background: var(--tinta-3); }
+.punto.vivo { background: var(--acento); }
+
+/* --- Tarjetas --- */
+.tarjeta {
+  background: var(--superficie); border: 1px solid var(--borde);
+  border-radius: var(--radio); padding: 18px; margin-bottom: 12px; box-shadow: var(--sombra);
+}
+.tarjeta.plana { box-shadow: none; }
+.titulo-seccion {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em;
+  color: var(--tinta-3); font-weight: 600; margin: 22px 4px 10px;
+}
+
+/* --- El número grande --- */
+.cifra {
+  font-size: 44px; font-weight: 650; letter-spacing: -.03em; line-height: 1.1;
+  font-variant-numeric: tabular-nums; margin: 2px 0 4px; white-space: nowrap;
+}
+.cifra.mal { color: var(--mal); }
+.cifra.vacia { color: var(--tinta-3); }
+.rotulo { font-size: 12.5px; color: var(--tinta-2); }
+.dato { font-variant-numeric: tabular-nums; }
+
+.duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.duo .tarjeta { margin: 0; }
+.duo .cifra { font-size: 26px; }
+
+/* --- Veredictos: el motivo y su fuente, siempre a la vista --- */
+.veredicto {
+  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--tinta-2); margin-top: 10px;
+  padding-top: 10px; border-top: 1px dashed var(--borde);
+}
+.marca { font-weight: 650; font-size: 11px; letter-spacing: .04em; }
+.marca.VA_BIEN { color: var(--bien); }
+.marca.AJUSTADO { color: var(--ajustado); }
+.marca.NO_ALCANZA { color: var(--mal); }
+.marca.SIN_DATOS_SUFICIENTES, .marca.SIN_TOPE { color: var(--tinta-3); }
+.fuente { color: var(--tinta-3); font-size: 10.5px; letter-spacing: .04em; }
+
+/* --- Filas --- */
+.fila {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 2px; border-bottom: 1px solid var(--borde);
+}
+.fila:last-child { border-bottom: 0; }
+.fila .crece { flex: 1; min-width: 0; }
+.fila .nombre { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fila .sub { font-size: 12px; color: var(--tinta-2); }
+.fila .monto { font-variant-numeric: tabular-nums; font-weight: 550; white-space: nowrap; }
+.emoji { width: 30px; text-align: center; font-size: 17px; flex: none; }
+
+.barra-progreso { height: 5px; border-radius: 3px; background: var(--superficie-2); overflow: hidden; margin-top: 7px; }
+.barra-progreso i { display: block; height: 100%; border-radius: 3px; background: var(--acento); }
+.barra-progreso i.AJUSTADO { background: var(--ajustado); }
+.barra-progreso i.NO_ALCANZA { background: var(--mal); }
+.barra-progreso i.SIN_TOPE { background: var(--tinta-3); }
+
+/* --- Botones --- */
+button { font: inherit; cursor: pointer; }
+.boton {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  background: var(--acento); color: #fff; border: 0; border-radius: 11px;
+  padding: 12px 16px; font-weight: 550; font-size: 14.5px; width: 100%;
+}
+.boton.tenue { background: var(--superficie-2); color: var(--tinta); border: 1px solid var(--borde); }
+.boton.chico { width: auto; padding: 7px 12px; font-size: 13px; border-radius: 9px; }
+.boton.peligro { background: transparent; color: var(--mal); border: 1px solid var(--borde); }
+.boton:active { transform: scale(.985); }
+.acciones { display: flex; gap: 8px; margin-top: 12px; }
+
+/* --- Navegación inferior --- */
+.nav {
+  position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+  background: var(--fondo);
+  backdrop-filter: blur(12px); border-top: 1px solid var(--borde);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+.nav .envoltura { display: flex; justify-content: space-around; padding: 0; }
+.nav button {
+  flex: 1; background: none; border: 0; padding: 9px 4px 11px;
+  color: var(--tinta-3); font-size: 10.5px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+}
+.nav button span { font-size: 17px; line-height: 1; }
+.nav button[aria-current="true"] { color: var(--acento); }
+
+.flotante {
+  position: fixed; right: max(16px, calc(50vw - var(--ancho) / 2 + 16px)); bottom: 78px; z-index: 21;
+  width: 54px; height: 54px; border-radius: 50%; border: 0;
+  background: var(--acento); color: #fff; font-size: 27px; line-height: 1;
+  box-shadow: 0 6px 20px rgba(31, 138, 85, .35);
+}
+
+/* --- Hoja (formularios) --- */
+.velo {
+  position: fixed; inset: 0; z-index: 30; background: rgba(15, 20, 25, .45);
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.hoja {
+  background: var(--superficie); width: 100%; max-width: var(--ancho);
+  border-radius: 18px 18px 0 0; padding: 18px 16px calc(20px + env(safe-area-inset-bottom, 0));
+  max-height: 92vh; overflow-y: auto;
+}
+.hoja h2 { font-size: 17px; margin: 0 0 14px; }
+.campo { margin-bottom: 14px; }
+.campo label { display: block; font-size: 12.5px; color: var(--tinta-2); margin-bottom: 6px; }
+input, select {
+  width: 100%; font: inherit; color: var(--tinta); background: var(--superficie-2);
+  border: 1px solid var(--borde); border-radius: 10px; padding: 11px 12px;
+}
+input:focus, select:focus { outline: 2px solid var(--acento); outline-offset: -1px; }
+input.monto { font-size: 30px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; padding: 14px 12px; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  background: var(--superficie-2); border: 1px solid var(--borde); color: var(--tinta);
+  border-radius: 999px; padding: 8px 12px; font-size: 13.5px;
+}
+.chip[aria-pressed="true"] { background: var(--acento-suave); border-color: var(--acento); color: var(--acento); font-weight: 550; }
+
+/* --- Avisos --- */
+.aviso {
+  background: var(--acento-suave); border: 1px solid var(--acento);
+  border-radius: var(--radio); padding: 12px 14px; font-size: 13px; margin-bottom: 12px;
+}
+.aviso.malo { background: var(--mal-suave); border-color: var(--mal); }
+.vacio { text-align: center; color: var(--tinta-2); padding: 26px 10px; font-size: 13.5px; }
+.pie { text-align: center; color: var(--tinta-3); font-size: 11.5px; padding: 22px 70px 8px; }
+
+/* Una fila que se puede tocar para corregir lo que se capturó */
+.toque { background: none; border: 0; padding: 0; text-align: left; color: inherit; font: inherit; }
+.toque:active { opacity: .6; }
+
+/* Filas de dos líneas: en un teléfono, nombre + monto + botones en la misma línea
+   deja el nombre partido a la mitad. */
+.fila.apilada { display: block; }
+.fila.apilada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.fila.apilada .nombre { flex: 1; min-width: 0; }
+.fila.apilada .acciones-fila { display: flex; gap: 8px; justify-content: flex-end; margin-top: 9px; }
+</style>
+<div id="raiz"></div>
+<div id="hojas"></div>
+<noscript>
+  <div style="max-width:560px;margin:40px auto;padding:0 16px">
+    <h1>Finanzas</h1>
+    <p>Esta app necesita JavaScript activado. No usa servidor ni red: todo el cálculo corre
+    en este dispositivo.</p>
+  </div>
+</noscript>
+
+<script>
+(function () {
+"use strict";
+
+// ═══ motor/dinero.js ═══
+// Dinero — todo monto vive como entero de centavos.
+//
+// Regla dura: en el modelo NUNCA hay coma flotante. 0.1 + 0.2 no es 0.3, y una app de
+// finanzas que arrastra ese error termina mintiendo por unos centavos cada mes. Los
+// montos entran, se guardan y se calculan como enteros; el punto decimal solo existe
+// al momento de escribirlo en la pantalla.
+
+/** Centavos que tiene un peso. */
+const CENTAVOS = 100;
+
+/**
+ * Convierte lo que escribió una persona a centavos enteros.
+ * Acepta "1,234.50", "$1234.5", "1234", 1234.5. Devuelve null si no es un monto —
+ * null significa "no hay dato", que no es lo mismo que cero.
+ */
+function aCentavos(entrada) {
+  if (typeof entrada === "number") {
+    if (!Number.isFinite(entrada)) return null;
+    return Math.round(entrada * CENTAVOS);
+  }
+  if (typeof entrada !== "string") return null;
+
+  const limpio = entrada.trim().replace(/[$\s]/g, "").replace(/,/g, "");
+  if (!/\d/.test(limpio)) return null;
+  if (!/^-?\d*(\.\d*)?$/.test(limpio)) return null;
+
+  const negativo = limpio.startsWith("-");
+  const [enteros, decimales = ""] = limpio.replace("-", "").split(".");
+  const tres = (decimales + "000").slice(0, 3);
+
+  let centavos = Number(enteros || "0") * CENTAVOS + Number(tres.slice(0, 2));
+  if (Number(tres[2]) >= 5) centavos += 1;
+
+  return negativo ? -centavos : centavos;
+}
+
+/**
+ * Escribe un monto para una persona: 123456 → "$1,234.56".
+ * Formateo propio y no `Intl`, para que el resultado sea idéntico en el celular, en la
+ * PC y en las pruebas, sin depender del idioma del dispositivo.
+ */
+function formatear(centavos, opciones = {}) {
+  const valor = Number.isFinite(centavos) ? Math.trunc(centavos) : 0;
+  const absoluto = Math.abs(valor);
+  const enteros = String(Math.floor(absoluto / CENTAVOS)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const decimales = String(absoluto % CENTAVOS).padStart(2, "0");
+
+  const signo = valor < 0 ? "−" : opciones.signo && valor > 0 ? "+" : "";
+  return `${signo}$${enteros}.${decimales}`;
+}
+
+/** Igual que `formatear` pero sin centavos, para los números grandes de los paneles. */
+function formatearCorto(centavos) {
+  const valor = Number.isFinite(centavos) ? Math.round(centavos / CENTAVOS) : 0;
+  const enteros = String(Math.abs(valor)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${valor < 0 ? "−" : ""}$${enteros}`;
+}
+
+/**
+ * Reparte centavos en `partes` montos enteros que suman EXACTAMENTE el total.
+ * Los centavos sobrantes van a las primeras partes: repartir(1000, 3) → [334, 333, 333].
+ */
+function repartir(centavos, partes) {
+  if (!Number.isInteger(partes) || partes <= 0) return [];
+  const total = Math.trunc(centavos);
+  const base = Math.trunc(total / partes);
+  const resto = Math.abs(total) % partes;
+  const paso = total < 0 ? -1 : 1;
+
+  return Array.from({ length: partes }, (_, i) => base + (i < resto ? paso : 0));
+}
+
+/**
+ * Prorrateo entero: qué parte de `centavos` corresponde a `numerador/denominador`.
+ * Se usa para bajar un monto mensual al ciclo quincenal sin perder centavos.
+ */
+function prorratear(centavos, numerador, denominador) {
+  if (!denominador) return 0;
+  return Math.round((Math.trunc(centavos) * numerador) / denominador);
+}
+
+/** Porcentaje entero de `parte` sobre `total`. Sin total no hay porcentaje: null. */
+function porcentaje(parte, total) {
+  if (!total || total <= 0) return null;
+  return Math.round((parte * 100) / total);
+}
+
+// ═══ motor/veredicto.js ═══
+// Veredictos — la forma común de toda respuesta del motor.
+//
+// Ningún cálculo devuelve un número pelón. Devuelve el número Y de dónde salió, para que
+// la pantalla nunca tenga que adivinar si un cero es "gastaste cero" o "no sé todavía".
+// Es la misma columna vertebral de Veristack: estado, severidad, motivo y fuente.
+
+const ESTADOS = {
+  VA_BIEN: "VA_BIEN",
+  AJUSTADO: "AJUSTADO",
+  NO_ALCANZA: "NO_ALCANZA",
+  SIN_TOPE: "SIN_TOPE",
+  SIN_DATOS: "SIN_DATOS_SUFICIENTES",
+};
+
+const SEVERIDADES = {
+  OK: "OK",
+  INFO: "INFO",
+  MEDIA: "MEDIA",
+  ALTA: "ALTA",
+};
+
+/** Toda salida del motor pasa por aquí. `fuente` siempre es CODIGO: aquí no interpreta nadie. */
+function veredicto(estado, severidad, motivo, datos = {}) {
+  return { estado, severidad, motivo, fuente: "CODIGO", datos };
+}
+
+/**
+ * La respuesta honesta cuando falta información.
+ * `falta` es accionable a propósito: dice qué capturar para que el número exista.
+ */
+function sinDatos(motivo, falta) {
+  return veredicto(ESTADOS.SIN_DATOS, SEVERIDADES.INFO, motivo, { falta });
+}
+
+function esSinDatos(v) {
+  return Boolean(v) && v.estado === ESTADOS.SIN_DATOS;
+}
+
+/** Texto de una línea, como se lee en la interfaz y en las pruebas. */
+function comoTexto(v) {
+  if (!v) return "";
+  return `${v.estado} — ${v.motivo} — fuente: ${v.fuente}`;
+}
+
+// ═══ motor/ciclo.js ═══
+// Ciclos — el calendario del dinero, no el del almanaque.
+//
+// El mes natural no sirve para decidir si hoy puedes gastar: lo que manda es cuánto falta
+// para el próximo pago. Aquí el ciclo por defecto es quincenal (días 1–15 y 16–fin de mes),
+// pero los días de corte son configurables: `cortes: []` da ciclos mensuales y `[10, 25]`
+// da cualquier otro patrón de pago.
+//
+// Las fechas son cadenas "AAAA-MM-DD" en horario local. Nada de objetos Date en el modelo:
+// una zona horaria mal aplicada mueve un gasto de quincena y descuadra todo el ciclo.
+
+/** La fecha de hoy en horario local, como "AAAA-MM-DD". */
+function hoyISO(fecha = new Date()) {
+  const a = fecha.getFullYear();
+  const m = String(fecha.getMonth() + 1).padStart(2, "0");
+  const d = String(fecha.getDate()).padStart(2, "0");
+  return `${a}-${m}-${d}`;
+}
+
+function esISO(iso) {
+  return typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso);
+}
+
+function partes(iso) {
+  const [anio, mes, dia] = iso.split("-").map(Number);
+  return { anio, mes, dia };
+}
+
+function armarISO(anio, mes, dia) {
+  return `${String(anio).padStart(4, "0")}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+}
+
+function diasEnMes(anio, mes) {
+  return new Date(anio, mes, 0).getDate();
+}
+
+/** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
+function mesDe(iso) {
+  return iso.slice(0, 7);
+}
+
+function comparar(a, b) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function entre(iso, desde, hasta) {
+  return iso >= desde && iso <= hasta;
+}
+
+function sumarDias(iso, n) {
+  const { anio, mes, dia } = partes(iso);
+  const d = new Date(anio, mes - 1, dia + n);
+  return hoyISO(d);
+}
+
+function sumarMeses(iso, n) {
+  const { anio, mes, dia } = partes(iso);
+  const total = (anio * 12) + (mes - 1) + n;
+  const nuevoAnio = Math.floor(total / 12);
+  const nuevoMes = (total % 12) + 1;
+  return armarISO(nuevoAnio, nuevoMes, Math.min(dia, diasEnMes(nuevoAnio, nuevoMes)));
+}
+
+/** Meses de diferencia entre dos "AAAA-MM" (b − a). */
+function mesesEntre(a, b) {
+  const [anioA, mesA] = a.split("-").map(Number);
+  const [anioB, mesB] = b.split("-").map(Number);
+  return (anioB - anioA) * 12 + (mesB - mesA);
+}
+
+/** Días de diferencia entre dos fechas (b − a). */
+function diasEntre(a, b) {
+  const pa = partes(a);
+  const pb = partes(b);
+  const ma = Date.UTC(pa.anio, pa.mes - 1, pa.dia);
+  const mb = Date.UTC(pb.anio, pb.mes - 1, pb.dia);
+  return Math.round((mb - ma) / 86400000);
+}
+
+/** Los cortes limpios: enteros 1..30, ordenados y sin repetidos. */
+function cortesValidos(cortes) {
+  const lista = Array.isArray(cortes) ? cortes : [15];
+  return [...new Set(lista.filter((c) => Number.isInteger(c) && c >= 1 && c <= 30))].sort((a, b) => a - b);
+}
+
+/**
+ * El ciclo al que pertenece una fecha.
+ * Devuelve inicio, fin, cuántos días tiene, cuántos van y cuántos faltan (hoy incluido:
+ * si hoy es el último día del ciclo, queda 1 día, no 0 — todavía puedes gastar hoy).
+ */
+function cicloDe(iso, cortes = [15]) {
+  const { anio, mes, dia } = partes(iso);
+  const ultimo = diasEnMes(anio, mes);
+  const limites = cortesValidos(cortes).filter((c) => c < ultimo);
+
+  let inicioDia = 1;
+  let finDia = ultimo;
+  let indice = 0;
+
+  for (let i = 0; i < limites.length; i++) {
+    if (dia <= limites[i]) {
+      finDia = limites[i];
+      break;
+    }
+    inicioDia = limites[i] + 1;
+    indice = i + 1;
+  }
+
+  const inicio = armarISO(anio, mes, inicioDia);
+  const fin = armarISO(anio, mes, finDia);
+  const dias = finDia - inicioDia + 1;
+  const transcurridos = dia - inicioDia + 1;
+
+  return {
+    inicio,
+    fin,
+    dias,
+    diasTranscurridos: transcurridos,
+    diasRestantes: finDia - dia + 1,
+    indice,
+    total: limites.length + 1,
+    etiqueta: limites.length === 0 ? "mes" : `quincena ${indice + 1}`,
+  };
+}
+
+/** El ciclo siguiente al de una fecha. */
+function cicloSiguiente(iso, cortes = [15]) {
+  const actual = cicloDe(iso, cortes);
+  return cicloDe(sumarDias(actual.fin, 1), cortes);
+}
+
+/**
+ * Cuántos ciclos CIERRAN entre dos fechas, inclusive.
+ * Es el número de oportunidades reales de apartar dinero antes de una fecha límite:
+ * lo que divide el faltante de una meta.
+ */
+function ciclosHasta(desdeISO, hastaISO, cortes = [15]) {
+  if (hastaISO < desdeISO) return 0;
+
+  let ciclo = cicloDe(desdeISO, cortes);
+  let cuenta = 0;
+  // Tope de seguridad: ~80 años de quincenas. Una fecha absurda no cuelga la app.
+  for (let i = 0; i < 2000 && ciclo.fin <= hastaISO; i++) {
+    cuenta += 1;
+    ciclo = cicloDe(sumarDias(ciclo.fin, 1), cortes);
+  }
+  return cuenta;
+}
+
+/** La fecha del próximo día de pago (el fin del ciclo actual) y cuántos días faltan. */
+function proximoPago(iso, cortes = [15]) {
+  const ciclo = cicloDe(iso, cortes);
+  return { fecha: ciclo.fin, dias: diasEntre(iso, ciclo.fin) };
+}
+
+/**
+ * La fecha de un vencimiento mensual dentro de un mes dado.
+ * Un cargo el día 31 en febrero cae el 28: se recorre al último día, no se pierde.
+ */
+function vencimientoEnMes(mes, diaCorte) {
+  const [anio, m] = mes.split("-").map(Number);
+  const ultimo = diasEnMes(anio, m);
+  return armarISO(anio, m, Math.min(Math.max(diaCorte, 1), ultimo));
+}
+
+// ═══ motor/modelo.js ═══
+// Modelo — la forma de los datos y su versión.
+//
+// Todo vive en UN documento raíz, portable: es exactamente lo que exporta el respaldo en
+// JSON y lo que come el importador. Si algún día esta app cambia de casa, los datos se
+// mudan solos.
+//
+// El documento lleva `version` a propósito: es lo que permite cambiar la forma de los
+// datos dentro de dos años sin perder un solo movimiento (ver migraciones.js).
+
+
+
+/** Versión del esquema. Sube de uno en uno, con su migración escrita. */
+const VERSION_DATOS = 1;
+
+// AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
+// a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
+const TIPOS = { GASTO: "gasto", INGRESO: "ingreso", AHORRO: "ahorro", RETIRO: "retiro" };
+
+/** Catálogo inicial pensado para México. Son valores por defecto de la app, no datos suyos. */
+const CATEGORIAS_BASE = [
+  { id: "super", nombre: "Súper", emoji: "🛒", clase: "variable" },
+  { id: "comida-fuera", nombre: "Comida fuera", emoji: "🍔", clase: "variable" },
+  { id: "transporte", nombre: "Transporte", emoji: "🚌", clase: "variable" },
+  { id: "casa", nombre: "Renta y casa", emoji: "🏠", clase: "fija" },
+  { id: "servicios", nombre: "Servicios", emoji: "💡", clase: "fija" },
+  { id: "suscripciones", nombre: "Suscripciones", emoji: "📺", clase: "fija" },
+  { id: "salud", nombre: "Salud", emoji: "💊", clase: "variable" },
+  { id: "escuela", nombre: "Escuela", emoji: "📚", clase: "variable" },
+  { id: "ropa", nombre: "Ropa", emoji: "👕", clase: "variable" },
+  { id: "ocio", nombre: "Ocio", emoji: "🎬", clase: "variable" },
+  { id: "deuda", nombre: "Pago de deuda", emoji: "🧾", clase: "fija" },
+  { id: "otros", nombre: "Otros", emoji: "•", clase: "variable" },
+];
+
+/** El documento vacío: sin un solo monto inventado. */
+function datosVacios(iso = hoyISO()) {
+  return {
+    version: VERSION_DATOS,
+    creado: iso,
+    actualizado: iso,
+    perfil: {
+      moneda: "MXN",
+      ingresoQuincenal: null, // null = todavía no lo captura. No es cero.
+      cortes: [15],
+      colchonObjetivo: null,
+    },
+    categorias: CATEGORIAS_BASE.map((c) => ({ ...c, tope: null })),
+    movimientos: {}, // "AAAA-MM" → [movimiento]
+    presupuestos: {}, // "AAAA-MM" → { categoriaId: topeCentavos }
+    fijos: [],
+    deudas: [],
+    metas: [],
+  };
+}
+
+let contador = 0;
+/** Identificador local, sin dependencias: tiempo + contador + azar. */
+function idNuevo(prefijo = "m") {
+  contador = (contador + 1) % 1000;
+  const tiempo = Date.now().toString(36);
+  const azar = Math.random().toString(36).slice(2, 6);
+  return `${prefijo}_${tiempo}${contador.toString(36)}${azar}`;
+}
+
+function entero(valor, porDefecto = null) {
+  const n = typeof valor === "string" ? aCentavos(valor) : valor;
+  return Number.isFinite(n) ? Math.trunc(n) : porDefecto;
+}
+
+/**
+ * Deja el documento en su forma canónica: rellena lo que falte, tira lo que no sirve.
+ * Todo lo que entra al motor pasa por aquí — un JSON importado a mano incluido.
+ */
+function normalizar(entrada) {
+  const base = datosVacios();
+  const datos = entrada && typeof entrada === "object" ? entrada : {};
+
+  const perfil = { ...base.perfil, ...(datos.perfil || {}) };
+  perfil.ingresoQuincenal = entero(perfil.ingresoQuincenal, null);
+  perfil.colchonObjetivo = entero(perfil.colchonObjetivo, null);
+  perfil.cortes = Array.isArray(perfil.cortes)
+    ? perfil.cortes.filter((c) => Number.isInteger(c) && c >= 1 && c <= 30)
+    : [15];
+  perfil.moneda = perfil.moneda || "MXN";
+
+  const categorias = (Array.isArray(datos.categorias) && datos.categorias.length
+    ? datos.categorias
+    : base.categorias
+  )
+    .filter((c) => c && c.id)
+    .map((c) => ({
+      id: String(c.id),
+      nombre: String(c.nombre || c.id),
+      emoji: c.emoji || "•",
+      clase: c.clase === "fija" ? "fija" : "variable",
+      tope: entero(c.tope, null),
+      archivada: Boolean(c.archivada),
+    }));
+
+  const movimientos = {};
+  for (const [mes, lista] of Object.entries(datos.movimientos || {})) {
+    if (!/^\d{4}-\d{2}$/.test(mes) || !Array.isArray(lista)) continue;
+    const limpios = lista.map(normalizarMovimiento).filter(Boolean);
+    if (limpios.length) movimientos[mes] = limpios.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+  }
+
+  const presupuestos = {};
+  for (const [mes, topes] of Object.entries(datos.presupuestos || {})) {
+    if (!/^\d{4}-\d{2}$/.test(mes) || !topes || typeof topes !== "object") continue;
+    const limpio = {};
+    for (const [id, tope] of Object.entries(topes)) {
+      const valor = entero(tope, null);
+      if (valor !== null) limpio[id] = valor;
+    }
+    if (Object.keys(limpio).length) presupuestos[mes] = limpio;
+  }
+
+  return {
+    version: VERSION_DATOS,
+    creado: datos.creado || base.creado,
+    actualizado: datos.actualizado || base.actualizado,
+    perfil,
+    categorias,
+    movimientos,
+    presupuestos,
+    fijos: (Array.isArray(datos.fijos) ? datos.fijos : []).map(normalizarFijo).filter(Boolean),
+    deudas: (Array.isArray(datos.deudas) ? datos.deudas : []).map(normalizarDeuda).filter(Boolean),
+    metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
+  };
+}
+
+function normalizarMovimiento(m) {
+  if (!m || !esISO(m.fecha)) return null;
+  const monto = entero(m.monto, null);
+  if (monto === null || monto === 0) return null;
+
+  const tipo = Object.values(TIPOS).includes(m.tipo) ? m.tipo : TIPOS.GASTO;
+  return {
+    id: m.id || idNuevo("mov"),
+    fecha: m.fecha,
+    monto: Math.abs(monto), // el signo lo da el tipo, no el número
+    tipo,
+    categoria: m.categoria ? String(m.categoria) : tipo === TIPOS.GASTO ? "otros" : null,
+    metodo: m.metodo ? String(m.metodo) : null,
+    nota: m.nota ? String(m.nota).slice(0, 280) : "",
+    fijoId: m.fijoId || null,
+    deudaId: m.deudaId || null,
+    metaId: m.metaId || null,
+  };
+}
+
+/** Cada cuántos meses se paga un fijo. La tenencia no es un gasto mensual. */
+const FRECUENCIAS = [
+  { meses: 1, etiqueta: "Cada mes" },
+  { meses: 2, etiqueta: "Cada 2 meses" },
+  { meses: 3, etiqueta: "Cada 3 meses" },
+  { meses: 6, etiqueta: "Cada 6 meses" },
+  { meses: 12, etiqueta: "Cada año" },
+];
+
+function normalizarFijo(f) {
+  if (!f || !f.nombre) return null;
+  const monto = entero(f.monto, null);
+  const frecuencia = FRECUENCIAS.some((x) => x.meses === f.frecuencia) ? f.frecuencia : 1;
+  return {
+    id: f.id || idNuevo("fijo"),
+    nombre: String(f.nombre).slice(0, 80),
+    monto, // null = lo tiene registrado pero no sabe cuánto. Se declara, no se asume.
+    diaCorte: Number.isInteger(f.diaCorte) ? Math.min(Math.max(f.diaCorte, 1), 31) : 1,
+    frecuencia,
+    // En qué mes toca cuando no es mensual. Sin ancla, un fijo anual no sabría cuándo cae.
+    mesAncla: /^\d{4}-\d{2}$/.test(f.mesAncla || "") ? f.mesAncla : null,
+    deudaId: f.deudaId || null, // si este pago abona a una deuda, la abona de verdad
+    categoria: f.categoria ? String(f.categoria) : "servicios",
+    activo: f.activo !== false,
+  };
+}
+
+function normalizarDeuda(d) {
+  if (!d || !d.nombre) return null;
+  return {
+    id: d.id || idNuevo("deuda"),
+    nombre: String(d.nombre).slice(0, 80),
+    montoOriginal: entero(d.montoOriginal, null),
+    tasaAnual: Number.isFinite(d.tasaAnual) ? d.tasaAnual : null, // sin tasa no se proyecta interés
+    diaCorte: Number.isInteger(d.diaCorte) ? Math.min(Math.max(d.diaCorte, 1), 31) : 1,
+    activa: d.activa !== false,
+  };
+}
+
+function normalizarMeta(m) {
+  if (!m || !m.nombre) return null;
+  return {
+    id: m.id || idNuevo("meta"),
+    nombre: String(m.nombre).slice(0, 80),
+    objetivo: entero(m.objetivo, null),
+    fechaLimite: esISO(m.fechaLimite) ? m.fechaLimite : null,
+    prioridad: Number.isInteger(m.prioridad) ? m.prioridad : 1,
+    lograda: Boolean(m.lograda),
+  };
+}
+
+// --- Lectura ---
+
+function movimientosDelMes(datos, mes) {
+  return datos.movimientos[mes] || [];
+}
+
+/** Movimientos entre dos fechas, inclusive. Solo toca los meses que hacen falta. */
+function movimientosEntre(datos, desde, hasta) {
+  const salida = [];
+  for (const [mes, lista] of Object.entries(datos.movimientos)) {
+    if (mes < desde.slice(0, 7) || mes > hasta.slice(0, 7)) continue;
+    for (const m of lista) if (m.fecha >= desde && m.fecha <= hasta) salida.push(m);
+  }
+  return salida.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+}
+
+function categoriaPorId(datos, id) {
+  return datos.categorias.find((c) => c.id === id) || null;
+}
+
+function suma(movimientos, filtro = () => true) {
+  return movimientos.reduce((total, m) => (filtro(m) ? total + m.monto : total), 0);
+}
+
+// --- Escritura (devuelven datos nuevos; nunca mutan el documento recibido) ---
+
+function agregarMovimiento(datos, entrada) {
+  const mov = normalizarMovimiento({ ...entrada, id: entrada.id || idNuevo("mov") });
+  if (!mov) return { datos, error: "El movimiento necesita fecha y monto." };
+
+  const mes = mesDe(mov.fecha);
+  const lista = [mov, ...(datos.movimientos[mes] || [])].sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+  return {
+    datos: { ...datos, movimientos: { ...datos.movimientos, [mes]: lista } },
+    movimiento: mov,
+    error: null,
+  };
+}
+
+function eliminarMovimiento(datos, id) {
+  const movimientos = {};
+  for (const [mes, lista] of Object.entries(datos.movimientos)) {
+    const filtrada = lista.filter((m) => m.id !== id);
+    if (filtrada.length) movimientos[mes] = filtrada;
+  }
+  return { ...datos, movimientos };
+}
+
+// ═══ motor/migraciones.js ═══
+// Migraciones — por qué esta app puede durar años.
+//
+// El documento guardado lleva su `version`. Al abrir, se sube hasta la versión actual
+// aplicando en orden las migraciones que le falten. Así, cambiar la forma de los datos
+// mañana no obliga a tirar la historia de hoy.
+//
+// El caso contrario también está cubierto y es el importante: si el documento viene de una
+// versión MÁS NUEVA que este código (abrió la app en la PC, la actualizó, y hoy entra
+// desde un celular con la versión vieja), no se toca nada. Se declara y se detiene. Un
+// "downgrade" silencioso es la forma más rápida de perder datos para siempre.
+
+
+/**
+ * MIGRACIONES[n] convierte un documento de la versión n a la versión n+1.
+ * Hoy hay una sola versión, así que la lista está vacía a propósito: el mecanismo existe
+ * desde el primer día, que es cuando cuesta barato ponerlo.
+ */
+const MIGRACIONES = {};
+
+function migrar(entrada) {
+  const datos = entrada && typeof entrada === "object" ? { ...entrada } : null;
+  if (!datos) return { ok: false, motivo: "El respaldo no es un documento válido.", datos: null };
+
+  const version = Number.isInteger(datos.version) ? datos.version : 1;
+
+  if (version > VERSION_DATOS) {
+    return {
+      ok: false,
+      motivo:
+        `Estos datos son de una versión más nueva (v${version}) que esta copia de la app ` +
+        `(v${VERSION_DATOS}). No se abren aquí para no perder lo que la versión nueva guardó: ` +
+        `actualiza la app y vuelve a intentarlo.`,
+      datos: null,
+      aplicadas: [],
+    };
+  }
+
+  let actual = datos;
+  const aplicadas = [];
+  for (let v = version; v < VERSION_DATOS; v++) {
+    const paso = MIGRACIONES[v];
+    if (typeof paso !== "function") {
+      return { ok: false, motivo: `Falta la migración de la versión ${v} a la ${v + 1}.`, datos: null, aplicadas };
+    }
+    actual = paso(actual);
+    actual.version = v + 1;
+    aplicadas.push(`v${v}→v${v + 1}`);
+  }
+
+  return { ok: true, motivo: aplicadas.length ? `Datos actualizados: ${aplicadas.join(", ")}.` : "", datos: normalizar(actual), aplicadas };
+}
+
+// ═══ motor/presupuesto.js ═══
+// Presupuesto — cuánto va gastado contra cuánto se puso de tope, por categoría.
+//
+// El tope es MENSUAL y se compara contra el mes natural, aunque el dinero se mueva por
+// quincenas: es como se piensa un presupuesto ("2,000 de súper al mes"), y mezclarlo con
+// el ciclo de pago haría que el mismo gasto se viera distinto según el día.
+//
+// Una categoría sin tope NO se pinta de verde. Se marca SIN_TOPE: no hay nada contra qué
+// comparar, y decir "vas bien" sin una referencia sería inventarse el veredicto.
+
+
+
+
+
+/** Umbrales del semáforo, en un solo lugar. */
+const UMBRAL_AMBAR = 80;
+
+/** El tope que aplica a una categoría en un mes: el del mes si se fijó, si no el del catálogo. */
+function topeVigente(datos, mes, categoriaId) {
+  const delMes = datos.presupuestos[mes];
+  if (delMes && Number.isFinite(delMes[categoriaId])) return delMes[categoriaId];
+  const categoria = categoriaPorId(datos, categoriaId);
+  return categoria && Number.isFinite(categoria.tope) ? categoria.tope : null;
+}
+
+/** Gasto acumulado por categoría en un rango de fechas. */
+function gastoPorCategoria(datos, desde, hasta) {
+  const acumulado = {};
+  for (const m of movimientosEntre(datos, desde, hasta)) {
+    if (m.tipo !== TIPOS.GASTO) continue;
+    const id = m.categoria || "otros";
+    acumulado[id] = (acumulado[id] || 0) + m.monto;
+  }
+  return acumulado;
+}
+
+/** El veredicto de una categoría: el semáforo, con su motivo y sus dos números. */
+function veredictoCategoria(gastado, tope) {
+  if (tope === null) {
+    return veredicto(ESTADOS.SIN_TOPE, SEVERIDADES.INFO, "sin tope definido — no hay contra qué comparar", {
+      gastado,
+      tope: null,
+    });
+  }
+
+  const pct = porcentaje(gastado, tope);
+  const restante = tope - gastado;
+
+  if (gastado > tope) {
+    return veredicto(ESTADOS.NO_ALCANZA, SEVERIDADES.ALTA, `pasado por ${pct - 100}% del tope`, {
+      gastado,
+      tope,
+      pct,
+      restante,
+    });
+  }
+  if (pct >= UMBRAL_AMBAR) {
+    return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA, `${pct}% del tope usado`, { gastado, tope, pct, restante });
+  }
+  return veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, `${pct}% del tope usado`, { gastado, tope, pct, restante });
+}
+
+/** El presupuesto completo del mes de una fecha, ordenado por lo más apretado primero. */
+function resumenPresupuesto(datos, iso) {
+  const mes = mesDe(iso);
+  const desde = `${mes}-01`;
+  const hasta = `${mes}-31`;
+  const gastos = gastoPorCategoria(datos, desde, hasta);
+
+  const orden = { [ESTADOS.NO_ALCANZA]: 0, [ESTADOS.AJUSTADO]: 1, [ESTADOS.VA_BIEN]: 2, [ESTADOS.SIN_TOPE]: 3 };
+
+  return datos.categorias
+    .filter((c) => !c.archivada)
+    .map((categoria) => {
+      const gastado = gastos[categoria.id] || 0;
+      const tope = topeVigente(datos, mes, categoria.id);
+      return { categoria, gastado, tope, veredicto: veredictoCategoria(gastado, tope) };
+    })
+    .filter((fila) => fila.gastado > 0 || fila.tope !== null)
+    .sort((a, b) => orden[a.veredicto.estado] - orden[b.veredicto.estado] || b.gastado - a.gastado);
+}
+
+/**
+ * Suma de los topes de las categorías variables del mes.
+ * Devuelve también cuáles no tienen tope: quien lea el total sabe qué NO está contando.
+ */
+function topesVariables(datos, mes) {
+  let total = 0;
+  const sinTope = [];
+  for (const categoria of datos.categorias) {
+    if (categoria.archivada || categoria.clase !== "variable") continue;
+    const tope = topeVigente(datos, mes, categoria.id);
+    if (tope === null) sinTope.push(categoria.id);
+    else total += tope;
+  }
+  return { total, sinTope, completo: sinTope.length === 0 };
+}
+
+// ═══ motor/ahorro.js ═══
+// Ahorro — las tres cifras del panel: qué queda, cuánto por día, y cuánto puedes apartar.
+//
+// Separación deliberada entre HECHO y PROYECCIÓN:
+//   · "disponible" es un hecho: ingresos − fijos del ciclo − lo que ya gastaste.
+//   · "capacidad de ahorro" es una proyección, y necesita ritmo. Con menos de 3 días
+//     corridos del ciclo el ritmo diario es ruido (una despensa el día 1 proyectaría un mes
+//     catastrófico), así que se declara SIN_DATOS_SUFICIENTES en vez de asustar con un
+//     número inventado. El "disponible" se sigue mostrando: no se pierde nada.
+
+
+
+
+
+
+/** Días corridos del ciclo antes de aceptar proyectar un ritmo de gasto. */
+const DIAS_MINIMOS_RITMO = 3;
+
+/** Ingresos del ciclo: lo capturado manda; si no hay nada, el ingreso del perfil, declarado. */
+function ingresosDelCiclo(datos, ciclo) {
+  const capturado = suma(movimientosEntre(datos, ciclo.inicio, ciclo.fin), (m) => m.tipo === TIPOS.INGRESO);
+  if (capturado > 0) return { monto: capturado, origen: "capturado" };
+
+  const esperado = datos.perfil.ingresoQuincenal;
+  if (esperado === null) {
+    return {
+      monto: null,
+      origen: "ninguno",
+      veredicto: sinDatos(
+        "no hay ingreso registrado en este ciclo ni ingreso quincenal en tu perfil",
+        "registra tu ingreso quincenal en Ajustes, o captura el depósito como movimiento",
+      ),
+    };
+  }
+  return { monto: esperado, origen: "perfil" };
+}
+
+/** Los fijos activos que vencen dentro del ciclo, con lo que ya se pagó y lo que falta. */
+function fijosDelCiclo(datos, ciclo) {
+  const mes = mesDe(ciclo.inicio);
+  const movimientos = movimientosEntre(datos, ciclo.inicio, ciclo.fin);
+  const pagados = new Set(movimientos.filter((m) => m.fijoId).map((m) => m.fijoId));
+
+  const enCiclo = datos.fijos
+    .filter((f) => f.activo && venceEnMes(f, mes))
+    .map((f) => ({ fijo: f, fecha: vencimientoEnMes(mes, f.diaCorte) }))
+    .filter((v) => entre(v.fecha, ciclo.inicio, ciclo.fin));
+
+  let pendiente = 0;
+  let pagado = 0;
+  const desconocidos = [];
+
+  for (const v of enCiclo) {
+    if (v.fijo.monto === null) {
+      desconocidos.push(v.fijo.nombre);
+      continue;
+    }
+    if (pagados.has(v.fijo.id)) pagado += v.fijo.monto;
+    else pendiente += v.fijo.monto;
+  }
+
+  return { lista: enCiclo, pendiente, pagado, total: pendiente + pagado, desconocidos };
+}
+
+/** Gasto del ciclo, separando lo que ya estaba comprometido (fijos) de lo variable. */
+function gastoDelCiclo(datos, ciclo) {
+  const movimientos = movimientosEntre(datos, ciclo.inicio, ciclo.fin);
+  const gastos = movimientos.filter((m) => m.tipo === TIPOS.GASTO);
+  const fijo = suma(gastos, (m) => Boolean(m.fijoId));
+  const variable = suma(gastos, (m) => !m.fijoId);
+  const ahorrado = suma(movimientos, (m) => m.tipo === TIPOS.AHORRO);
+  const retirado = suma(movimientos, (m) => m.tipo === TIPOS.RETIRO);
+  return { total: fijo + variable, fijo, variable, ahorrado, retirado, movimientos: gastos.length };
+}
+
+/**
+ * El panel de "Hoy": todo lo que hace falta para decidir si hoy puedes gastar.
+ * Devuelve siempre la misma forma; los huecos vienen como veredicto, no como cero.
+ */
+function panelHoy(datos, iso) {
+  const ciclo = cicloDe(iso, datos.perfil.cortes);
+  const ingresos = ingresosDelCiclo(datos, ciclo);
+  const fijos = fijosDelCiclo(datos, ciclo);
+  const gasto = gastoDelCiclo(datos, ciclo);
+
+  if (ingresos.monto === null) {
+    return {
+      ciclo,
+      ingresos,
+      fijos,
+      gasto,
+      disponible: null,
+      porDia: null,
+      capacidad: { monto: null, veredicto: ingresos.veredicto },
+      veredicto: ingresos.veredicto,
+    };
+  }
+
+  // Hecho: lo que queda del ciclo, ya descontando los fijos que todavía no se cobran.
+  const disponible = ingresos.monto - gasto.total - (gasto.ahorrado - gasto.retirado) - fijos.pendiente;
+  const porDia = ciclo.diasRestantes > 0 ? Math.trunc(disponible / ciclo.diasRestantes) : disponible;
+
+  // Proyección: a este ritmo de gasto variable, ¿con cuánto cierro el ciclo?
+  let capacidad;
+  if (gasto.variable === 0 && ciclo.diasTranscurridos < DIAS_MINIMOS_RITMO) {
+    capacidad = {
+      monto: null,
+      veredicto: sinDatos(
+        `van ${ciclo.diasTranscurridos} de ${ciclo.dias} días del ciclo y no hay gastos capturados`,
+        `captura tus gastos ${DIAS_MINIMOS_RITMO} días seguidos y aquí aparece tu capacidad real de ahorro`,
+      ),
+    };
+  } else if (ciclo.diasTranscurridos < DIAS_MINIMOS_RITMO) {
+    capacidad = {
+      monto: null,
+      veredicto: sinDatos(
+        `solo ${ciclo.diasTranscurridos} día(s) de ritmo — muy poco para proyectar el ciclo`,
+        `espera al día ${DIAS_MINIMOS_RITMO} del ciclo`,
+      ),
+    };
+  } else {
+    const ritmoDiario = Math.trunc(gasto.variable / ciclo.diasTranscurridos);
+    const proyectadoRestante = ritmoDiario * Math.max(ciclo.diasRestantes - 1, 0);
+    const monto = disponible - proyectadoRestante;
+    capacidad = {
+      monto,
+      ritmoDiario,
+      proyectadoRestante,
+      veredicto:
+        monto > 0
+          ? veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, `a tu ritmo actual cierras el ciclo con esto a favor`, {
+              monto,
+              ritmoDiario,
+            })
+          : veredicto(ESTADOS.NO_ALCANZA, SEVERIDADES.ALTA, `a tu ritmo actual el ciclo cierra en números rojos`, {
+              monto,
+              ritmoDiario,
+            }),
+    };
+  }
+
+  const general =
+    disponible < 0
+      ? veredicto(ESTADOS.NO_ALCANZA, SEVERIDADES.ALTA, "el ciclo ya está sobregirado", { disponible })
+      : porDia !== null && ciclo.diasRestantes > 0 && disponible < ciclo.diasRestantes * 5000
+        ? veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA, "queda poco para los días que faltan", { disponible, porDia })
+        : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "el ciclo va con holgura", { disponible, porDia });
+
+  return { ciclo, ingresos, fijos, gasto, disponible, porDia, capacidad, veredicto: general };
+}
+
+/**
+ * Capacidad de ahorro POR CICLO para planear metas: lo estructural, sin el ruido del día.
+ * ingreso − fijos del mes prorrateados al ciclo − topes variables prorrateados al ciclo.
+ * Si faltan topes, se dice cuáles: el número sale, pero con su asterisco explícito.
+ */
+function capacidadPorCiclo(datos, iso, topesDelMes) {
+  const ciclo = cicloDe(iso, datos.perfil.cortes);
+  const ingreso = datos.perfil.ingresoQuincenal;
+  if (ingreso === null) {
+    return {
+      monto: null,
+      veredicto: sinDatos("falta tu ingreso quincenal", "captúralo en Ajustes para poder planear metas"),
+    };
+  }
+
+  const ciclosPorMes = (datos.perfil.cortes || []).length + 1;
+  // El promedio mensual, no lo que toca este mes: un seguro anual hay que irlo apartando.
+  const fijosMes = datos.fijos.filter((f) => f.activo && f.monto !== null).reduce((t, f) => t + montoMensualizado(f), 0);
+  const fijosCiclo = prorratear(fijosMes, 1, ciclosPorMes);
+  const variableCiclo = prorratear(topesDelMes.total, 1, ciclosPorMes);
+  const monto = ingreso - fijosCiclo - variableCiclo;
+
+  const nota = topesDelMes.completo
+    ? veredicto(
+        monto > 0 ? ESTADOS.VA_BIEN : ESTADOS.NO_ALCANZA,
+        monto > 0 ? SEVERIDADES.OK : SEVERIDADES.ALTA,
+        `ingreso ${formatear(ingreso)} − fijos ${formatear(fijosCiclo)} − presupuesto variable ${formatear(variableCiclo)}`,
+        { ingreso, fijosCiclo, variableCiclo },
+      )
+    : veredicto(
+        ESTADOS.AJUSTADO,
+        SEVERIDADES.INFO,
+        `${topesDelMes.sinTope.length} categoría(s) sin tope no entran en esta cuenta`,
+        { ingreso, fijosCiclo, variableCiclo, sinTope: topesDelMes.sinTope },
+      );
+
+  return { monto, ingreso, fijosCiclo, variableCiclo, ciclo, veredicto: nota };
+}
+
+/**
+ * Lo apartado históricamente, menos lo retirado.
+ * Con `metaId` cuenta solo esa meta; con `soloLibre` cuenta solo lo que NO está
+ * comprometido con ninguna meta — eso es el fondo de emergencia.
+ */
+function ahorroAcumulado(datos, metaId = null, soloLibre = false) {
+  let total = 0;
+  for (const lista of Object.values(datos.movimientos)) {
+    for (const m of lista) {
+      if (m.tipo !== TIPOS.AHORRO && m.tipo !== TIPOS.RETIRO) continue;
+      if (metaId && m.metaId !== metaId) continue;
+      if (soloLibre && m.metaId) continue;
+      total += m.tipo === TIPOS.AHORRO ? m.monto : -m.monto;
+    }
+  }
+  return total;
+}
+
+/** El fondo de emergencia: lo apartado sin comprometer con ninguna meta. */
+function ahorroLibre(datos) {
+  return ahorroAcumulado(datos, null, true);
+}
+
+/**
+ * El fondo de emergencia contra su objetivo.
+ * Sin objetivo definido no hay veredicto: se dice qué falta y cuánto suelen ser 3 meses
+ * de tus fijos, que sí es un número tuyo y no una regla inventada.
+ */
+function estadoColchon(datos) {
+  const acumulado = ahorroLibre(datos);
+  const objetivo = datos.perfil.colchonObjetivo;
+
+  if (objetivo === null) {
+    return {
+      acumulado,
+      objetivo: null,
+      veredicto: sinDatos(
+        "no has definido cuánto quieres tener de fondo de emergencia",
+        "defínelo en Ajustes para saber si vas bien",
+      ),
+    };
+  }
+
+  const falta = Math.max(objetivo - acumulado, 0);
+  if (falta === 0) {
+    return {
+      acumulado,
+      objetivo,
+      falta: 0,
+      veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "fondo completo", { acumulado, objetivo }),
+    };
+  }
+
+  const pct = Math.round((acumulado * 100) / objetivo);
+  return {
+    acumulado,
+    objetivo,
+    falta,
+    veredicto: veredicto(
+      ESTADOS.AJUSTADO,
+      pct >= 50 ? SEVERIDADES.MEDIA : SEVERIDADES.ALTA,
+      `llevas ${pct}% del fondo — faltan ${formatear(falta)}`,
+      { acumulado, objetivo, falta, pct },
+    ),
+  };
+}
+
+// ═══ motor/metas.js ═══
+// Metas — cuánto hay que apartar por quincena, y si eso cabe en la realidad.
+//
+// Aquí es donde la app se gana su lugar: una meta no es un deseo con una barrita de
+// progreso, es una división. Falta X, quedan N quincenas, entonces son X/N por quincena.
+// Y ese número se contrasta contra la capacidad real de ahorro.
+//
+// Si no cabe, lo dice: NO_ALCANZA, con los dos números a la vista y la alternativa
+// calculada (la fecha que sí es posible, o la aportación que sí cabe). Una meta que se
+// pinta de verde cuando no cierra es peor que no tener meta.
+
+
+
+
+
+/** Con menos de este colchón sobre lo requerido, la meta va apretada. */
+const HOLGURA_COMODA = 0.8;
+
+/** Lo apartado para una meta: sus movimientos de tipo ahorro. */
+function ahorradoDeMeta(datos, metaId) {
+  return ahorroAcumulado(datos, metaId);
+}
+
+/**
+ * El plan de una meta a una fecha dada.
+ * `capacidad` es la capacidad de ahorro por ciclo (o null si todavía no se puede saber).
+ */
+function planDeMeta(datos, meta, iso, capacidad = null) {
+  const ahorrado = ahorradoDeMeta(datos, meta.id);
+  const base = { meta, ahorrado, objetivo: meta.objetivo, falta: null, ciclos: null, requerido: null };
+
+  if (meta.objetivo === null) {
+    return {
+      ...base,
+      veredicto: sinDatos("la meta no tiene monto objetivo", `defínele un monto a "${meta.nombre}"`),
+    };
+  }
+
+  const falta = Math.max(meta.objetivo - ahorrado, 0);
+  if (falta === 0 || meta.lograda) {
+    return {
+      ...base,
+      falta: 0,
+      veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "meta cumplida", { ahorrado, objetivo: meta.objetivo }),
+    };
+  }
+
+  if (!meta.fechaLimite) {
+    return {
+      ...base,
+      falta,
+      veredicto: sinDatos(
+        "la meta no tiene fecha límite — sin fecha no hay cuánto por quincena",
+        `ponle fecha a "${meta.nombre}"`,
+      ),
+    };
+  }
+
+  const ciclos = ciclosHasta(iso, meta.fechaLimite, datos.perfil.cortes);
+  if (ciclos === 0) {
+    return {
+      ...base,
+      falta,
+      ciclos: 0,
+      veredicto: veredicto(
+        ESTADOS.NO_ALCANZA,
+        SEVERIDADES.ALTA,
+        `la fecha límite ya pasó o no queda ninguna quincena completa, y faltan ${formatear(falta)}`,
+        { falta, fechaLimite: meta.fechaLimite },
+      ),
+    };
+  }
+
+  const requerido = Math.ceil(falta / ciclos);
+  const conAlternativa = { ...base, falta, ciclos, requerido };
+
+  if (capacidad === null) {
+    return {
+      ...conAlternativa,
+      veredicto: sinDatos(
+        `requiere ${formatear(requerido)} por quincena — falta saber tu capacidad de ahorro para decir si cabe`,
+        "captura tu ingreso quincenal y los topes de tus categorías",
+      ),
+    };
+  }
+
+  if (capacidad <= 0) {
+    return {
+      ...conAlternativa,
+      veredicto: veredicto(
+        ESTADOS.NO_ALCANZA,
+        SEVERIDADES.ALTA,
+        `requiere ${formatear(requerido)} por quincena y hoy tu capacidad de ahorro es ${formatear(capacidad)}`,
+        { requerido, capacidad, alternativa: { tipo: "sin-capacidad" } },
+      ),
+    };
+  }
+
+  if (requerido > capacidad) {
+    const ciclosNecesarios = Math.ceil(falta / capacidad);
+    const fechaRealista = fechaTrasCiclos(iso, ciclosNecesarios, datos.perfil.cortes);
+    return {
+      ...conAlternativa,
+      veredicto: veredicto(
+        ESTADOS.NO_ALCANZA,
+        SEVERIDADES.ALTA,
+        `requiere ${formatear(requerido)} por quincena, capacidad estimada ${formatear(capacidad)}`,
+        {
+          requerido,
+          capacidad,
+          alternativa: {
+            tipo: "mover-fecha",
+            aportacionPosible: capacidad,
+            ciclosNecesarios,
+            fechaRealista,
+          },
+        },
+      ),
+    };
+  }
+
+  const estado = requerido <= capacidad * HOLGURA_COMODA ? ESTADOS.VA_BIEN : ESTADOS.AJUSTADO;
+  return {
+    ...conAlternativa,
+    veredicto: veredicto(
+      estado,
+      estado === ESTADOS.VA_BIEN ? SEVERIDADES.OK : SEVERIDADES.MEDIA,
+      `requiere ${formatear(requerido)} por quincena, capacidad estimada ${formatear(capacidad)}`,
+      { requerido, capacidad, ciclos },
+    ),
+  };
+}
+
+/** La fecha en la que cierra el ciclo número N contando desde hoy. */
+function fechaTrasCiclos(iso, ciclos, cortes = [15]) {
+  let ciclo = cicloDe(iso, cortes);
+  for (let i = 1; i < ciclos && i < 2000; i++) {
+    ciclo = cicloDe(sumarDias(ciclo.fin, 1), cortes);
+  }
+  return ciclo.fin;
+}
+
+/** Todas las metas, las que aprietan primero. */
+function resumenMetas(datos, iso, capacidad = null) {
+  const orden = { [ESTADOS.NO_ALCANZA]: 0, [ESTADOS.AJUSTADO]: 1, [ESTADOS.SIN_DATOS]: 2, [ESTADOS.VA_BIEN]: 3 };
+  return datos.metas
+    .map((meta) => planDeMeta(datos, meta, iso, capacidad))
+    .sort((a, b) => (orden[a.veredicto.estado] ?? 9) - (orden[b.veredicto.estado] ?? 9));
+}
+
+/** Lo que exigen TODAS las metas juntas por quincena, contra la capacidad. */
+function exigenciaTotal(planes, capacidad = null) {
+  const requerido = planes.reduce((t, p) => t + (p.requerido || 0), 0);
+  if (capacidad === null) {
+    return { requerido, veredicto: sinDatos("falta tu capacidad de ahorro", "captura tu ingreso quincenal") };
+  }
+  if (requerido > capacidad) {
+    return {
+      requerido,
+      capacidad,
+      veredicto: veredicto(
+        ESTADOS.NO_ALCANZA,
+        SEVERIDADES.ALTA,
+        `tus metas juntas piden ${formatear(requerido)} por quincena y tu capacidad es ${formatear(capacidad)}`,
+        { requerido, capacidad },
+      ),
+    };
+  }
+  return {
+    requerido,
+    capacidad,
+    veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, `tus metas caben en tu capacidad`, { requerido, capacidad }),
+  };
+}
+
+// ═══ motor/fijos.js ═══
+// Fijos y deudas — lo que ya está comprometido antes de que decidas nada.
+//
+// Sobre las deudas hay una regla que no se rompe: SIN TASA CAPTURADA NO SE PROYECTA
+// INTERÉS. El saldo se reporta como lo que es —original menos pagos— y se declara que va
+// sin intereses. Inventar una tasa "típica" daría un número creíble y falso, que es
+// exactamente el peor tipo de número en una app de finanzas.
+
+
+
+
+
+/**
+ * ¿A este fijo le toca en este mes?
+ * Un seguro anual no se paga doce veces al año, y contarlo como mensual descuadraba la
+ * capacidad de ahorro de todas las quincenas. Sin mes ancla, un fijo no mensual se toma
+ * como que le toca en el mes en que se capturó.
+ */
+function venceEnMes(fijo, mes) {
+  const frecuencia = fijo.frecuencia || 1;
+  if (frecuencia === 1) return true;
+  const ancla = fijo.mesAncla || mes;
+  return Math.abs(mesesEntre(ancla, mes)) % frecuencia === 0;
+}
+
+/** Lo que cuesta al mes en promedio: el monto repartido entre los meses de su frecuencia. */
+function montoMensualizado(fijo) {
+  if (fijo.monto === null) return null;
+  return prorratear(fijo.monto, 1, fijo.frecuencia || 1);
+}
+
+/** ¿Ya se pagó este fijo en este mes? Devuelve el movimiento que lo comprueba. */
+function pagoDeFijo(datos, fijoId, mes) {
+  const lista = datos.movimientos[mes] || [];
+  return lista.find((m) => m.fijoId === fijoId) || null;
+}
+
+/**
+ * Lo que vence en los próximos `dias`, ordenado por fecha.
+ * Incluye lo vencido y no pagado del mes en curso: eso es justo lo que no hay que olvidar.
+ */
+function proximosVencimientos(datos, iso, dias = 15) {
+  const hasta = sumarMeses(iso, 2);
+  const salida = [];
+
+  for (const fijo of datos.fijos) {
+    if (!fijo.activo) continue;
+    for (const mes of [mesDe(iso), mesDe(sumarMeses(iso, 1))]) {
+      if (!venceEnMes(fijo, mes)) continue;
+      const fecha = vencimientoEnMes(mes, fijo.diaCorte);
+      if (fecha > hasta) continue;
+      const pago = pagoDeFijo(datos, fijo.id, mes);
+      const faltan = diasEntre(iso, fecha);
+      if (pago || faltan > dias) continue;
+      salida.push({
+        fijo,
+        mes,
+        fecha,
+        dias: faltan,
+        vencido: faltan < 0,
+        monto: fijo.monto,
+      });
+    }
+  }
+
+  return salida.sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
+}
+
+/**
+ * Lo que suman los fijos, en DOS números que no son el mismo:
+ *   · `mensualizado` — el promedio por mes (un seguro anual entra dividido entre 12). Es el
+ *     que debe entrar en la capacidad de ahorro: es lo que hay que ir apartando.
+ *   · `esteMes` — lo que de verdad se paga en el mes de `iso`. Es lo que sale de la cuenta.
+ * Antes había uno solo, y para cualquier fijo no mensual mentía.
+ */
+function totalFijosMensual(datos, iso = null) {
+  const mes = iso ? mesDe(iso) : null;
+  let mensualizado = 0;
+  let esteMes = 0;
+  const desconocidos = [];
+
+  for (const fijo of datos.fijos) {
+    if (!fijo.activo) continue;
+    if (fijo.monto === null) {
+      desconocidos.push(fijo.nombre);
+      continue;
+    }
+    mensualizado += montoMensualizado(fijo);
+    if (mes && venceEnMes(fijo, mes)) esteMes += fijo.monto;
+  }
+
+  return {
+    mensualizado,
+    esteMes,
+    total: mensualizado, // el nombre viejo sigue apuntando al promedio mensual
+    desconocidos,
+    veredicto: desconocidos.length
+      ? sinDatos(
+          `${desconocidos.length} fijo(s) sin monto no entran en el total`,
+          `captura el monto de: ${desconocidos.join(", ")}`,
+        )
+      : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "todos tus fijos tienen monto", { mensualizado }),
+  };
+}
+
+/** Los pagos hechos a una deuda: movimientos etiquetados con su id. */
+function pagosDeDeuda(datos, deudaId) {
+  const pagos = [];
+  for (const lista of Object.values(datos.movimientos)) {
+    for (const m of lista) if (m.deudaId === deudaId && m.tipo === TIPOS.GASTO) pagos.push(m);
+  }
+  return pagos.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+}
+
+/**
+ * El saldo de una deuda. Sin tasa, se declara que el número es sin intereses:
+ * el pendiente real puede ser mayor, y quien lo lee tiene que saberlo.
+ */
+function saldoDeuda(datos, deuda) {
+  const pagos = pagosDeDeuda(datos, deuda.id);
+  const pagado = pagos.reduce((t, p) => t + p.monto, 0);
+
+  if (deuda.montoOriginal === null) {
+    return {
+      deuda,
+      pagado,
+      saldo: null,
+      pagos: pagos.length,
+      veredicto: sinDatos(
+        `"${deuda.nombre}" no tiene monto original — no hay saldo que calcular`,
+        `captura cuánto debías al inicio`,
+      ),
+    };
+  }
+
+  const saldo = Math.max(deuda.montoOriginal - pagado, 0);
+  const nota =
+    deuda.tasaAnual === null
+      ? veredicto(
+          saldo === 0 ? ESTADOS.VA_BIEN : ESTADOS.AJUSTADO,
+          SEVERIDADES.INFO,
+          "saldo sin intereses — no hay tasa capturada, así que aquí no se proyecta ninguno",
+          { saldo, pagado, tasaAnual: null },
+        )
+      : veredicto(
+          saldo === 0 ? ESTADOS.VA_BIEN : ESTADOS.AJUSTADO,
+          SEVERIDADES.INFO,
+          `saldo de capital; con tasa anual ${deuda.tasaAnual}% los intereses corren aparte`,
+          { saldo, pagado, tasaAnual: deuda.tasaAnual },
+        );
+
+  return { deuda, pagado, saldo, pagos: pagos.length, veredicto: nota };
+}
+
+/** El total que se debe hoy, con lo que no se pudo contar declarado aparte. */
+function totalDeudas(datos) {
+  let total = 0;
+  const sinMonto = [];
+  for (const deuda of datos.deudas) {
+    if (!deuda.activa) continue;
+    const { saldo } = saldoDeuda(datos, deuda);
+    if (saldo === null) sinMonto.push(deuda.nombre);
+    else total += saldo;
+  }
+  return { total, sinMonto, conIntereses: false };
+}
+
+/**
+ * Movimiento listo para guardar cuando marcas un fijo como pagado.
+ * Si el fijo es el pago de una deuda, el movimiento la abona: un solo registro, no dos.
+ */
+function movimientoDeFijo(fijo, fecha) {
+  return {
+    fecha,
+    monto: fijo.monto,
+    tipo: TIPOS.GASTO,
+    categoria: fijo.categoria,
+    nota: fijo.nombre,
+    fijoId: fijo.id,
+    deudaId: fijo.deudaId || null,
+  };
+}
+
+// ═══ motor/deudas.js ═══
+// Deudas — el saldo, y qué pasa si sigues pagando lo que pagas.
+//
+// La regla que manda: SIN TASA CAPTURADA NO SE PROYECTA NINGÚN INTERÉS. Inventar una tasa
+// "típica de tarjeta" daría un número creíble y falso, que es el peor tipo de número aquí.
+//
+// Cuando la tasa SÍ está, se calcula lo que casi ninguna app dice en voz alta: cuántos meses
+// faltan de verdad, cuánto de eso son intereses, y —lo más importante— si el pago mensual
+// ni siquiera cubre el interés del mes, en cuyo caso la deuda NUNCA baja por más que pagues.
+// Ese caso se declara NO_ALCANZA con todas sus letras.
+//
+// El supuesto va escrito en el propio veredicto: interés mensual sobre saldo insoluto,
+// pagos puntuales, sin comisiones ni IVA. Es una proyección, y se dice que lo es.
+
+
+
+
+/** Tope de meses que se proyectan. Más allá de 50 años, el número deja de significar algo. */
+const MESES_MAXIMOS = 600;
+
+/** El pago mensual de una deuda: el del fijo que la paga, si hay uno ligado. */
+function pagoMensualDe(datos, deuda) {
+  const fijo = datos.fijos.find((f) => f.activo && f.deudaId === deuda.id && f.monto !== null);
+  if (fijo) return { monto: fijo.monto, origen: "fijo", nombre: fijo.nombre };
+  return { monto: null, origen: "ninguno" };
+}
+
+/**
+ * Qué pasa con esta deuda si todo sigue igual.
+ * Devuelve siempre el saldo; la proyección solo cuando hay con qué calcularla.
+ */
+function planDeDeuda(datos, deuda) {
+  const base = saldoDeuda(datos, deuda);
+  const pago = pagoMensualDe(datos, deuda);
+  const salida = { ...base, pago, meses: null, intereses: null, interesDelMes: null };
+
+  if (base.saldo === null) return salida; // sin monto original no hay nada que proyectar
+  if (base.saldo === 0) {
+    return { ...salida, meses: 0, intereses: 0, veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "liquidada", { saldo: 0 }) };
+  }
+
+  if (deuda.tasaAnual === null) {
+    return {
+      ...salida,
+      veredicto: sinDatos(
+        `saldo ${formatear(base.saldo)} sin intereses — no hay tasa capturada, así que aquí no se proyecta ninguno`,
+        "captura la tasa anual de la deuda para saber cuánto te está costando de verdad",
+      ),
+    };
+  }
+
+  if (pago.monto === null) {
+    return {
+      ...salida,
+      veredicto: sinDatos(
+        `saldo ${formatear(base.saldo)} con tasa ${deuda.tasaAnual}% anual — falta saber cuánto pagas al mes`,
+        "liga un pago fijo a esta deuda para proyectar cuándo la liquidas",
+      ),
+    };
+  }
+
+  const tasaMensual = deuda.tasaAnual / 100 / 12;
+  const interesDelMes = Math.round(base.saldo * tasaMensual);
+
+  // El caso que hunde a la gente: si el pago no cubre ni el interés, el saldo sube cada mes.
+  if (pago.monto <= interesDelMes) {
+    return {
+      ...salida,
+      interesDelMes,
+      veredicto: veredicto(
+        ESTADOS.NO_ALCANZA,
+        SEVERIDADES.ALTA,
+        `pagando ${formatear(pago.monto)} al mes esta deuda NUNCA baja: solo el interés del mes es ${formatear(interesDelMes)}`,
+        { saldo: base.saldo, pago: pago.monto, interesDelMes, tasaAnual: deuda.tasaAnual },
+      ),
+    };
+  }
+
+  // Mes a mes, sin fórmulas cerradas: es exacto en centavos y se lee igual que se calcula.
+  let saldo = base.saldo;
+  let intereses = 0;
+  let meses = 0;
+  while (saldo > 0 && meses < MESES_MAXIMOS) {
+    const interes = Math.round(saldo * tasaMensual);
+    intereses += interes;
+    saldo = saldo + interes - pago.monto;
+    meses += 1;
+  }
+  if (saldo < 0) intereses += saldo; // el último pago fue de más: no se cobra lo que no se debía
+
+  const anios = Math.floor(meses / 12);
+  const sobran = meses % 12;
+  const cuando = anios ? `${anios} año(s)${sobran ? ` y ${sobran} mes(es)` : ""}` : `${meses} mes(es)`;
+
+  return {
+    ...salida,
+    meses,
+    intereses,
+    interesDelMes,
+    veredicto: veredicto(
+      intereses > base.saldo / 2 ? ESTADOS.AJUSTADO : ESTADOS.VA_BIEN,
+      intereses > base.saldo / 2 ? SEVERIDADES.MEDIA : SEVERIDADES.OK,
+      `pagando ${formatear(pago.monto)} al mes la liquidas en ${cuando} y pagas ${formatear(intereses)} de intereses ` +
+        `(proyección: interés mensual sobre saldo, pagos puntuales, sin comisiones ni IVA)`,
+      { saldo: base.saldo, pago: pago.monto, meses, intereses, tasaAnual: deuda.tasaAnual },
+    ),
+  };
+}
+
+/** Cuánto ahorrarías en intereses pagando algo más cada mes. La respuesta suele sorprender. */
+function siPagarasMas(datos, deuda, extra) {
+  const actual = planDeDeuda(datos, deuda);
+  if (actual.meses === null || !actual.pago.monto) return null;
+
+  const conExtra = planDeDeuda(
+    { ...datos, fijos: datos.fijos.map((f) => (f.deudaId === deuda.id ? { ...f, monto: f.monto + extra } : f)) },
+    deuda,
+  );
+  if (conExtra.meses === null) return null;
+
+  return {
+    extra,
+    mesesMenos: actual.meses - conExtra.meses,
+    interesesMenos: actual.intereses - conExtra.intereses,
+  };
+}
+
+// ═══ almacen/archivo.js ═══
+// Respaldo — el puente para que estos datos nunca queden atrapados en ninguna app.
+//
+// Lo que exporta es el documento completo, tal cual, en JSON legible. Es el mismo formato
+// que come el importador. Si mañana esta app deja de existir, los datos salen enteros.
+
+
+
+
+function exportar(datos) {
+  return JSON.stringify({ ...datos, exportado: new Date().toISOString(), version: VERSION_DATOS }, null, 2);
+}
+
+function nombreDeRespaldo(iso = hoyISO()) {
+  return `finanzas-${iso}.json`;
+}
+
+/**
+ * Lee un respaldo. Nunca lanza: devuelve el motivo para poder enseñarlo en pantalla.
+ * Un respaldo de una versión más nueva se RECHAZA en vez de abrirse a medias.
+ */
+function importar(texto) {
+  let crudo;
+  try {
+    crudo = JSON.parse(texto);
+  } catch (e) {
+    return { ok: false, motivo: "El archivo no es un JSON válido.", datos: null };
+  }
+  return migrar(crudo);
+}
+
+// ═══ almacen/local.js ═══
+// Almacén local — la base sobre la que corre todo, en el propio navegador.
+//
+// IndexedDB primero (aguanta años de movimientos y sobrevive a recargas), localStorage si
+// no está disponible, y memoria como último recurso. El nivel que se logró se DECLARA:
+// una app que guarda en memoria y no lo dice es una app que te va a perder los datos.
+//
+// Cuidado con las guardas: en un origen aislado (un iframe sin `allow-same-origin`, o un
+// navegador con los datos de sitio bloqueados) **hasta leer** `window.localStorage` lanza
+// SecurityError. Por eso aquí no se pregunta con `typeof`: se intenta de verdad, dentro de
+// un try, y si truena se baja al siguiente nivel. Este archivo no puede lanzar nunca.
+
+const BASE = "finanzas";
+const ALMACEN = "documento";
+const LLAVE = "raiz";
+
+/** Lee una global sin que el acceso pueda tumbar la app. Devuelve null si ni mirarla se puede. */
+function leerGlobal(nombre) {
+  try {
+    return globalThis[nombre] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function abrirIndexedDB() {
+  return new Promise((resolver) => {
+    const idb = leerGlobal("indexedDB");
+    if (!idb) return resolver(null);
+
+    let peticion;
+    try {
+      peticion = idb.open(BASE, 1);
+    } catch (e) {
+      return resolver(null);
+    }
+
+    // Si la base no responde (permisos, versión trabada), no se espera para siempre.
+    const rendirse = setTimeout(() => resolver(null), 3000);
+    const terminar = (valor) => {
+      clearTimeout(rendirse);
+      resolver(valor);
+    };
+
+    peticion.onupgradeneeded = () => {
+      const bd = peticion.result;
+      if (!bd.objectStoreNames.contains(ALMACEN)) bd.createObjectStore(ALMACEN);
+    };
+    peticion.onsuccess = () => terminar(peticion.result);
+    peticion.onerror = () => terminar(null);
+    peticion.onblocked = () => terminar(null);
+  });
+}
+
+function operar(bd, modo, accion) {
+  return new Promise((resolver, rechazar) => {
+    try {
+      const tx = bd.transaction(ALMACEN, modo);
+      const peticion = accion(tx.objectStore(ALMACEN));
+      peticion.onsuccess = () => resolver(peticion.result);
+      peticion.onerror = () => rechazar(peticion.error || new Error("La base local rechazó la operación."));
+    } catch (e) {
+      rechazar(e);
+    }
+  });
+}
+
+/** localStorage no basta con que exista: tiene que dejar escribir (modo privado, cuotas). */
+function localStorageUtilizable() {
+  const ls = leerGlobal("localStorage");
+  if (!ls) return null;
+  try {
+    const prueba = `${BASE}:prueba`;
+    ls.setItem(prueba, "1");
+    ls.removeItem(prueba);
+    return ls;
+  } catch (e) {
+    return null;
+  }
+}
+
+function enMemoria(motivo) {
+  let memoria = null;
+  return {
+    tipo: "memoria",
+    duradero: false,
+    motivo,
+    async cargar() {
+      return memoria;
+    },
+    async guardar(datos) {
+      memoria = datos;
+    },
+    async borrar() {
+      memoria = null;
+    },
+  };
+}
+
+/** Devuelve siempre un almacén utilizable. Nunca lanza; en el peor caso, memoria declarada. */
+async function abrirLocal() {
+  let bd = null;
+  try {
+    bd = await abrirIndexedDB();
+  } catch (e) {
+    bd = null;
+  }
+
+  if (bd) {
+    return {
+      tipo: "indexeddb",
+      duradero: true,
+      motivo: null,
+      async cargar() {
+        try {
+          return (await operar(bd, "readonly", (s) => s.get(LLAVE))) || null;
+        } catch (e) {
+          return null;
+        }
+      },
+      async guardar(datos) {
+        await operar(bd, "readwrite", (s) => s.put(datos, LLAVE));
+      },
+      async borrar() {
+        await operar(bd, "readwrite", (s) => s.delete(LLAVE));
+      },
+    };
+  }
+
+  const ls = localStorageUtilizable();
+  if (ls) {
+    return {
+      tipo: "localstorage",
+      duradero: true,
+      motivo: null,
+      async cargar() {
+        try {
+          const texto = ls.getItem(`${BASE}:${LLAVE}`);
+          return texto ? JSON.parse(texto) : null;
+        } catch (e) {
+          return null;
+        }
+      },
+      async guardar(datos) {
+        ls.setItem(`${BASE}:${LLAVE}`, JSON.stringify(datos));
+      },
+      async borrar() {
+        ls.removeItem(`${BASE}:${LLAVE}`);
+      },
+    };
+  }
+
+  // Sin almacenamiento del navegador: la app funciona, pero al cerrar se pierde. Se avisa.
+  return enMemoria("Este navegador no deja guardar datos: al cerrar la pestaña se pierde lo capturado.");
+}
+
+// ═══ almacen/almacen.js ═══
+// El almacén — cuatro métodos y varios respaldos detrás.
+//
+// La interfaz de la app habla SOLO con esto: cargar, guardar, suscribir, estado. Debajo
+// puede haber IndexedDB sola, o IndexedDB con un espejo sincronizado. Cambiar de espejo
+// mañana (una carpeta local, un servidor propio) es escribir otro adaptador; ni el motor
+// ni la interfaz se enteran.
+//
+// El local SIEMPRE se escribe primero. Si el espejo falla, el dato ya está a salvo y el
+// modo baja a "solo este dispositivo" con su motivo: nunca se pierde una captura en
+// silencio.
+
+
+
+
+
+const MODOS = {
+  SINCRONIZADO: "sincronizado",
+  LOCAL: "local",
+  EFIMERO: "efimero",
+};
+
+async function abrirAlmacen(opciones = {}) {
+  // Abrir el almacén NUNCA falla: en el peor de los casos se trabaja en memoria y se dice.
+  let local;
+  try {
+    local = opciones.local || (await abrirLocal());
+  } catch (e) {
+    local = enMemoria("No se pudo abrir el almacenamiento de este navegador.");
+  }
+
+  // El adaptador de sincronización es opcional: si su archivo no está, esto no falla.
+  let espejo = null;
+  const proveedor =
+    opciones.proveedorSincronizacion ||
+    (typeof abrirSincronizacion === "function" ? abrirSincronizacion : null);
+  if (proveedor) {
+    try {
+      espejo = await proveedor();
+    } catch (e) {
+      espejo = null;
+    }
+  }
+
+  const estado = {
+    modo: espejo ? MODOS.SINCRONIZADO : local.duradero ? MODOS.LOCAL : MODOS.EFIMERO,
+    tipoLocal: local.tipo,
+    motivo: local.motivo || null,
+    // Se enciende cuando se leyeron datos que este código no sabe abrir (versión más
+    // nueva). Mientras esté encendido NO se escribe: escribir sería borrarlos.
+    bloqueado: false,
+    aviso: null,
+  };
+
+  function degradar(motivo) {
+    estado.modo = local.duradero ? MODOS.LOCAL : MODOS.EFIMERO;
+    estado.motivo = motivo;
+  }
+
+  return {
+    estado: () => ({ ...estado }),
+
+    async cargar() {
+      const crudoLocal = await local.cargar();
+      let crudoEspejo = null;
+
+      if (espejo) {
+        try {
+          crudoEspejo = await espejo.cargar();
+        } catch (e) {
+          degradar("No se pudo leer la copia sincronizada; se abrió la de este dispositivo.");
+        }
+      }
+
+      const elegido = masReciente(crudoLocal, crudoEspejo);
+      if (!elegido) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
+
+      const resultado = migrar(elegido);
+      if (!resultado.ok) {
+        // Ni se abre a medias ni se borra: se conserva, se explica y se traba la escritura.
+        estado.bloqueado = true;
+        estado.motivo = resultado.motivo;
+        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: resultado.motivo, bloqueado: true };
+      }
+      estado.bloqueado = false;
+
+      // El que iba atrás se pone al día con el que ganó.
+      if (elegido === crudoEspejo && crudoEspejo) await local.guardar(resultado.datos);
+
+      return { datos: resultado.datos, nuevo: false, aviso: resultado.motivo || null };
+    },
+
+    async guardar(datos) {
+      if (estado.bloqueado) {
+        throw new Error(
+          "No se guarda nada mientras haya datos que esta versión no sabe abrir: se perderían. " +
+            "Actualiza la app, o descarga un respaldo y empieza de cero a propósito.",
+        );
+      }
+
+      const sello = { ...normalizar(datos), actualizado: new Date().toISOString() };
+      await local.guardar(sello); // primero lo seguro
+
+      if (espejo) {
+        try {
+          await espejo.guardar(sello);
+          estado.motivo = null;
+          estado.modo = MODOS.SINCRONIZADO;
+        } catch (e) {
+          degradar("Se guardó en este dispositivo, pero no se pudo sincronizar.");
+        }
+      }
+      return sello;
+    },
+
+    suscribir(alCambiar) {
+      if (!espejo || typeof espejo.suscribir !== "function") return () => {};
+      return espejo.suscribir(alCambiar, mesDe(hoyISO()));
+    },
+
+    async borrarTodo() {
+      await local.borrar();
+      estado.bloqueado = false; // borrar es una decisión explícita: destraba la escritura
+      estado.motivo = local.motivo || null;
+    },
+  };
+}
+
+/** Gana el documento con el `actualizado` más reciente. Un solo usuario: no hay que fusionar. */
+function masReciente(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+  const fechaA = a.actualizado || a.creado || "";
+  const fechaB = b.actualizado || b.creado || "";
+  return fechaB > fechaA ? b : a;
+}
+
+// ═══ almacen/anfitrion-claude.js ═══
+// Adaptador OPCIONAL del anfitrión.
+//
+// Éste es el único archivo de todo el proyecto que sabe que existe un entorno anfitrión.
+// Hace dos cosas: sincronizar entre dispositivos y entregar el archivo de respaldo cuando
+// el visor no deja que un enlace lo descargue por su cuenta.
+// Si se borra, la app sigue funcionando igual: guarda en el navegador y lo declara en la
+// barra superior. Ninguna otra parte del código lo nombra — hay una prueba que lo verifica.
+//
+// Mapeo contra el límite de tamaño por documento: la configuración va en uno, y los
+// movimientos van en un documento POR MES. Mil movimientos al año no se acercan al tope.
+
+const DOC_CONFIG = "finanzas/config";
+const COL_MESES = "movimientos";
+
+function esMes(id) {
+  return /^\d{4}-\d{2}$/.test(id);
+}
+
+/** Devuelve el adaptador, o null si no hay entorno que lo provea. No lanza nunca. */
+async function abrirSincronizacion() {
+  try {
+    const anfitrion = globalThis.claude;
+    if (!anfitrion || typeof anfitrion.use !== "function") return null;
+
+    const db = await anfitrion.use("db");
+    if (!db) return null;
+
+    const cache = new Map();
+
+    return {
+      tipo: "sincronizado",
+
+      async cargar() {
+        const config = await db.doc(DOC_CONFIG).get();
+        if (!config.exists) return null;
+
+        const datos = { ...config.data(), movimientos: {} };
+        const meses = await db.collection(COL_MESES).get();
+        for (const doc of meses.docs) {
+          if (!esMes(doc.id)) continue;
+          const lista = doc.data().lista;
+          if (Array.isArray(lista) && lista.length) datos.movimientos[doc.id] = lista;
+          cache.set(doc.id, JSON.stringify(lista || []));
+        }
+        return datos;
+      },
+
+      async guardar(datos) {
+        const { movimientos, ...config } = datos;
+        await db.doc(DOC_CONFIG).set(config);
+
+        for (const [mes, lista] of Object.entries(movimientos)) {
+          const texto = JSON.stringify(lista);
+          if (cache.get(mes) === texto) continue; // no reescribe un mes que no cambió
+          await db.collection(COL_MESES).doc(mes).set({ lista, actualizado: new Date().toISOString() });
+          cache.set(mes, texto);
+        }
+      },
+
+      /** Avisa cuando otro dispositivo escribe. Devuelve la función para dejar de escuchar. */
+      suscribir(alCambiar, mesActual) {
+        const cortes = [];
+        const aviso = () => alCambiar();
+        try {
+          cortes.push(db.doc(DOC_CONFIG).onSnapshot((s) => { if (!s.metadata.hasPendingWrites) aviso(); }, () => {}));
+          if (mesActual) {
+            cortes.push(
+              db.collection(COL_MESES).doc(mesActual).onSnapshot((s) => { if (!s.metadata.hasPendingWrites) aviso(); }, () => {}),
+            );
+          }
+        } catch (e) {
+          // Sin suscripción se sigue trabajando: se sincroniza al guardar y al abrir.
+        }
+        return () => cortes.forEach((cortar) => { try { cortar(); } catch (e) {} });
+      },
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Entrega un archivo al usuario a través del anfitrión.
+ * Devuelve false si aquí no se puede, para que la app caiga al enlace de descarga normal
+ * (que es lo que funciona cuando el archivo está abierto desde el disco).
+ */
+async function descargarEnAnfitrion({ nombre, texto }) {
+  try {
+    const anfitrion = globalThis.claude;
+    if (!anfitrion || typeof anfitrion.use !== "function") return false;
+
+    const descargas = await anfitrion.use("downloads");
+    if (!descargas) return false;
+
+    await descargas.save({ filename: nombre, data: texto });
+    return true;
+  } catch (e) {
+    // Que el usuario diga "no" no es un fallo: no hay nada a lo que caer.
+    return Boolean(e && e.code === "declined");
+  }
+}
+
+// ═══ interfaz/ui.js ═══
+// Interfaz — render directo, sin framework y sin dependencias.
+//
+// Un estado, una función que dibuja, y delegación de eventos. No hay nada que instalar ni
+// nada que se pueda pudrir: el HTML que funciona hoy funciona igual dentro de cinco años.
+//
+// Regla de la pantalla: ningún número aparece sin su contexto. Si el motor devolvió
+// SIN_DATOS_SUFICIENTES, aquí se ve el hueco declarado con lo que falta capturar — nunca
+// un cero disfrazado de dato.
+
+
+
+
+
+
+
+
+
+
+
+const app = {
+  datos: datosVacios(),
+  almacen: null,
+  vista: "hoy",
+  hoy: hoyISO(),
+  aviso: null,
+  bloqueado: false,
+  filtro: { texto: "", tipo: "" },
+};
+
+const VISTAS = [
+  { id: "hoy", icono: "⌂", nombre: "Hoy" },
+  { id: "presupuesto", icono: "▤", nombre: "Presupuesto" },
+  { id: "metas", icono: "◎", nombre: "Metas" },
+  { id: "fijos", icono: "⏱", nombre: "Fijos" },
+  { id: "ajustes", icono: "⚙", nombre: "Ajustes" },
+];
+
+const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+// --- Utilidades de pantalla ---
+
+function esc(valor) {
+  return String(valor ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+function monto(centavos, opciones) {
+  return centavos === null || centavos === undefined ? "—" : formatear(centavos, opciones);
+}
+
+function fechaCorta(iso) {
+  const [, m, d] = iso.split("-").map(Number);
+  return `${d} ${MESES_CORTOS[m - 1]}`;
+}
+
+function fechaLarga(iso) {
+  const [a, m, d] = iso.split("-").map(Number);
+  return `${d} de ${MESES[m - 1]} de ${a}`;
+}
+
+/** El veredicto tal como lo devolvió el motor: estado, motivo y fuente. */
+function veredictoHTML(v) {
+  if (!v) return "";
+  const falta = v.datos && v.datos.falta ? `<div class="rotulo" style="width:100%">→ ${esc(v.datos.falta)}</div>` : "";
+  return `<div class="veredicto"><span class="marca ${esc(v.estado)}">${esc(v.estado)}</span>
+    <span>${esc(v.motivo)}</span><span class="fuente">fuente: ${esc(v.fuente)}</span>${falta}</div>`;
+}
+
+function tarjetaCifra({ rotulo, valor, clase = "", extra = "", veredicto }) {
+  return `<div class="tarjeta">
+    <div class="rotulo">${esc(rotulo)}</div>
+    <div class="cifra ${clase}">${valor}</div>
+    ${extra}
+    ${veredictoHTML(veredicto)}
+  </div>`;
+}
+
+function vacio(texto) {
+  return `<div class="vacio">${esc(texto)}</div>`;
+}
+
+// --- Render ---
+
+function render() {
+  const raiz = document.getElementById("raiz");
+  const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
+  const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
+  const sincronizado = estado.modo === MODOS.SINCRONIZADO;
+
+  const etiquetaEstado = sincronizado
+    ? "Sincronizado"
+    : estado.modo === MODOS.EFIMERO
+      ? "Sin guardar"
+      : "Solo este dispositivo";
+
+  raiz.innerHTML = `
+    <header class="barra"><div class="envoltura">
+      <div>
+        <h1>${esc(document.title || "Finanzas")}</h1>
+        <div class="ciclo">${esc(ciclo.etiqueta)} · ${fechaCorta(ciclo.inicio)} – ${fechaCorta(ciclo.fin)}</div>
+      </div>
+      <button class="estado" data-accion="ver-estado">
+        <i class="punto ${sincronizado ? "vivo" : ""}"></i>${esc(etiquetaEstado)}
+      </button>
+    </div></header>
+
+    <main class="envoltura">
+      ${app.aviso ? `<div class="aviso ${app.bloqueado ? "malo" : ""}">${esc(app.aviso)}
+        <div class="acciones"><button class="boton chico tenue" data-accion="cerrar-aviso">Entendido</button></div></div>` : ""}
+      ${vistaActual()}
+      <div class="pie">Tus datos viven en este dispositivo${sincronizado ? " y en tu cuenta" : ""}. Nunca en el repositorio.</div>
+    </main>
+
+    <button class="flotante" data-accion="capturar" aria-label="Capturar gasto">+</button>
+
+    <nav class="nav"><div class="envoltura">
+      ${VISTAS.map((v) => `<button data-accion="ir" data-vista="${v.id}" aria-current="${app.vista === v.id || (app.vista === 'historial' && v.id === 'hoy')}">
+        <span>${v.icono}</span>${esc(v.nombre)}</button>`).join("")}
+    </div></nav>`;
+}
+
+function vistaActual() {
+  if (app.vista === "historial") return vistaHistorial();
+  if (app.vista === "presupuesto") return vistaPresupuesto();
+  if (app.vista === "metas") return vistaMetas();
+  if (app.vista === "fijos") return vistaFijos();
+  if (app.vista === "ajustes") return vistaAjustes();
+  return vistaHoy();
+}
+
+// --- Vista: Hoy ---
+
+function nombreCiclo(ciclo) {
+  return ciclo.total > 1 ? "quincena" : "mensualidad";
+}
+
+function vistaHoy() {
+  const { datos, hoy } = app;
+  const panel = panelHoy(datos, hoy);
+  const vencimientos = proximosVencimientos(datos, hoy, 10);
+  const recientes = movimientosEntre(datos, panel.ciclo.inicio, hoy).slice(0, 6);
+
+  const primeraVez = datos.perfil.ingresoQuincenal === null && Object.keys(datos.movimientos).length === 0;
+  const arranque = primeraVez
+    ? `<div class="aviso">
+        <b>Empieza por aquí.</b> Con tu ingreso quincenal y tus pagos fijos, los paneles se encienden.
+        Son tres minutos; lo demás lo puedes ir capturando sobre la marcha.
+        <div class="acciones">
+          <button class="boton chico" data-accion="editar-ingreso">Mi ingreso</button>
+          <button class="boton chico tenue" data-accion="nuevo-fijo">Agregar un fijo</button>
+        </div>
+      </div>`
+    : "";
+
+  const principal =
+    panel.disponible === null
+      ? tarjetaCifra({
+          rotulo: `Disponible en esta ${nombreCiclo(panel.ciclo)}`,
+          valor: "—",
+          clase: "vacia",
+          veredicto: panel.veredicto,
+        })
+      : tarjetaCifra({
+          rotulo: `Disponible en esta ${nombreCiclo(panel.ciclo)}`,
+          valor: monto(panel.disponible),
+          clase: panel.disponible < 0 ? "mal" : "",
+          extra: `<div class="rotulo">quedan ${panel.ciclo.diasRestantes} de ${panel.ciclo.dias} días · ya gastaste ${monto(panel.gasto.total)}${
+            panel.fijos.pendiente > 0 ? ` · fijos por pagar ${monto(panel.fijos.pendiente)}` : ""
+          }</div>
+          ${panel.ingresos.origen === "perfil"
+            ? `<div class="rotulo">Cuenta con ${monto(panel.ingresos.monto)} de ingreso <b>estimado de tu perfil</b> — todavía no capturas el depósito de este ciclo.</div>`
+            : ""}`,
+          veredicto: panel.veredicto,
+        });
+
+  const porDia =
+    panel.porDia === null
+      ? `<div class="tarjeta"><div class="rotulo">Por día</div><div class="cifra vacia">—</div></div>`
+      : `<div class="tarjeta"><div class="rotulo">Por día</div>
+          <div class="cifra ${panel.porDia < 0 ? "mal" : ""}">${monto(panel.porDia)}</div>
+          <div class="rotulo">hasta el ${fechaCorta(panel.ciclo.fin)}</div></div>`;
+
+  const capacidad =
+    panel.capacidad.monto === null
+      ? `<div class="tarjeta"><div class="rotulo">Cierre proyectado</div><div class="cifra vacia">—</div>
+          <div class="rotulo">${esc(panel.capacidad.veredicto.motivo)}</div></div>`
+      : `<div class="tarjeta"><div class="rotulo">Cierre proyectado</div>
+          <div class="cifra ${panel.capacidad.monto < 0 ? "mal" : ""}">${monto(panel.capacidad.monto)}</div>
+          <div class="rotulo">a ${monto(panel.capacidad.ritmoDiario)} por día</div></div>`;
+
+  const listaVencimientos = vencimientos.length
+    ? `<div class="titulo-seccion">Por pagar</div><div class="tarjeta">${vencimientos
+        .map(
+          (v) => `<div class="fila apilada">
+            <div class="linea"><div class="nombre">${esc(v.fijo.nombre)}</div><div class="monto">${monto(v.monto)}</div></div>
+            <div class="sub">${v.vencido ? `venció hace ${Math.abs(v.dias)} día(s)` : v.dias === 0 ? "vence hoy" : `en ${v.dias} día(s)`} · ${fechaCorta(v.fecha)}</div>
+            <div class="acciones-fila">
+              <button class="boton chico" data-accion="pagar-fijo" data-id="${esc(v.fijo.id)}" data-fecha="${esc(v.fecha)}">Pagué</button>
+            </div>
+          </div>`,
+        )
+        .join("")}</div>`
+    : "";
+
+  const totalMovimientos = Object.values(datos.movimientos).reduce((t, l) => t + l.length, 0);
+  const listaMovimientos = recientes.length
+    ? `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${recientes.map(filaMovimiento).join("")}
+        <div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div></div>`
+    : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
+        ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
+
+  const colchon = estadoColchon(datos);
+  const tarjetaColchon =
+    colchon.objetivo === null && colchon.acumulado === 0
+      ? "" // sin objetivo y sin nada apartado, no hay nada que enseñar todavía
+      : `<div class="titulo-seccion">Fondo de emergencia</div>
+         <div class="tarjeta">
+           <div class="cifra" style="font-size:28px">${monto(colchon.acumulado)}${
+             colchon.objetivo !== null ? `<span class="rotulo"> de ${monto(colchon.objetivo)}</span>` : ""
+           }</div>
+           ${colchon.objetivo !== null
+             ? `<div class="barra-progreso"><i class="${esc(colchon.veredicto.estado)}" style="width:${Math.min(
+                 Math.round((colchon.acumulado * 100) / colchon.objetivo), 100)}%"></i></div>`
+             : ""}
+           ${veredictoHTML(colchon.veredicto)}
+           <div class="acciones"><button class="boton chico tenue" data-accion="editar-colchon">
+             ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
+         </div>`;
+
+  return `${arranque}${principal}<div class="duo">${porDia}${capacidad}</div>${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+}
+
+function filaMovimiento(m) {
+  const categoria = categoriaPorId(app.datos, m.categoria);
+  const signo = m.tipo === TIPOS.INGRESO || m.tipo === TIPOS.RETIRO ? "+" : m.tipo === TIPOS.AHORRO ? "→" : "−";
+  const nombre =
+    m.tipo === TIPOS.INGRESO ? "Ingreso"
+    : m.tipo === TIPOS.AHORRO ? "Apartado"
+    : m.tipo === TIPOS.RETIRO ? "Retiro de lo apartado"
+    : categoria ? categoria.nombre : "Gasto";
+  const icono =
+    m.tipo === TIPOS.INGRESO ? "↓" : m.tipo === TIPOS.AHORRO ? "◎" : m.tipo === TIPOS.RETIRO ? "↑" : categoria ? categoria.emoji : "•";
+
+  return `<div class="fila">
+    <div class="emoji">${esc(icono)}</div>
+    <button class="crece toque" data-accion="editar-movimiento" data-id="${esc(m.id)}">
+      <div class="nombre">${esc(m.nota || nombre)}</div>
+      <div class="sub">${fechaCorta(m.fecha)}${m.nota ? ` · ${esc(nombre)}` : ""}</div>
+    </button>
+    <div class="monto">${signo}${formatear(m.monto)}</div>
+    <button class="boton chico tenue" data-accion="borrar-movimiento" data-id="${esc(m.id)}" aria-label="Borrar">✕</button>
+  </div>`;
+}
+
+// --- Vista: Historial ---
+//
+// Mes por mes, con lo que entró, lo que salió y lo que se apartó. Sin gráficas: los números
+// y sus movimientos, que es lo que se necesita para revisar y corregir.
+
+function vistaHistorial() {
+  const filtro = app.filtro || { texto: "", tipo: "" };
+  const meses = Object.keys(app.datos.movimientos).sort().reverse();
+  if (!meses.length) {
+    return `<div class="tarjeta">${vacio("Todavía no hay nada capturado.")}
+      <button class="boton tenue" data-accion="ir" data-vista="hoy">Volver</button></div>`;
+  }
+
+  // Filtrado en memoria: el texto busca en la nota y en el nombre de la categoría.
+  const pasa = (m) => {
+    if (filtro.tipo && m.tipo !== filtro.tipo) return false;
+    if (!filtro.texto) return true;
+    const categoria = categoriaPorId(app.datos, m.categoria);
+    const donde = `${m.nota || ""} ${categoria ? categoria.nombre : ""}`.toLowerCase();
+    return donde.includes(filtro.texto.toLowerCase());
+  };
+
+  let encontrados = 0;
+  let sumaFiltrada = 0;
+
+  const bloques = meses
+    .map((mes) => {
+      const lista = app.datos.movimientos[mes].filter(pasa);
+      if (!lista.length) return "";
+      encontrados += lista.length;
+      sumaFiltrada += lista.reduce((t, m) => t + (m.tipo === TIPOS.GASTO ? m.monto : 0), 0);
+      const suman = (filtro) => lista.reduce((t, m) => (filtro(m) ? t + m.monto : t), 0);
+      const gastos = suman((m) => m.tipo === TIPOS.GASTO);
+      const ingresos = suman((m) => m.tipo === TIPOS.INGRESO);
+      const ahorros = suman((m) => m.tipo === TIPOS.AHORRO);
+      const [anio, numero] = mes.split("-").map(Number);
+
+      return `<div class="titulo-seccion">${MESES[numero - 1]} ${anio}</div>
+        <div class="tarjeta">
+          <div class="fila" style="border-bottom:1px solid var(--borde)">
+            <div class="crece"><div class="sub">${lista.length} movimiento(s)</div></div>
+            <div class="monto" style="font-size:13px">
+              ${ingresos ? `<span style="color:var(--bien)">+${monto(ingresos)}</span> ` : ""}−${monto(gastos)}${ahorros ? ` · →${monto(ahorros)}` : ""}
+            </div>
+          </div>
+          ${lista.map(filaMovimiento).join("")}
+        </div>`;
+    })
+    .join("");
+
+  const chipsTipo = [
+    { valor: "", etiqueta: "Todo" },
+    { valor: TIPOS.GASTO, etiqueta: "Gastos" },
+    { valor: TIPOS.INGRESO, etiqueta: "Ingresos" },
+    { valor: TIPOS.AHORRO, etiqueta: "Apartados" },
+    { valor: TIPOS.RETIRO, etiqueta: "Retiros" },
+  ];
+
+  const buscador = `<div class="tarjeta plana">
+      <input id="buscador" type="search" placeholder="Buscar por nota o categoría"
+             value="${esc(filtro.texto)}" data-accion-input="filtrar-texto">
+      <div class="chips" style="margin-top:10px">
+        ${chipsTipo
+          .map(
+            (c) => `<button class="chip" data-accion="filtrar-tipo" data-tipo="${esc(c.valor)}"
+              aria-pressed="${filtro.tipo === c.valor}">${esc(c.etiqueta)}</button>`,
+          )
+          .join("")}
+      </div>
+      ${filtro.texto || filtro.tipo
+        ? `<div class="rotulo" style="margin-top:10px">${encontrados} movimiento(s)${
+            sumaFiltrada ? ` · ${monto(sumaFiltrada)} en gastos` : ""
+          }</div>`
+        : ""}
+    </div>`;
+
+  return `<div class="acciones" style="margin:0 0 10px"><button class="boton tenue" data-accion="ir" data-vista="hoy">← Volver a Hoy</button></div>
+    ${buscador}
+    ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}`;
+}
+
+// --- Vista: Presupuesto ---
+
+function vistaPresupuesto() {
+  const filas = resumenPresupuesto(app.datos, app.hoy);
+  const mes = mesDe(app.hoy);
+
+  if (!filas.length) {
+    return `<div class="tarjeta">${vacio("Sin topes ni gastos este mes. Ponle tope a una categoría para tener contra qué comparar.")}
+      <button class="boton" data-accion="editar-topes">Poner topes</button></div>`;
+  }
+
+  const cuerpo = filas
+    .map((f) => {
+      const pct = f.veredicto.datos.pct;
+      const ancho = Math.min(pct === null || pct === undefined ? 0 : pct, 100);
+      return `<div class="fila" style="border-bottom:0;padding-bottom:4px">
+          <div class="emoji">${esc(f.categoria.emoji)}</div>
+          <div class="crece">
+            <div class="nombre">${esc(f.categoria.nombre)}</div>
+            <div class="sub">${f.tope === null ? "sin tope" : `${monto(f.gastado)} de ${monto(f.tope)}`}</div>
+            <div class="barra-progreso"><i class="${esc(f.veredicto.estado)}" style="width:${ancho}%"></i></div>
+          </div>
+          <button class="boton chico tenue" data-accion="editar-tope" data-id="${esc(f.categoria.id)}">
+            ${f.tope === null ? "Poner tope" : monto(f.tope)}
+          </button>
+        </div>
+        <div class="veredicto" style="margin:0 0 14px 42px;border-top:0;padding-top:2px">
+          <span class="marca ${esc(f.veredicto.estado)}">${esc(f.veredicto.estado)}</span>
+          <span>${esc(f.veredicto.motivo)}</span></div>`;
+    })
+    .join("");
+
+  const topes = topesVariables(app.datos, mes);
+  const nota = topes.completo
+    ? ""
+    : `<div class="aviso">Estas categorías todavía no tienen tope: ${esc(
+        topes.sinTope.map((id) => (categoriaPorId(app.datos, id) || {}).nombre || id).join(", "),
+      )}. Sin tope no hay semáforo, y tampoco entran en tu capacidad de ahorro.</div>`;
+
+  return `${nota}<div class="tarjeta">${cuerpo}</div>
+    <div class="acciones"><button class="boton tenue" data-accion="nueva-categoria">Nueva categoría</button></div>`;
+}
+
+// --- Vista: Metas ---
+
+function vistaMetas() {
+  const capacidad = capacidadPorCiclo(app.datos, app.hoy, topesVariables(app.datos, mesDe(app.hoy)));
+  const planes = resumenMetas(app.datos, app.hoy, capacidad.monto);
+
+  const cabecera = tarjetaCifra({
+    rotulo: "Capacidad de ahorro por quincena",
+    valor: monto(capacidad.monto),
+    clase: capacidad.monto === null ? "vacia" : capacidad.monto < 0 ? "mal" : "",
+    extra:
+      capacidad.monto === null
+        ? ""
+        : `<div class="rotulo">ingreso ${monto(capacidad.ingreso)} − fijos ${monto(capacidad.fijosCiclo)} − presupuesto ${monto(capacidad.variableCiclo)}</div>`,
+    veredicto: capacidad.veredicto,
+  });
+
+  if (!planes.length) {
+    return `${cabecera}<div class="tarjeta">${vacio("Sin metas todavía. Una meta es un monto y una fecha; el resto lo calcula la app.")}
+      <button class="boton" data-accion="nueva-meta">Crear una meta</button></div>`;
+  }
+
+  const total = exigenciaTotal(planes, capacidad.monto);
+  const tarjetas = planes
+    .map((p) => {
+      const pct = p.objetivo ? Math.min(Math.round((p.ahorrado * 100) / p.objetivo), 100) : 0;
+      const alternativa = p.veredicto.datos && p.veredicto.datos.alternativa;
+      const salida =
+        alternativa && alternativa.tipo === "mover-fecha"
+          ? `<div class="rotulo" style="margin-top:8px">Con ${monto(alternativa.aportacionPosible)} por quincena, la fecha realista es el ${fechaLarga(
+              alternativa.fechaRealista,
+            )}.</div>`
+          : "";
+
+      return `<div class="tarjeta">
+        <div class="fila" style="border-bottom:0;padding:0">
+          <div class="crece"><div class="nombre">${esc(p.meta.nombre)}</div>
+            <div class="sub">${monto(p.ahorrado)} de ${monto(p.objetivo)}${p.meta.fechaLimite ? ` · para el ${fechaCorta(p.meta.fechaLimite)}` : ""}</div></div>
+          <button class="boton chico" data-accion="apartar" data-id="${esc(p.meta.id)}">Apartar</button>
+        </div>
+        <div class="barra-progreso"><i class="${esc(p.veredicto.estado)}" style="width:${pct}%"></i></div>
+        <div class="cifra" style="font-size:26px;margin-top:12px">${monto(p.requerido)}<span class="rotulo"> por quincena</span></div>
+        ${veredictoHTML(p.veredicto)}${salida}
+        <div class="acciones"><button class="boton chico tenue" data-accion="editar-meta" data-id="${esc(p.meta.id)}">Editar</button>
+        <button class="boton chico peligro" data-accion="borrar-meta" data-id="${esc(p.meta.id)}">Borrar</button></div>
+      </div>`;
+    })
+    .join("");
+
+  const suma =
+    planes.length > 1
+      ? `<div class="tarjeta plana"><div class="rotulo">Todas tus metas juntas piden</div>
+          <div class="cifra" style="font-size:26px">${monto(total.requerido)}</div>${veredictoHTML(total.veredicto)}</div>`
+      : "";
+
+  return `${cabecera}${suma}<div class="titulo-seccion">Metas</div>${tarjetas}
+    <div class="acciones"><button class="boton tenue" data-accion="nueva-meta">Nueva meta</button></div>`;
+}
+
+// --- Vista: Fijos y deudas ---
+
+/** "cada mes" · "cada año · toca en marzo" */
+function comoFrecuencia(fijo) {
+  const frecuencia = fijo.frecuencia || 1;
+  if (frecuencia === 1) return "cada mes";
+  const etiqueta = (FRECUENCIAS.find((f) => f.meses === frecuencia) || {}).etiqueta || `cada ${frecuencia} meses`;
+  const ancla = fijo.mesAncla ? ` · toca en ${MESES[Number(fijo.mesAncla.slice(5, 7)) - 1]}` : "";
+  return `${etiqueta.toLowerCase()}${ancla}`;
+}
+
+function vistaFijos() {
+  const { datos, hoy } = app;
+  const total = totalFijosMensual(datos, hoy);
+
+  const fijos = datos.fijos.length
+    ? datos.fijos
+        .map((f) => {
+          const pagado = (datos.movimientos[mesDe(hoy)] || []).some((m) => m.fijoId === f.id);
+          const deuda = f.deudaId ? datos.deudas.find((d) => d.id === f.deudaId) : null;
+          const mensual = montoMensualizado(f);
+          // Dos líneas a propósito: en un teléfono, nombre + monto + dos botones en la misma
+          // fila deja el nombre partido a la mitad.
+          return `<div class="fila apilada">
+            <div class="linea"><div class="nombre">${esc(f.nombre)}</div><div class="monto">${monto(f.monto)}</div></div>
+            <div class="sub">día ${f.diaCorte} · ${esc(comoFrecuencia(f))}${pagado ? " · pagado este mes" : ""}${
+              deuda ? ` · abona a ${esc(deuda.nombre)}` : ""
+            }${(f.frecuencia || 1) > 1 && mensual !== null ? ` · ${monto(mensual)} al mes` : ""}</div>
+            <div class="acciones-fila">
+              ${!pagado && f.monto !== null && venceEnMes(f, mesDe(hoy))
+                ? `<button class="boton chico" data-accion="pagar-fijo" data-id="${esc(f.id)}"
+                     data-fecha="${esc(vencimientoEnMes(mesDe(hoy), f.diaCorte))}">Pagué</button>`
+                : ""}
+              <button class="boton chico tenue" data-accion="editar-fijo" data-id="${esc(f.id)}">Editar</button>
+            </div>
+          </div>`;
+        })
+        .join("")
+    : vacio("Sin pagos fijos capturados.");
+
+  const deudas = datos.deudas.length
+    ? datos.deudas
+        .map((d) => {
+          const plan = planDeDeuda(datos, d);
+          return `<div class="tarjeta">
+            <div class="fila" style="border-bottom:0;padding:0">
+              <div class="crece"><div class="nombre">${esc(d.nombre)}</div>
+                <div class="sub">${plan.pagos} pago(s) · abonado ${monto(plan.pagado)}${
+                  plan.pago.origen === "fijo" ? ` · ${monto(plan.pago.monto)} al mes` : ""
+                }</div></div>
+              <div class="monto">${monto(plan.saldo)}</div>
+            </div>
+            ${veredictoHTML(plan.veredicto)}
+            <div class="acciones">
+              <button class="boton chico" data-accion="pagar-deuda" data-id="${esc(d.id)}">Registrar pago</button>
+              <button class="boton chico tenue" data-accion="editar-deuda" data-id="${esc(d.id)}">Editar</button>
+            </div>
+          </div>`;
+        })
+        .join("")
+    : `<div class="tarjeta">${vacio("Sin deudas capturadas.")}</div>`;
+
+  return `${tarjetaCifra({
+    rotulo: "Comprometido cada mes",
+    valor: monto(total.mensualizado),
+    extra:
+      total.esteMes !== total.mensualizado
+        ? `<div class="rotulo">Este mes en concreto se pagan ${monto(total.esteMes)}: el promedio reparte los pagos que no son mensuales.</div>`
+        : "",
+    veredicto: total.veredicto,
+  })}
+    <div class="titulo-seccion">Pagos fijos</div><div class="tarjeta">${fijos}</div>
+    <div class="acciones"><button class="boton tenue" data-accion="nuevo-fijo">Nuevo fijo</button></div>
+    <div class="titulo-seccion">Deudas</div>${deudas}
+    <div class="acciones"><button class="boton tenue" data-accion="nueva-deuda">Nueva deuda</button></div>`;
+}
+
+// --- Vista: Ajustes ---
+
+function vistaAjustes() {
+  const { perfil } = app.datos;
+  const estado = app.almacen ? app.almacen.estado() : {};
+  const movimientos = Object.values(app.datos.movimientos).reduce((t, l) => t + l.length, 0);
+
+  return `<div class="tarjeta">
+      <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
+        <div class="sub">lo que entra cada 15 días</div></div>
+        <button class="boton chico tenue" data-accion="editar-ingreso">${monto(perfil.ingresoQuincenal)}</button></div>
+      <div class="fila"><div class="crece"><div class="nombre">Días de corte</div>
+        <div class="sub">${perfil.cortes.length ? `quincenal (día ${perfil.cortes.join(", ")} y fin de mes)` : "mensual"}</div></div>
+        <button class="boton chico tenue" data-accion="editar-cortes">Cambiar</button></div>
+      <div class="fila"><div class="crece"><div class="nombre">Fondo de emergencia</div>
+        <div class="sub">cuánto quieres tener guardado para imprevistos</div></div>
+        <button class="boton chico tenue" data-accion="editar-colchon">${monto(perfil.colchonObjetivo)}</button></div>
+      <div class="fila"><div class="crece"><div class="nombre">Tema</div>
+        <div class="sub">claro, oscuro o el del sistema</div></div>
+        <button class="boton chico tenue" data-accion="cambiar-tema">Cambiar</button></div>
+    </div>
+
+    <div class="titulo-seccion">Tus datos</div>
+    <div class="tarjeta">
+      <div class="fila"><div class="crece"><div class="nombre">${movimientos} movimiento(s) guardado(s)</div>
+        <div class="sub">${esc(estado.modo === MODOS.SINCRONIZADO ? "en este dispositivo y sincronizados" : `en este dispositivo (${estado.tipoLocal || "—"})`)}</div></div></div>
+      <div class="acciones">
+        <button class="boton tenue" data-accion="exportar">Descargar respaldo</button>
+        <button class="boton tenue" data-accion="importar">Importar</button>
+      </div>
+      <div class="acciones"><button class="boton peligro" data-accion="borrar-todo">Borrar todo</button></div>
+      <div class="rotulo" style="margin-top:10px">El respaldo es un JSON con todo dentro. Es tuyo y sirve para llevártelo a donde quieras.</div>
+    </div>`;
+}
+
+// --- Hojas (formularios) ---
+
+let cerrarHoja = null;
+
+function abrirHoja({ titulo, campos, textoGuardar = "Guardar", alGuardar, extra = "", peligro = false }) {
+  const contenedor = document.getElementById("hojas");
+
+  contenedor.innerHTML = `<div class="velo" data-velo="1"><form class="hoja" novalidate>
+      <h2>${esc(titulo)}</h2>
+      <div id="error-hoja"></div>
+      ${campos.map(campoHTML).join("")}
+      ${extra}
+      <div class="acciones">
+        <button type="button" class="boton tenue" data-accion="cerrar-hoja">Cancelar</button>
+        <button type="submit" class="boton${peligro ? " peligro" : ""}">${esc(textoGuardar)}</button>
+      </div>
+    </form></div>`;
+
+  const formulario = contenedor.querySelector("form");
+  cerrarHoja = () => {
+    contenedor.innerHTML = "";
+    cerrarHoja = null;
+  };
+
+  contenedor.querySelector(".velo").addEventListener("click", (e) => {
+    if (e.target.dataset.velo) cerrarHoja();
+  });
+
+  // Lo que hay escrito ahora mismo, sin validar: sirve para no perder lo tecleado cuando
+  // la hoja cambia de forma (elegir "Ingreso" quita las categorías, por ejemplo).
+  const leerCrudo = () => {
+    const valores = {};
+    for (const campo of campos) {
+      const nodo = formulario.querySelector(`[data-clave="${campo.clave}"]`);
+      if (nodo) valores[campo.clave] = campo.tipo === "chips" ? nodo.dataset.valor || "" : nodo.value;
+    }
+    return valores;
+  };
+
+  formulario.querySelectorAll(".chips").forEach((grupo) => {
+    const campo = campos.find((c) => c.clave === grupo.dataset.clave);
+    grupo.querySelectorAll(".chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        grupo.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", "false"));
+        chip.setAttribute("aria-pressed", "true");
+        grupo.dataset.valor = chip.dataset.valor;
+        if (campo && campo.alCambiar) campo.alCambiar(chip.dataset.valor, leerCrudo());
+      });
+    });
+  });
+
+  formulario.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const valores = {};
+    for (const campo of campos) {
+      const nodo = formulario.querySelector(`[data-clave="${campo.clave}"]`);
+      const crudo = campo.tipo === "chips" ? nodo.dataset.valor || "" : nodo.value.trim();
+
+      if (campo.tipo === "monto") {
+        const centavos = aCentavos(crudo);
+        if (centavos === null && campo.requerido) return error(`Falta ${campo.etiqueta.toLowerCase()}.`);
+        valores[campo.clave] = centavos;
+      } else if (campo.tipo === "numero") {
+        valores[campo.clave] = crudo === "" ? null : Number(crudo);
+      } else {
+        if (!crudo && campo.requerido) return error(`Falta ${campo.etiqueta.toLowerCase()}.`);
+        valores[campo.clave] = crudo || null;
+      }
+    }
+
+    let problema = null;
+    try {
+      problema = await alGuardar(valores);
+    } catch (e) {
+      problema = (e && e.message) || "No se pudo guardar.";
+    }
+    if (problema) return error(problema);
+    if (cerrarHoja) cerrarHoja();
+  });
+
+  const primero = formulario.querySelector("input:not([type=hidden])");
+  if (primero) primero.focus();
+
+  function error(texto) {
+    formulario.querySelector("#error-hoja").innerHTML = `<div class="aviso malo">${esc(texto)}</div>`;
+  }
+}
+
+/**
+ * Confirmación propia. No se usa `confirm()` del navegador: en un contexto aislado
+ * (un iframe restringido, por ejemplo) lanza SecurityError y se lleva la acción por delante.
+ */
+function confirmar({ titulo, mensaje, textoBoton, alConfirmar }) {
+  abrirHoja({
+    titulo,
+    campos: [],
+    textoGuardar: textoBoton,
+    peligro: true,
+    extra: `<p class="rotulo" style="margin:0 0 4px">${esc(mensaje)}</p>`,
+    alGuardar: alConfirmar,
+  });
+}
+
+function campoHTML(campo) {
+  const id = `campo-${campo.clave}`;
+  const valor = campo.valor === null || campo.valor === undefined ? "" : campo.valor;
+
+  if (campo.tipo === "chips") {
+    return `<div class="campo"><label>${esc(campo.etiqueta)}</label>
+      <div class="chips" data-clave="${campo.clave}" data-valor="${esc(valor)}">
+        ${campo.opciones
+          .map(
+            (o) => `<button type="button" class="chip" data-valor="${esc(o.valor)}" aria-pressed="${o.valor === valor}">
+              ${esc(o.etiqueta)}</button>`,
+          )
+          .join("")}
+      </div></div>`;
+  }
+
+  if (campo.tipo === "select") {
+    return `<div class="campo"><label for="${id}">${esc(campo.etiqueta)}</label>
+      <select id="${id}" data-clave="${campo.clave}">
+        ${campo.opciones.map((o) => `<option value="${esc(o.valor)}" ${o.valor === valor ? "selected" : ""}>${esc(o.etiqueta)}</option>`).join("")}
+      </select></div>`;
+  }
+
+  const tipos = { monto: "text", texto: "text", fecha: "date", numero: "number", mes: "month" };
+  const extras =
+    campo.tipo === "monto"
+      ? 'inputmode="decimal" class="monto" placeholder="0.00"'
+      : campo.tipo === "numero"
+        ? 'inputmode="numeric"'
+        : "";
+
+  return `<div class="campo"><label for="${id}">${esc(campo.etiqueta)}</label>
+    <input id="${id}" data-clave="${campo.clave}" type="${tipos[campo.tipo] || "text"}" value="${esc(valor)}" ${extras}>
+    ${campo.ayuda ? `<div class="rotulo" style="margin-top:5px">${esc(campo.ayuda)}</div>` : ""}</div>`;
+}
+
+function opcionesCategorias() {
+  return app.datos.categorias.filter((c) => !c.archivada).map((c) => ({ valor: c.id, etiqueta: `${c.emoji} ${c.nombre}` }));
+}
+
+// --- Acciones ---
+
+async function guardar(datos) {
+  if (!app.almacen) throw new Error("La app todavía está abriendo tus datos. Intenta otra vez en un segundo.");
+
+  const previos = app.datos;
+  app.datos = datos; // optimista: la pantalla responde al instante
+  render();
+
+  try {
+    app.datos = await app.almacen.guardar(datos);
+    app.aviso = null;
+  } catch (e) {
+    // Nada de fallar en silencio: se revierte la pantalla y se dice qué pasó.
+    app.datos = previos;
+    app.aviso = `No se pudo guardar: ${e.message}`;
+    app.bloqueado = true;
+    render();
+    throw e;
+  }
+  render();
+}
+
+const acciones = {
+  ir(el) {
+    app.vista = el.dataset.vista;
+    render();
+  },
+
+  "cerrar-aviso"() {
+    app.aviso = null;
+    render();
+  },
+
+  "ver-estado"() {
+    const estado = app.almacen.estado();
+    const texto =
+      estado.modo === MODOS.SINCRONIZADO
+        ? "Sincronizado: lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda guardada en éste."
+        : estado.modo === MODOS.EFIMERO
+          ? "Este navegador no deja guardar nada. Descarga un respaldo antes de cerrar la pestaña."
+          : `Todo se guarda en este dispositivo (${estado.tipoLocal}). No hay sincronización, así que para pasarlo a otro lado usa el respaldo en Ajustes.`;
+    app.aviso = estado.motivo ? `${texto} ${estado.motivo}` : texto;
+    render();
+  },
+
+  capturar() {
+    hojaMovimiento();
+  },
+
+  "editar-movimiento"(el) {
+    const movimiento = buscarMovimiento(el.dataset.id);
+    if (movimiento) hojaMovimiento({ tipo: movimiento.tipo, movimiento });
+  },
+
+  "ver-historial"() {
+    app.vista = "historial";
+    app.filtro = { texto: "", tipo: "" };
+    render();
+  },
+
+  "filtrar-tipo"(el) {
+    app.filtro = { ...(app.filtro || { texto: "" }), tipo: el.dataset.tipo };
+    render();
+    const caja = document.getElementById("buscador");
+    if (caja) caja.focus();
+  },
+
+  "editar-ingreso"() {
+    abrirHoja({
+      titulo: "Ingreso por quincena",
+      campos: [
+        {
+          clave: "monto", etiqueta: "Cuánto entra cada quincena", tipo: "monto",
+          valor: app.datos.perfil.ingresoQuincenal === null ? "" : (app.datos.perfil.ingresoQuincenal / 100).toFixed(2),
+          requerido: true, ayuda: "Si varía, pon lo que entra seguro. Lo de más se captura como ingreso extra.",
+        },
+      ],
+      async alGuardar(v) {
+        await guardar({ ...app.datos, perfil: { ...app.datos.perfil, ingresoQuincenal: v.monto } });
+      },
+    });
+  },
+
+  "editar-colchon"() {
+    const fijos = totalFijosMensual(app.datos, app.hoy);
+    const referencia = fijos.mensualizado > 0 ? `Tres meses de tus fijos actuales son ${formatear(fijos.mensualizado * 3)}.` : "";
+    abrirHoja({
+      titulo: "Fondo de emergencia",
+      campos: [
+        {
+          clave: "monto", etiqueta: "Cuánto quieres tener guardado", tipo: "monto",
+          valor: comoCampo(app.datos.perfil.colchonObjetivo),
+          ayuda: `${referencia} Déjalo vacío para quitar el objetivo.`.trim(),
+        },
+      ],
+      async alGuardar(v) {
+        await guardar({ ...app.datos, perfil: { ...app.datos.perfil, colchonObjetivo: v.monto } });
+      },
+    });
+  },
+
+  "editar-cortes"() {
+    abrirHoja({
+      titulo: "Cómo entra tu dinero",
+      campos: [
+        {
+          clave: "modo", etiqueta: "Ritmo", tipo: "chips", valor: app.datos.perfil.cortes.length ? "quincenal" : "mensual",
+          opciones: [{ valor: "quincenal", etiqueta: "Quincenal (15 y fin de mes)" }, { valor: "mensual", etiqueta: "Mensual" }],
+        },
+      ],
+      async alGuardar(v) {
+        await guardar({ ...app.datos, perfil: { ...app.datos.perfil, cortes: v.modo === "mensual" ? [] : [15] } });
+      },
+    });
+  },
+
+  "cambiar-tema"() {
+    const actual = document.documentElement.dataset.tema || "sistema";
+    const siguiente = actual === "sistema" ? "claro" : actual === "claro" ? "oscuro" : "sistema";
+    if (siguiente === "sistema") delete document.documentElement.dataset.tema;
+    else document.documentElement.dataset.tema = siguiente;
+    try { localStorage.setItem("finanzas:tema", siguiente); } catch (e) {}
+    app.aviso = `Tema: ${siguiente}.`;
+    render();
+  },
+
+  "editar-tope"(el) {
+    const categoria = categoriaPorId(app.datos, el.dataset.id);
+    const mes = mesDe(app.hoy);
+
+    abrirHoja({
+      titulo: categoria.nombre,
+      campos: [
+        { clave: "nombre", etiqueta: "Nombre", tipo: "texto", valor: categoria.nombre, requerido: true },
+        { clave: "emoji", etiqueta: "Emoji", tipo: "texto", valor: categoria.emoji },
+        {
+          clave: "tope", etiqueta: "Tope mensual", tipo: "monto",
+          valor: comoCampo(topeVigente(app.datos, mes, categoria.id)),
+          ayuda: "Déjalo vacío para quitarle el tope. Sin tope no hay semáforo.",
+        },
+        {
+          clave: "alcance", etiqueta: "Ese tope aplica", tipo: "chips", valor: "siempre",
+          opciones: [
+            { valor: "siempre", etiqueta: "De aquí en adelante" },
+            { valor: "mes", etiqueta: "Solo este mes" },
+          ],
+        },
+      ],
+      extra: `<button type="button" class="boton chico peligro" data-accion="archivar-categoria" data-id="${esc(categoria.id)}">
+        Archivar esta categoría</button>`,
+      async alGuardar(v) {
+        const categorias = app.datos.categorias.map((c) =>
+          c.id === categoria.id
+            ? { ...c, nombre: v.nombre, emoji: v.emoji || "•", tope: v.alcance === "mes" ? c.tope : v.tope }
+            : c,
+        );
+
+        // Un tope "solo este mes" no toca el catálogo: el histórico de los otros meses
+        // queda exactamente como estaba.
+        const presupuestos = { ...app.datos.presupuestos };
+        if (v.alcance === "mes") {
+          const delMes = { ...(presupuestos[mes] || {}) };
+          if (v.tope === null) delete delMes[categoria.id];
+          else delMes[categoria.id] = v.tope;
+          presupuestos[mes] = delMes;
+        }
+
+        await guardar({ ...app.datos, categorias, presupuestos });
+      },
+    });
+  },
+
+  "archivar-categoria"(el) {
+    const categoria = categoriaPorId(app.datos, el.dataset.id);
+    confirmar({
+      titulo: `¿Archivar "${categoria.nombre}"?`,
+      mensaje: "Deja de aparecer al capturar, pero los gastos que ya tiene se conservan en tu historial.",
+      textoBoton: "Sí, archivar",
+      alConfirmar: async () => {
+        const categorias = app.datos.categorias.map((c) => (c.id === categoria.id ? { ...c, archivada: true } : c));
+        await guardar({ ...app.datos, categorias });
+      },
+    });
+  },
+
+  "editar-topes"() {
+    app.vista = "presupuesto";
+    render();
+  },
+
+  "nueva-categoria"() {
+    abrirHoja({
+      titulo: "Nueva categoría",
+      campos: [
+        { clave: "nombre", etiqueta: "Nombre", tipo: "texto", requerido: true },
+        { clave: "emoji", etiqueta: "Emoji", tipo: "texto", valor: "•" },
+        { clave: "tope", etiqueta: "Tope mensual (opcional)", tipo: "monto" },
+        {
+          clave: "clase", etiqueta: "Tipo", tipo: "chips", valor: "variable",
+          opciones: [{ valor: "variable", etiqueta: "Variable" }, { valor: "fija", etiqueta: "Fija" }],
+        },
+      ],
+      async alGuardar(v) {
+        const id = `cat_${v.nombre.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+        if (categoriaPorId(app.datos, id)) return "Ya existe una categoría con ese nombre.";
+        const categorias = [...app.datos.categorias, { id, nombre: v.nombre, emoji: v.emoji || "•", clase: v.clase, tope: v.tope, archivada: false }];
+        await guardar({ ...app.datos, categorias });
+      },
+    });
+  },
+
+  "nueva-meta"() {
+    hojaMeta(null);
+  },
+
+  "editar-meta"(el) {
+    hojaMeta(app.datos.metas.find((m) => m.id === el.dataset.id));
+  },
+
+  "borrar-meta"(el) {
+    const meta = app.datos.metas.find((m) => m.id === el.dataset.id);
+    confirmar({
+      titulo: `¿Borrar "${meta ? meta.nombre : "la meta"}"?`,
+      mensaje: "Lo que ya apartaste no se borra: sigue contando como ahorro.",
+      textoBoton: "Sí, borrar la meta",
+      alConfirmar: async () => {
+        await guardar({ ...app.datos, metas: app.datos.metas.filter((m) => m.id !== el.dataset.id) });
+      },
+    });
+  },
+
+  apartar(el) {
+    hojaMovimiento({ tipo: TIPOS.AHORRO, valores: { metaId: el.dataset.id } });
+  },
+
+  "nuevo-fijo"() {
+    hojaFijo(null);
+  },
+
+  "editar-fijo"(el) {
+    hojaFijo(app.datos.fijos.find((f) => f.id === el.dataset.id));
+  },
+
+  async "pagar-fijo"(el) {
+    const fijo = app.datos.fijos.find((f) => f.id === el.dataset.id);
+    if (fijo.monto === null) return acciones["editar-fijo"](el);
+
+    // La fecha del pago es la del vencimiento, no la de hoy: registrarlo tarde no debe
+    // moverlo de ciclo ni descuadrar la quincena en la que de verdad salió el dinero.
+    const vencimiento = el.dataset.fecha || app.hoy;
+    const { datos, error } = agregarMovimiento(app.datos, movimientoDeFijo(fijo, vencimiento));
+    if (error) return;
+    await guardar(datos);
+  },
+
+  "borrar-fijo"(el) {
+    const fijo = app.datos.fijos.find((f) => f.id === el.dataset.id);
+    confirmar({
+      titulo: `¿Borrar "${fijo ? fijo.nombre : "el fijo"}"?`,
+      mensaje: "Deja de contar en lo comprometido del mes. Los pagos que ya registraste no se borran.",
+      textoBoton: "Sí, borrar el fijo",
+      alConfirmar: async () => {
+        await guardar({ ...app.datos, fijos: app.datos.fijos.filter((f) => f.id !== el.dataset.id) });
+      },
+    });
+  },
+
+  "borrar-deuda"(el) {
+    const deuda = app.datos.deudas.find((d) => d.id === el.dataset.id);
+    confirmar({
+      titulo: `¿Borrar "${deuda ? deuda.nombre : "la deuda"}"?`,
+      mensaje: "Los pagos que le registraste siguen en tu historial como gastos.",
+      textoBoton: "Sí, borrar la deuda",
+      alConfirmar: async () => {
+        await guardar({ ...app.datos, deudas: app.datos.deudas.filter((d) => d.id !== el.dataset.id) });
+      },
+    });
+  },
+
+  "nueva-deuda"() {
+    hojaDeuda(null);
+  },
+
+  "editar-deuda"(el) {
+    hojaDeuda(app.datos.deudas.find((d) => d.id === el.dataset.id));
+  },
+
+  "pagar-deuda"(el) {
+    const deuda = app.datos.deudas.find((d) => d.id === el.dataset.id);
+    abrirHoja({
+      titulo: `Pago a ${deuda.nombre}`,
+      campos: [
+        { clave: "monto", etiqueta: "Cuánto pagaste", tipo: "monto", requerido: true },
+        { clave: "fecha", etiqueta: "Fecha", tipo: "fecha", valor: app.hoy, requerido: true },
+      ],
+      async alGuardar(v) {
+        const { datos, error } = agregarMovimiento(app.datos, {
+          fecha: v.fecha, monto: v.monto, tipo: TIPOS.GASTO, categoria: "deuda", deudaId: deuda.id, nota: `Pago: ${deuda.nombre}`,
+        });
+        if (error) return error;
+        await guardar(datos);
+      },
+    });
+  },
+
+  async "borrar-movimiento"(el) {
+    await guardar(eliminarMovimiento(app.datos, el.dataset.id));
+  },
+
+  async exportar() {
+    const texto = exportar(app.datos);
+    const nombre = nombreDeRespaldo(app.hoy);
+
+    // Hay visores donde un enlace de descarga no hace absolutamente nada. Si el anfitrión
+    // sabe entregar archivos, que lo entregue él; si no, el enlace de toda la vida, que es
+    // lo que funciona con la app abierta desde el disco.
+    const entregado =
+      typeof descargarEnAnfitrion === "function" ? await descargarEnAnfitrion({ nombre, texto }) : false;
+
+    if (!entregado) {
+      const enlace = document.createElement("a");
+      enlace.href = URL.createObjectURL(new Blob([texto], { type: "application/json" }));
+      enlace.download = nombre;
+      document.body.appendChild(enlace);
+      enlace.click();
+      enlace.remove();
+    }
+
+    app.aviso = `Respaldo listo: ${nombre}. Es un JSON con todo dentro; guárdalo donde tú quieras.`;
+    render();
+  },
+
+  importar() {
+    const entrada = document.createElement("input");
+    entrada.type = "file";
+    entrada.accept = "application/json,.json";
+    entrada.addEventListener("change", async () => {
+      const archivo = entrada.files[0];
+      if (!archivo) return;
+      const resultado = importar(await archivo.text());
+      if (!resultado.ok) {
+        app.aviso = resultado.motivo;
+        app.bloqueado = true;
+        return render();
+      }
+      await guardar(resultado.datos);
+      app.aviso = "Respaldo importado.";
+      app.bloqueado = false;
+      render();
+    });
+    entrada.click();
+  },
+
+  "borrar-todo"() {
+    confirmar({
+      titulo: "¿Borrar TODO?",
+      mensaje: "Esto no se puede deshacer. Si lo quieres conservar, descarga primero un respaldo.",
+      textoBoton: "Sí, borrar todo",
+      alConfirmar: async () => {
+        await app.almacen.borrarTodo();
+        app.bloqueado = false;
+        await guardar(datosVacios(app.hoy));
+        app.aviso = "Todo borrado.";
+        render();
+      },
+    });
+  },
+
+  "cerrar-hoja"() {
+    if (cerrarHoja) cerrarHoja();
+  },
+};
+
+/** Centavos a lo que se teclea en un campo: 123456 → "1234.56". */
+function comoCampo(centavos) {
+  return centavos === null || centavos === undefined ? "" : (centavos / 100).toFixed(2);
+}
+
+function buscarMovimiento(id) {
+  for (const lista of Object.values(app.datos.movimientos)) {
+    const encontrado = lista.find((m) => m.id === id);
+    if (encontrado) return encontrado;
+  }
+  return null;
+}
+
+const TIPOS_CAPTURA = [
+  { valor: TIPOS.GASTO, etiqueta: "Gasto" },
+  { valor: TIPOS.INGRESO, etiqueta: "Ingreso" },
+  { valor: TIPOS.AHORRO, etiqueta: "Apartar" },
+  { valor: TIPOS.RETIRO, etiqueta: "Retirar" },
+];
+
+/**
+ * Un solo formulario para las tres cosas que mueven dinero: gasto, ingreso y apartado.
+ * Cambia de forma según lo que elijas (un ingreso no tiene categoría), conservando lo que
+ * ya tecleaste. También sirve para CORREGIR un movimiento: conserva su id, así que editar
+ * no es borrar y volver a capturar.
+ */
+function hojaMovimiento(config = {}) {
+  const { movimiento = null, valores = {} } = config;
+  const tipo = config.tipo || TIPOS.GASTO;
+  const editando = Boolean(movimiento);
+
+  const heredar = (clave, porDefecto) =>
+    valores[clave] !== undefined ? valores[clave] : movimiento ? movimiento[clave] : porDefecto;
+
+  const campos = [
+    {
+      clave: "tipo", etiqueta: "Qué es", tipo: "chips", valor: tipo, opciones: TIPOS_CAPTURA,
+      // Al cambiar de tipo se vuelve a abrir la hoja con los campos que corresponden.
+      alCambiar: (nuevo, actuales) => hojaMovimiento({ tipo: nuevo, movimiento, valores: { ...actuales, tipo: nuevo } }),
+    },
+    {
+      clave: "monto", etiqueta: "Monto", tipo: "monto", requerido: true,
+      valor: valores.monto !== undefined ? valores.monto : movimiento ? comoCampo(movimiento.monto) : "",
+    },
+  ];
+
+  if (tipo === TIPOS.GASTO) {
+    campos.push({
+      clave: "categoria", etiqueta: "Categoría", tipo: "chips",
+      valor: heredar("categoria", "super") || "super", opciones: opcionesCategorias(),
+    });
+  }
+
+  if (tipo === TIPOS.AHORRO || tipo === TIPOS.RETIRO) {
+    const metas = app.datos.metas.map((m) => ({ valor: m.id, etiqueta: m.nombre }));
+    campos.push({
+      clave: "metaId",
+      etiqueta: tipo === TIPOS.AHORRO ? "¿Para qué lo apartas?" : "¿De dónde lo sacas?",
+      valor: heredar("metaId", "") || "",
+      tipo: "chips",
+      opciones: [{ valor: "", etiqueta: "Fondo de emergencia" }, ...metas],
+    });
+  }
+
+  campos.push(
+    { clave: "nota", etiqueta: "Nota (opcional)", tipo: "texto", valor: heredar("nota", "") || "" },
+    { clave: "fecha", etiqueta: "Fecha", tipo: "fecha", valor: heredar("fecha", app.hoy), requerido: true },
+  );
+
+  const nombres = { [TIPOS.GASTO]: "gasto", [TIPOS.INGRESO]: "ingreso", [TIPOS.AHORRO]: "apartado", [TIPOS.RETIRO]: "retiro" };
+
+  abrirHoja({
+    titulo: editando ? "Corregir movimiento" : `Capturar ${nombres[tipo]}`,
+    textoGuardar: editando ? "Guardar cambios" : "Guardar",
+    extra: editando
+      ? `<button type="button" class="boton chico peligro" data-accion="borrar-movimiento" data-id="${esc(movimiento.id)}">Borrar este movimiento</button>`
+      : "",
+    campos,
+    async alGuardar(v) {
+      const base = editando ? eliminarMovimiento(app.datos, movimiento.id) : app.datos;
+      const { datos, error } = agregarMovimiento(base, {
+        id: editando ? movimiento.id : undefined,
+        fecha: v.fecha,
+        monto: v.monto,
+        tipo: v.tipo || tipo,
+        categoria: (v.tipo || tipo) === TIPOS.GASTO ? v.categoria || "otros" : null,
+        metaId: [TIPOS.AHORRO, TIPOS.RETIRO].includes(v.tipo || tipo) ? v.metaId : null,
+        nota: v.nota,
+        fijoId: editando ? movimiento.fijoId : null,
+        deudaId: editando ? movimiento.deudaId : null,
+      });
+      if (error) return error;
+      await guardar(datos);
+    },
+  });
+}
+
+function hojaMeta(meta) {
+  abrirHoja({
+    titulo: meta ? `Editar ${meta.nombre}` : "Nueva meta",
+    campos: [
+      { clave: "nombre", etiqueta: "Para qué", tipo: "texto", valor: meta ? meta.nombre : "", requerido: true },
+      {
+        clave: "objetivo", etiqueta: "Cuánto necesitas", tipo: "monto",
+        valor: meta && meta.objetivo !== null ? (meta.objetivo / 100).toFixed(2) : "", requerido: true,
+      },
+      {
+        clave: "fechaLimite", etiqueta: "Para cuándo", tipo: "fecha", valor: meta ? meta.fechaLimite : "",
+        ayuda: "Sin fecha no hay cuánto por quincena: la app te lo dirá en vez de inventarlo.",
+      },
+    ],
+    async alGuardar(v) {
+      const nueva = {
+        id: meta ? meta.id : idNuevo("meta"),
+        nombre: v.nombre, objetivo: v.objetivo, fechaLimite: v.fechaLimite, prioridad: 1, lograda: false,
+      };
+      const metas = meta ? app.datos.metas.map((m) => (m.id === meta.id ? nueva : m)) : [...app.datos.metas, nueva];
+      await guardar({ ...app.datos, metas });
+    },
+  });
+}
+
+function hojaFijo(fijo, valores = {}) {
+  const frecuencia = Number(valores.frecuencia !== undefined ? valores.frecuencia : fijo ? fijo.frecuencia : 1) || 1;
+  const campos = [
+    { clave: "nombre", etiqueta: "Qué es", tipo: "texto", valor: valores.nombre !== undefined ? valores.nombre : fijo ? fijo.nombre : "", requerido: true },
+    {
+      clave: "monto", etiqueta: "Cuánto", tipo: "monto",
+      valor: valores.monto !== undefined ? valores.monto : fijo ? comoCampo(fijo.monto) : "",
+      ayuda: "Si todavía no lo sabes, déjalo vacío: la app lo contará como pendiente por capturar.",
+    },
+    {
+      clave: "frecuencia", etiqueta: "Cada cuánto se paga", tipo: "chips", valor: String(frecuencia),
+      opciones: FRECUENCIAS.map((f) => ({ valor: String(f.meses), etiqueta: f.etiqueta })),
+      // Si deja de ser mensual, la hoja pide en qué mes toca: sin eso no se sabe cuándo cae.
+      alCambiar: (nuevo, actuales) => hojaFijo(fijo, { ...actuales, frecuencia: nuevo }),
+    },
+  ];
+
+  if (frecuencia > 1) {
+    campos.push({
+      clave: "mesAncla", etiqueta: "¿En qué mes toca?", tipo: "mes",
+      valor: valores.mesAncla !== undefined ? valores.mesAncla : fijo && fijo.mesAncla ? fijo.mesAncla : mesDe(app.hoy),
+      ayuda: "A partir de ese mes se repite con la frecuencia que elegiste.",
+    });
+  }
+
+  campos.push(
+    { clave: "diaCorte", etiqueta: "Qué día se paga", tipo: "numero", valor: valores.diaCorte !== undefined ? valores.diaCorte : fijo ? fijo.diaCorte : 1, requerido: true },
+    { clave: "categoria", etiqueta: "Categoría", tipo: "chips", valor: valores.categoria !== undefined ? valores.categoria : fijo ? fijo.categoria : "servicios", opciones: opcionesCategorias() },
+  );
+
+  if (app.datos.deudas.length) {
+    campos.push({
+      clave: "deudaId", etiqueta: "¿Este pago abona a una deuda?", tipo: "chips",
+      valor: valores.deudaId !== undefined ? valores.deudaId : fijo && fijo.deudaId ? fijo.deudaId : "",
+      opciones: [{ valor: "", etiqueta: "No" }, ...app.datos.deudas.map((d) => ({ valor: d.id, etiqueta: d.nombre }))],
+    });
+  }
+
+  abrirHoja({
+    titulo: fijo ? `Editar ${fijo.nombre}` : "Nuevo pago fijo",
+    campos,
+    extra: fijo
+      ? `<button type="button" class="boton chico peligro" data-accion="borrar-fijo" data-id="${esc(fijo.id)}">Borrar este fijo</button>`
+      : "",
+    async alGuardar(v) {
+      const cada = Number(v.frecuencia) || 1;
+      const nuevo = {
+        id: fijo ? fijo.id : idNuevo("fijo"),
+        nombre: v.nombre, monto: v.monto, diaCorte: Math.min(Math.max(Number(v.diaCorte) || 1, 1), 31),
+        frecuencia: cada,
+        mesAncla: cada > 1 ? v.mesAncla || mesDe(app.hoy) : null,
+        deudaId: v.deudaId || null,
+        categoria: v.categoria || "servicios", activo: true,
+      };
+      const fijos = fijo ? app.datos.fijos.map((f) => (f.id === fijo.id ? nuevo : f)) : [...app.datos.fijos, nuevo];
+      await guardar({ ...app.datos, fijos });
+    },
+  });
+}
+
+function hojaDeuda(deuda) {
+  abrirHoja({
+    titulo: deuda ? `Editar ${deuda.nombre}` : "Nueva deuda",
+    campos: [
+      { clave: "nombre", etiqueta: "A quién", tipo: "texto", valor: deuda ? deuda.nombre : "", requerido: true },
+      {
+        clave: "montoOriginal", etiqueta: "Cuánto debías al inicio", tipo: "monto",
+        valor: deuda && deuda.montoOriginal !== null ? (deuda.montoOriginal / 100).toFixed(2) : "", requerido: true,
+      },
+      {
+        clave: "tasaAnual", etiqueta: "Tasa anual % (opcional)", tipo: "numero", valor: deuda ? deuda.tasaAnual : "",
+        ayuda: "Sin tasa, la app reporta el saldo SIN intereses y lo dice. No se inventa ninguna.",
+      },
+    ],
+    extra: deuda
+      ? `<button type="button" class="boton chico peligro" data-accion="borrar-deuda" data-id="${esc(deuda.id)}">Borrar esta deuda</button>`
+      : "",
+    async alGuardar(v) {
+      const nueva = {
+        id: deuda ? deuda.id : idNuevo("deuda"),
+        nombre: v.nombre, montoOriginal: v.montoOriginal, tasaAnual: v.tasaAnual, diaCorte: deuda ? deuda.diaCorte : 1, activa: true,
+      };
+      const deudas = deuda ? app.datos.deudas.map((d) => (d.id === deuda.id ? nueva : d)) : [...app.datos.deudas, nueva];
+      await guardar({ ...app.datos, deudas });
+    },
+  });
+}
+
+// --- Arranque ---
+
+async function arrancar() {
+  try {
+    const tema = localStorage.getItem("finanzas:tema");
+    if (tema && tema !== "sistema") document.documentElement.dataset.tema = tema;
+  } catch (e) {}
+
+  document.addEventListener("input", (e) => {
+    if (e.target.dataset.accionInput !== "filtrar-texto") return;
+    // Se guarda el texto y se re-dibuja solo la lista: volver a pintar todo en cada tecla
+    // le quitaría el foco al buscador.
+    app.filtro = { ...(app.filtro || { tipo: "" }), texto: e.target.value };
+    const posicion = e.target.selectionStart;
+    render();
+    const caja = document.getElementById("buscador");
+    if (caja) {
+      caja.focus();
+      caja.setSelectionRange(posicion, posicion);
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    const boton = e.target.closest("[data-accion]");
+    if (!boton) return;
+    const accion = acciones[boton.dataset.accion];
+    if (accion) accion(boton);
+  });
+
+  render(); // pinta de inmediato: la app no espera al almacenamiento para existir
+
+  try {
+    app.almacen = await abrirAlmacen();
+    const { datos, aviso, bloqueado } = await app.almacen.cargar();
+    app.datos = datos;
+    app.aviso = aviso;
+    app.bloqueado = Boolean(bloqueado);
+  } catch (e) {
+    app.aviso = `No se pudo abrir el almacenamiento: ${e.message} Puedes seguir usando la app, pero descarga un respaldo antes de cerrar.`;
+  }
+
+  // Si ya se sabe que esto no va a guardar, se dice de entrada — no cuando ya se perdió algo.
+  const estado = app.almacen ? app.almacen.estado() : null;
+  if (estado && estado.modo === MODOS.EFIMERO && !app.aviso) {
+    app.aviso = estado.motivo || "Este navegador no deja guardar datos: descarga un respaldo antes de cerrar la pestaña.";
+  }
+  render();
+
+  // Si otro dispositivo escribe, esta pantalla se entera.
+  app.almacen.suscribir(async () => {
+    const fresco = await app.almacen.cargar();
+    app.datos = fresco.datos;
+    render();
+  });
+
+  // Si la app queda abierta y cambia el día, el ciclo se recalcula solo.
+  setInterval(() => {
+    const ahora = hoyISO();
+    if (ahora !== app.hoy) {
+      app.hoy = ahora;
+      render();
+    }
+  }, 60000);
+}
+
+if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", arrancar);
+else arrancar();
+})();
+</script>
