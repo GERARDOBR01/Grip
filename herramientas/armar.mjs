@@ -139,8 +139,6 @@ const marcado = readFileSync(join(RAIZ, "interfaz/plantilla.html"), "utf8");
 const sello = new Date().toISOString().slice(0, 10);
 
 const DESCRIPCION_CORTA = "Ordena tu quincena y sabe si tus metas de ahorro alcanzan.";
-// Dónde vive publicada. Si cambia el repo, se cambia aquí y en ningún otro lado.
-const URL_PUBLICA = "https://gerardobr01.github.io/grip/";
 const FONDO = "#14171A";
 const ACENTO = "#1f8a55";
 
