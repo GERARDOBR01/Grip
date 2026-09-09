@@ -212,6 +212,10 @@ export function normalizarMovimiento(m) {
     fijoId: m.fijoId || null,
     deudaId: m.deudaId || null,
     metaId: m.metaId || null,
+    // El identificador que traía el aviso: clave de rastreo SPEI o folio de autorización.
+    // No se guarda para enseñarlo, se guarda porque es lo que permite saber, sin adivinar,
+    // que un aviso que llega hoy es el mismo movimiento que ya está registrado.
+    ref: m.ref ? String(m.ref).slice(0, 40) : null,
   };
 }
 
