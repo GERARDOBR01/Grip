@@ -411,6 +411,40 @@ revisar(
   compartido.url(),
 );
 
+// ── Un banco que nadie programó ─────────────────────────────────────────────────
+//
+// Ocho de los once bancos de la tabla nunca han enseñado su formato, y las plantillas cambian
+// sin avisar. Hasta hoy, un aviso que no se entendía se CONTABA como ilegible y se tiraba: ahí
+// desaparecía un gasto de verdad sin dejar rastro. Ahora espera y pide dos datos.
+
+const raro = await contexto.newPage();
+const avisoRaro = encodeURIComponent(
+  "Aviso de tu cuenta\nSe aplico un movimiento a tu plastico terminacion 4821.\nConsulta el detalle en la app.",
+);
+await raro.goto(`http://127.0.0.1:${puerto}/index.html?texto=${avisoRaro}`);
+await raro.waitForSelector('[data-accion="guardar-ilegible"]', { timeout: 8000 });
+revisar("un aviso que no se entiende ESPERA en vez de tirarse", true);
+
+const idIlegible = await raro.getAttribute('[data-accion="guardar-ilegible"]', "data-id");
+revisar(
+  "y enseña con qué reconocerlo, sin guardar el cuerpo del correo",
+  (await raro.textContent("body")).includes("Aviso de tu cuenta") &&
+    !(await raro.textContent("body")).includes("Consulta el detalle"),
+);
+
+await raro.fill(`#ileg-monto-${idIlegible}`, "245.00");
+await raro.fill(`#ileg-nota-${idIlegible}`, "FERRETERIA LOPEZ");
+await raro.click('[data-accion="guardar-ilegible"]');
+await raro.waitForTimeout(500);
+revisar("completarlo a mano lo convierte en gasto y además aprende",
+  /aprend/i.test(await raro.textContent("body")));
+
+await raro.click('[data-vista="hoy"]');
+await raro.waitForTimeout(400);
+revisar("y el gasto aparece entre los movimientos, con su monto",
+  (await raro.textContent("body")).includes("FERRETERIA LOPEZ") &&
+    (await raro.textContent("body")).includes("245.00"));
+
 // ── El puente de correo ─────────────────────────────────────────────────────────
 //
 // Este servidor imita a Apps Script: otro origen (otro puerto), y la misma cabecera que

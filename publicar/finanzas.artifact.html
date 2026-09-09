@@ -611,7 +611,7 @@ function vencimientoEnMes(mes, diaCorte) {
 
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-const VERSION_DATOS = 3;
+const VERSION_DATOS = 4;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -752,7 +752,15 @@ function normalizarLapida(t) {
   return { id: String(t.id).slice(0, 60), cuando: t.cuando ? String(t.cuando).slice(0, 40) : "" };
 }
 
-const ESTADOS_BANDEJA = { PENDIENTE: "pendiente", ACEPTADO: "aceptado", DESCARTADO: "descartado" };
+const ESTADOS_BANDEJA = {
+  PENDIENTE: "pendiente",
+  ACEPTADO: "aceptado",
+  DESCARTADO: "descartado",
+  // Llegó un aviso y no se pudo leer. NO se tira: espera a que la persona diga cuánto y dónde.
+  // Una entrada así no tiene movimiento todavía, y por eso el documento subió de versión: una
+  // copia vieja de la app la descartaría al normalizar, en silencio.
+  ILEGIBLE: "ilegible",
+};
 const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" };
 
 /**
@@ -761,12 +769,18 @@ const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" 
  */
 function normalizarEntrada(e) {
   if (!e || typeof e !== "object") return null;
-  const movimiento = normalizarMovimiento(e.movimiento);
-  if (!movimiento) return null;
   const estado = Object.values(ESTADOS_BANDEJA).includes(e.estado) ? e.estado : ESTADOS_BANDEJA.PENDIENTE;
+  const movimiento = normalizarMovimiento(e.movimiento);
+
+  // Un aviso que no se pudo leer entra SIN movimiento y es un estado válido, no un error: el
+  // correo llegó, el dinero se movió, y lo único que falta es que la persona complete el
+  // hueco. Tirarlo por no traer monto es justo lo que hacía desaparecer gastos.
+  const ilegible = estado === ESTADOS_BANDEJA.ILEGIBLE;
+  if (!movimiento && !ilegible) return null;
+
   return {
     id: e.id || idNuevo("ent"),
-    recibido: esISO(e.recibido) ? e.recibido : movimiento.fecha,
+    recibido: esISO(e.recibido) ? e.recibido : movimiento ? movimiento.fecha : hoyISO(),
     estado,
     movimiento,
     huella: e.huella ? String(e.huella).slice(0, 200) : null,
@@ -781,7 +795,26 @@ function normalizarEntrada(e) {
     movimientoId: e.movimientoId || null, // el que se creó al aceptarla, para poder deshacer
     // Si esto parece el cargo final de una preautorización ya registrada, aquí va cuál.
     reemplaza: e.reemplaza || null,
+    // Solo en las ilegibles: qué campos faltaron, y la PRIMERA LÍNEA del aviso para poder
+    // reconocerlo. La primera línea, no el cuerpo: sigue sin guardarse el correo.
+    falta: Array.isArray(e.falta) ? e.falta.map((f) => String(f).slice(0, 30)).slice(0, 6) : [],
+    resumen: e.resumen ? String(e.resumen).slice(0, 120) : "",
   };
+}
+
+/**
+ * ¿Esta entrada sigue esperando algo de la persona?
+ *
+ * Vale la pena que sea UNA función y no una comparación suelta repartida por el código: al
+ * aparecer el estado ILEGIBLE, cada `estado !== PENDIENTE` que había por ahí pasó a querer
+ * decir lo contrario de lo que dice. Con esto, "resuelta" significa aceptada o descartada, que
+ * es lo único que de verdad cierra un aviso.
+ */
+function esperaRespuesta(entrada) {
+  return (
+    entrada &&
+    (entrada.estado === ESTADOS_BANDEJA.PENDIENTE || entrada.estado === ESTADOS_BANDEJA.ILEGIBLE)
+  );
 }
 
 /** Una regla aprendida: "cuando veas este comercio, es esta categoría". */
@@ -971,6 +1004,13 @@ const MIGRACIONES = {
     ...datos,
     borrados: Array.isArray(datos.borrados) ? datos.borrados : [],
   }),
+
+  // v3 → v4: la bandeja admite entradas ILEGIBLES, que son las que llegaron y no se pudieron
+  // leer. No agregan ningún campo al documento, así que aquí no hay nada que rellenar — y aun
+  // así la versión sube, que es de lo que se trata: una entrada ilegible no lleva movimiento,
+  // y una copia v3 de la app la descartaría al normalizar, en silencio. Con el número arriba,
+  // esa copia se NIEGA a abrir el documento en vez de comerse lo que no entiende.
+  3: (datos) => ({ ...datos }),
 };
 
 function migrar(entrada) {
@@ -1052,8 +1092,11 @@ function unirBandeja(viejas, nuevas) {
       porId.set(entrada.id, entrada);
       continue;
     }
-    const previaResuelta = previa.estado !== ESTADOS_BANDEJA.PENDIENTE;
-    const actualResuelta = entrada.estado !== ESTADOS_BANDEJA.PENDIENTE;
+    // Ojo con el matiz: "resuelta" es aceptada o descartada. Una entrada ILEGIBLE tampoco está
+    // pendiente, pero sigue siendo trabajo sin hacer, y dejarla ganar sobre una que el otro
+    // aparato ya resolvió resucitaría un aviso ya atendido.
+    const previaResuelta = !esperaRespuesta(previa);
+    const actualResuelta = !esperaRespuesta(entrada);
     porId.set(entrada.id, previaResuelta && !actualResuelta ? previa : entrada);
   }
   return [...porId.values()];
@@ -3186,7 +3229,34 @@ function quincenasDeColchon(datos, iso = hoyISO(), n = 6) {
  */
 function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, iso = hoyISO()) {
   const lectura = interpretar(texto, remitente, iso);
-  if (!lectura.movimiento) return { datos, entrada: null, duplicado: null, error: lectura.veredicto };
+  if (!lectura.movimiento) {
+    // Pegado a mano, la persona está viendo la pantalla: el error se le enseña al instante y
+    // meterlo a la bandeja sería ruido. Lo que llega SOLO es otra cosa. Hasta hoy se contaba
+    // como "ilegible" y se tiraba, y con ocho de once bancos cuyo formato nadie ha visto —y
+    // plantillas que cambian sin avisar—, ahí desaparecía dinero real sin dejar rastro.
+    if (origen === ORIGENES.PEGADO) {
+      return { datos, entrada: null, duplicado: null, error: lectura.veredicto };
+    }
+
+    const entrada = normalizarEntrada({
+      recibido: iso,
+      estado: ESTADOS_BANDEJA.ILEGIBLE,
+      movimiento: null,
+      banco: lectura.banco,
+      origen,
+      aviso: lectura.veredicto.motivo,
+      falta: lectura.veredicto.datos && lectura.veredicto.datos.falta
+        ? [lectura.veredicto.datos.falta]
+        : ["cuánto"],
+      resumen: primeraLinea(texto),
+    });
+    return {
+      datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] },
+      entrada,
+      duplicado: null,
+      error: lectura.veredicto,
+    };
+  }
 
   const duplicado = posibleDuplicado(datos, lectura);
   if (duplicado && duplicado.datos.motivo === "huella") {
@@ -3214,6 +3284,25 @@ function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, is
   return { datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] }, entrada, duplicado, error: null };
 }
 
+/**
+ * La primera línea con algo escrito, para poder reconocer el aviso en la lista.
+ *
+ * La primera línea Y NADA MÁS. Cuando el aviso viene del puente, esa línea es el asunto del
+ * correo — "Notificación de compra" y el nombre del banco—, que alcanza para saber cuál es sin
+ * guardar el cuerpo. La promesa de este motor no cambia: el correo se lee y se tira.
+ */
+function primeraLinea(texto) {
+  const linea = limpiarAviso(texto).split("\n").map((l) => l.trim()).find(Boolean) || "";
+  return linea.slice(0, 120);
+}
+
+/** Las que llegaron y no se pudieron leer: esperan que digas cuánto y dónde. */
+function ilegibles(datos) {
+  return (datos.bandeja || [])
+    .filter((e) => e.estado === ESTADOS_BANDEJA.ILEGIBLE)
+    .sort((a, b) => comparar(b.recibido, a.recibido) || (a.id < b.id ? 1 : -1));
+}
+
 function entradaPorId(datos, id) {
   return (datos.bandeja || []).find((e) => e.id === id) || null;
 }
@@ -3231,6 +3320,7 @@ function resumenBandeja(datos) {
   return {
     pendientes: espera.length,
     dudosos: espera.filter((e) => e.confianza !== "alta").length,
+    ilegibles: ilegibles(datos).length,
     total: (datos.bandeja || []).length,
   };
 }
@@ -3242,7 +3332,7 @@ function resumenBandeja(datos) {
 function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
   const entrada = entradaPorId(datos, id);
   if (!entrada) return { datos, movimiento: null, error: "Esa entrada ya no está en la bandeja." };
-  if (entrada.estado !== ESTADOS_BANDEJA.PENDIENTE) {
+  if (!esperaRespuesta(entrada)) {
     return { datos, movimiento: null, error: "Esa entrada ya estaba resuelta." };
   }
 
@@ -3251,13 +3341,20 @@ function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
   // contado dos veces y la app mentiría hacia arriba, que es la peor dirección.
   const partida = reemplazar && entrada.reemplaza ? eliminarMovimiento(datos, entrada.reemplaza) : datos;
 
-  const propuesto = { ...entrada.movimiento, ...camposCambiados };
+  // Una entrada ILEGIBLE no trae movimiento: lo pone la persona. Se le da la fecha en que
+  // llegó el aviso como punto de partida, que es lo más cercano a la verdad que se sabe.
+  const base = entrada.movimiento || { fecha: entrada.recibido, tipo: TIPOS.GASTO, categoria: "otros" };
+  const propuesto = { ...base, ...camposCambiados };
   const { datos: conMovimiento, movimiento, error } = agregarMovimiento(partida, propuesto);
   if (error) return { datos, movimiento: null, error };
 
-  // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó.
-  const aprendido = entrada.comercio && movimiento.tipo === TIPOS.GASTO && movimiento.categoria
-    ? recordar(conMovimiento, entrada.comercio, movimiento.categoria, iso)
+  // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó. En una
+  // entrada ilegible el comercio no salió del correo: lo escribió la persona, y ése es
+  // justamente el que hay que aprender — así el siguiente aviso del mismo lugar ya llega con
+  // su categoría aunque el formato del banco siga sin entenderse.
+  const paraAprender = entrada.comercio || movimiento.nota;
+  const aprendido = paraAprender && movimiento.tipo === TIPOS.GASTO && movimiento.categoria
+    ? recordar(conMovimiento, paraAprender, movimiento.categoria, iso)
     : conMovimiento;
 
   return {
@@ -3278,7 +3375,7 @@ function descartarEntrada(datos, id) {
   return {
     ...datos,
     bandeja: (datos.bandeja || []).map((e) =>
-      e.id === id && e.estado === ESTADOS_BANDEJA.PENDIENTE
+      e.id === id && esperaRespuesta(e)
         ? { ...e, estado: ESTADOS_BANDEJA.DESCARTADO }
         : e),
   };
@@ -3306,7 +3403,7 @@ function purgarBandeja(datos, antesDe) {
   return {
     ...datos,
     bandeja: (datos.bandeja || []).filter(
-      (e) => e.estado === ESTADOS_BANDEJA.PENDIENTE || comparar(e.recibido, antesDe) >= 0),
+      (e) => esperaRespuesta(e) || comparar(e.recibido, antesDe) >= 0),
   };
 }
 
@@ -4059,7 +4156,10 @@ function render() {
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
   const sincronizado = estado.modo === MODOS.SINCRONIZADO;
-  const esperando = resumenBandeja(app.datos).pendientes;
+  // El globo cuenta TODO lo que espera respuesta, ilegibles incluidas: si no aparecen aquí,
+  // no existen para nadie y volvemos al punto de partida, solo que con la entrada guardada.
+  const resumen = resumenBandeja(app.datos);
+  const esperando = resumen.pendientes + resumen.ilegibles;
 
   const etiquetaEstado = sincronizado
     ? "Sincronizado"
@@ -4347,6 +4447,7 @@ function tarjetaEntrada(entrada) {
 
 function vistaBandeja() {
   const espera = pendientes(app.datos);
+  const sinLeer = ilegibles(app.datos);
   const impacto = impactoPendiente(app.datos);
 
   const pegar = `<div class="tarjeta">
@@ -4358,8 +4459,17 @@ function vistaBandeja() {
     <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
   </div>`;
 
+  // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
+  // nada, se pierde un gasto de verdad. Cada uno pide dos datos y ya.
+  const seccionSinLeer = sinLeer.length
+    ? `<div class="titulo-seccion">No supe leer ${sinLeer.length === 1 ? "este" : `estos ${sinLeer.length}`}</div>
+       <div class="rotulo" style="margin:0 0 8px">Llegaron de tus bancos y no entendí el formato. Dime cuánto
+         y dónde, y además aprendo: el siguiente de ese lugar ya entra solo.</div>
+       ${sinLeer.slice(0, app.verBandeja).map(tarjetaIlegible).join("")}`
+    : "";
+
   if (!espera.length) {
-    return `${pegar}<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`;
+    return `${seccionSinLeer}${pegar}${sinLeer.length ? "" : `<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`}`;
   }
 
   const resumen = `<div class="tarjeta">
@@ -4376,7 +4486,34 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  return `${seccionSinLeer}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+}
+
+/**
+ * Un aviso que llegó y no se pudo leer. Pide lo mínimo: cuánto y dónde.
+ *
+ * Antes esto ni existía — el correo se contaba como "ilegible" y se tiraba, así que con ocho
+ * de once bancos cuyo formato nadie ha visto, ahí se iba dinero real sin dejar rastro. Se
+ * enseña la primera línea del aviso para poder reconocerlo; el cuerpo no se guarda.
+ */
+function tarjetaIlegible(entrada) {
+  const banco = entrada.banco ? nombreDeBanco(entrada.banco) : "un banco";
+  return `<div class="tarjeta">
+    <div class="fila apilada">
+      <div class="linea"><div class="nombre">${esc(entrada.resumen || `Aviso de ${banco}`)}</div></div>
+      <div class="sub">llegó el ${fechaCorta(entrada.recibido)}${entrada.banco ? ` · ${esc(banco)}` : ""}</div>
+    </div>
+    <div class="duo">
+      <div class="campo"><label for="ileg-monto-${esc(entrada.id)}">Cuánto</label>
+        <input id="ileg-monto-${esc(entrada.id)}" inputmode="decimal" class="monto" placeholder="0.00"></div>
+      <div class="campo"><label for="ileg-nota-${esc(entrada.id)}">Dónde</label>
+        <input id="ileg-nota-${esc(entrada.id)}" type="text" placeholder="OXXO, Uber, la tienda…"></div>
+    </div>
+    <div class="acciones">
+      <button class="boton" data-accion="guardar-ilegible" data-id="${esc(entrada.id)}">Guardar</button>
+      <button class="boton tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">No era un gasto</button>
+    </div>
+  </div>`;
 }
 
 function filaMovimiento(m) {
@@ -5016,14 +5153,17 @@ async function atenderCompartido() {
 
   app.vista = "bandeja";
   const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.COMPARTIDO, app.hoy);
-  if (error) {
-    app.aviso = `No pude leer lo que compartiste: ${error.motivo}`;
-    return render();
-  }
+
+  // El orden importa: lo primero es si hubo ENTRADA, no si hubo error. Un aviso que no se
+  // supo leer deja entrada igual —esperando que digas cuánto y dónde— y preguntar por el
+  // error antes salía de aquí sin guardarla, o sea tirando lo que se acababa de rescatar.
   if (!entrada) {
-    app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+    app.aviso = error
+      ? `No pude leer lo que compartiste: ${error.motivo}`
+      : duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
     return render();
   }
+  if (error) app.aviso = "No supe leer ese aviso, pero lo guardé: dime cuánto y dónde.";
   try {
     await guardar(datos);
   } catch (e) {
@@ -5131,23 +5271,34 @@ const acciones = {
     // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
     // parpadeando y multiplicaría las escrituras por nada.
     let datos = app.datos;
-    let nuevos = 0, repetidos = 0, ilegibles = 0;
+    let nuevos = 0, repetidos = 0, sinLeer = 0;
     for (const aviso of avisos) {
       const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
       const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
-      if (paso.error) ilegibles++;
-      else if (!paso.entrada) repetidos++;
-      else { nuevos++; datos = paso.datos; }
+
+      // Lo que importa es si hubo ENTRADA, no si hubo error. Un aviso que no se pudo leer
+      // ahora deja entrada igual, esperando que digas cuánto y dónde; antes se contaba como
+      // "ilegible" y el correo se tiraba aquí mismo, con el gasto adentro.
+      if (!paso.entrada) {
+        repetidos++;
+        continue;
+      }
+      datos = paso.datos;
+      if (paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE) sinLeer++;
+      else nuevos++;
     }
 
+    const total = nuevos + sinLeer;
     app.vista = "bandeja";
-    app.aviso = nuevos
-      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.${repetidos ? ` ${repetidos} ya los tenías.` : ""}`
+    app.aviso = total
+      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.` +
+        (sinLeer ? ` ${sinLeer} que no supe leer y ${sinLeer === 1 ? "espera" : "esperan"} tus datos.` : "") +
+        (repetidos ? ` ${repetidos} ya los tenías.` : "")
       : avisos.length
         ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
         : "No encontré avisos de tus bancos en los últimos días.";
 
-    if (nuevos) await guardar(datos);
+    if (total) await guardar(datos);
     else render();
   },
 
@@ -5206,12 +5357,47 @@ const acciones = {
     });
   },
 
+  async "guardar-ilegible"(el) {
+    const id = el.dataset.id;
+    const entrada = app.datos.bandeja.find((e) => e.id === id);
+    if (!entrada) return;
+
+    const centavos = aCentavos((document.getElementById(`ileg-monto-${id}`) || {}).value || "");
+    const nota = ((document.getElementById(`ileg-nota-${id}`) || {}).value || "").trim();
+
+    // Sin monto no hay movimiento que registrar. Se dice y se deja la entrada donde está, en
+    // vez de aceptar un cero disfrazado de dato.
+    if (!Number.isFinite(centavos) || centavos <= 0) {
+      app.aviso = "Falta el monto: es lo único que no puedo adivinar.";
+      return render();
+    }
+
+    const { datos, error } = aceptarEntrada(app.datos, id, {
+      monto: centavos,
+      nota: nota || (entrada.banco ? nombreDeBanco(entrada.banco) : "Sin nombre"),
+      categoria: "otros",
+    }, app.hoy);
+
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    app.aviso = nota
+      ? `Guardado. Y ya aprendí: el siguiente aviso de ${nota} entra con su categoría.`
+      : "Guardado.";
+    await guardar(datos);
+  },
+
   "descartar-entrada"(el) {
     const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
     if (!entrada) return;
+    // Una entrada ilegible no trae movimiento: pedirle el monto aquí tumbaba la pantalla.
+    const que = entrada.movimiento
+      ? `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)}`
+      : `${entrada.resumen || "Este aviso"}`;
     confirmar({
       titulo: "Descartar",
-      mensaje: `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)} no se registrará, y no vuelvo a preguntar por él.`,
+      mensaje: `${que} no se registrará, y no vuelvo a preguntar por él.`,
       textoBoton: "Descartar",
       alConfirmar: async () => {
         await guardar(descartarEntrada(app.datos, entrada.id));

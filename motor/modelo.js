@@ -11,7 +11,7 @@ import { aCentavos } from "./dinero.js";
 import { hoyISO, mesDe, esISO } from "./ciclo.js";
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-export const VERSION_DATOS = 3;
+export const VERSION_DATOS = 4;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -152,7 +152,15 @@ export function normalizarLapida(t) {
   return { id: String(t.id).slice(0, 60), cuando: t.cuando ? String(t.cuando).slice(0, 40) : "" };
 }
 
-export const ESTADOS_BANDEJA = { PENDIENTE: "pendiente", ACEPTADO: "aceptado", DESCARTADO: "descartado" };
+export const ESTADOS_BANDEJA = {
+  PENDIENTE: "pendiente",
+  ACEPTADO: "aceptado",
+  DESCARTADO: "descartado",
+  // Llegó un aviso y no se pudo leer. NO se tira: espera a que la persona diga cuánto y dónde.
+  // Una entrada así no tiene movimiento todavía, y por eso el documento subió de versión: una
+  // copia vieja de la app la descartaría al normalizar, en silencio.
+  ILEGIBLE: "ilegible",
+};
 export const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" };
 
 /**
@@ -161,12 +169,18 @@ export const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "c
  */
 export function normalizarEntrada(e) {
   if (!e || typeof e !== "object") return null;
-  const movimiento = normalizarMovimiento(e.movimiento);
-  if (!movimiento) return null;
   const estado = Object.values(ESTADOS_BANDEJA).includes(e.estado) ? e.estado : ESTADOS_BANDEJA.PENDIENTE;
+  const movimiento = normalizarMovimiento(e.movimiento);
+
+  // Un aviso que no se pudo leer entra SIN movimiento y es un estado válido, no un error: el
+  // correo llegó, el dinero se movió, y lo único que falta es que la persona complete el
+  // hueco. Tirarlo por no traer monto es justo lo que hacía desaparecer gastos.
+  const ilegible = estado === ESTADOS_BANDEJA.ILEGIBLE;
+  if (!movimiento && !ilegible) return null;
+
   return {
     id: e.id || idNuevo("ent"),
-    recibido: esISO(e.recibido) ? e.recibido : movimiento.fecha,
+    recibido: esISO(e.recibido) ? e.recibido : movimiento ? movimiento.fecha : hoyISO(),
     estado,
     movimiento,
     huella: e.huella ? String(e.huella).slice(0, 200) : null,
@@ -181,7 +195,26 @@ export function normalizarEntrada(e) {
     movimientoId: e.movimientoId || null, // el que se creó al aceptarla, para poder deshacer
     // Si esto parece el cargo final de una preautorización ya registrada, aquí va cuál.
     reemplaza: e.reemplaza || null,
+    // Solo en las ilegibles: qué campos faltaron, y la PRIMERA LÍNEA del aviso para poder
+    // reconocerlo. La primera línea, no el cuerpo: sigue sin guardarse el correo.
+    falta: Array.isArray(e.falta) ? e.falta.map((f) => String(f).slice(0, 30)).slice(0, 6) : [],
+    resumen: e.resumen ? String(e.resumen).slice(0, 120) : "",
   };
+}
+
+/**
+ * ¿Esta entrada sigue esperando algo de la persona?
+ *
+ * Vale la pena que sea UNA función y no una comparación suelta repartida por el código: al
+ * aparecer el estado ILEGIBLE, cada `estado !== PENDIENTE` que había por ahí pasó a querer
+ * decir lo contrario de lo que dice. Con esto, "resuelta" significa aceptada o descartada, que
+ * es lo único que de verdad cierra un aviso.
+ */
+export function esperaRespuesta(entrada) {
+  return (
+    entrada &&
+    (entrada.estado === ESTADOS_BANDEJA.PENDIENTE || entrada.estado === ESTADOS_BANDEJA.ILEGIBLE)
+  );
 }
 
 /** Una regla aprendida: "cuando veas este comercio, es esta categoría". */

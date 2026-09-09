@@ -29,6 +29,13 @@ export const MIGRACIONES = {
     ...datos,
     borrados: Array.isArray(datos.borrados) ? datos.borrados : [],
   }),
+
+  // v3 → v4: la bandeja admite entradas ILEGIBLES, que son las que llegaron y no se pudieron
+  // leer. No agregan ningún campo al documento, así que aquí no hay nada que rellenar — y aun
+  // así la versión sube, que es de lo que se trata: una entrada ilegible no lleva movimiento,
+  // y una copia v3 de la app la descartaría al normalizar, en silencio. Con el número arriba,
+  // esa copia se NIEGA a abrir el documento en vez de comerse lo que no entiende.
+  3: (datos) => ({ ...datos }),
 };
 
 export function migrar(entrada) {

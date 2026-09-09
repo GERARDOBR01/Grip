@@ -11,7 +11,7 @@ import { formatear, aCentavos } from "../motor/dinero.js";
 import { hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
-  ORIGENES, marcarBorrado, purgarBorrados,
+  ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
 } from "../motor/modelo.js";
 import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presupuesto.js";
 import { panelHoy, capacidadPorCiclo, estadoColchon, ahorroLibre } from "../motor/ahorro.js";
@@ -19,8 +19,8 @@ import { resumenMetas, exigenciaTotal } from "../motor/metas.js";
 import { proximosVencimientos, totalFijosMensual, movimientoDeFijo, venceEnMes, montoMensualizado } from "../motor/fijos.js";
 import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
 import {
-  recibirAviso, pendientes, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja, impactoPendiente,
-  purgarBandeja,
+  recibirAviso, pendientes, ilegibles, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja,
+  impactoPendiente, purgarBandeja,
 } from "../motor/bandeja.js";
 import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
@@ -109,7 +109,10 @@ function render() {
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
   const sincronizado = estado.modo === MODOS.SINCRONIZADO;
-  const esperando = resumenBandeja(app.datos).pendientes;
+  // El globo cuenta TODO lo que espera respuesta, ilegibles incluidas: si no aparecen aquí,
+  // no existen para nadie y volvemos al punto de partida, solo que con la entrada guardada.
+  const resumen = resumenBandeja(app.datos);
+  const esperando = resumen.pendientes + resumen.ilegibles;
 
   const etiquetaEstado = sincronizado
     ? "Sincronizado"
@@ -397,6 +400,7 @@ function tarjetaEntrada(entrada) {
 
 function vistaBandeja() {
   const espera = pendientes(app.datos);
+  const sinLeer = ilegibles(app.datos);
   const impacto = impactoPendiente(app.datos);
 
   const pegar = `<div class="tarjeta">
@@ -408,8 +412,17 @@ function vistaBandeja() {
     <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
   </div>`;
 
+  // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
+  // nada, se pierde un gasto de verdad. Cada uno pide dos datos y ya.
+  const seccionSinLeer = sinLeer.length
+    ? `<div class="titulo-seccion">No supe leer ${sinLeer.length === 1 ? "este" : `estos ${sinLeer.length}`}</div>
+       <div class="rotulo" style="margin:0 0 8px">Llegaron de tus bancos y no entendí el formato. Dime cuánto
+         y dónde, y además aprendo: el siguiente de ese lugar ya entra solo.</div>
+       ${sinLeer.slice(0, app.verBandeja).map(tarjetaIlegible).join("")}`
+    : "";
+
   if (!espera.length) {
-    return `${pegar}<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`;
+    return `${seccionSinLeer}${pegar}${sinLeer.length ? "" : `<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`}`;
   }
 
   const resumen = `<div class="tarjeta">
@@ -426,7 +439,34 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  return `${seccionSinLeer}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+}
+
+/**
+ * Un aviso que llegó y no se pudo leer. Pide lo mínimo: cuánto y dónde.
+ *
+ * Antes esto ni existía — el correo se contaba como "ilegible" y se tiraba, así que con ocho
+ * de once bancos cuyo formato nadie ha visto, ahí se iba dinero real sin dejar rastro. Se
+ * enseña la primera línea del aviso para poder reconocerlo; el cuerpo no se guarda.
+ */
+function tarjetaIlegible(entrada) {
+  const banco = entrada.banco ? nombreDeBanco(entrada.banco) : "un banco";
+  return `<div class="tarjeta">
+    <div class="fila apilada">
+      <div class="linea"><div class="nombre">${esc(entrada.resumen || `Aviso de ${banco}`)}</div></div>
+      <div class="sub">llegó el ${fechaCorta(entrada.recibido)}${entrada.banco ? ` · ${esc(banco)}` : ""}</div>
+    </div>
+    <div class="duo">
+      <div class="campo"><label for="ileg-monto-${esc(entrada.id)}">Cuánto</label>
+        <input id="ileg-monto-${esc(entrada.id)}" inputmode="decimal" class="monto" placeholder="0.00"></div>
+      <div class="campo"><label for="ileg-nota-${esc(entrada.id)}">Dónde</label>
+        <input id="ileg-nota-${esc(entrada.id)}" type="text" placeholder="OXXO, Uber, la tienda…"></div>
+    </div>
+    <div class="acciones">
+      <button class="boton" data-accion="guardar-ilegible" data-id="${esc(entrada.id)}">Guardar</button>
+      <button class="boton tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">No era un gasto</button>
+    </div>
+  </div>`;
 }
 
 function filaMovimiento(m) {
@@ -1066,14 +1106,17 @@ async function atenderCompartido() {
 
   app.vista = "bandeja";
   const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.COMPARTIDO, app.hoy);
-  if (error) {
-    app.aviso = `No pude leer lo que compartiste: ${error.motivo}`;
-    return render();
-  }
+
+  // El orden importa: lo primero es si hubo ENTRADA, no si hubo error. Un aviso que no se
+  // supo leer deja entrada igual —esperando que digas cuánto y dónde— y preguntar por el
+  // error antes salía de aquí sin guardarla, o sea tirando lo que se acababa de rescatar.
   if (!entrada) {
-    app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+    app.aviso = error
+      ? `No pude leer lo que compartiste: ${error.motivo}`
+      : duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
     return render();
   }
+  if (error) app.aviso = "No supe leer ese aviso, pero lo guardé: dime cuánto y dónde.";
   try {
     await guardar(datos);
   } catch (e) {
@@ -1181,23 +1224,34 @@ const acciones = {
     // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
     // parpadeando y multiplicaría las escrituras por nada.
     let datos = app.datos;
-    let nuevos = 0, repetidos = 0, ilegibles = 0;
+    let nuevos = 0, repetidos = 0, sinLeer = 0;
     for (const aviso of avisos) {
       const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
       const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
-      if (paso.error) ilegibles++;
-      else if (!paso.entrada) repetidos++;
-      else { nuevos++; datos = paso.datos; }
+
+      // Lo que importa es si hubo ENTRADA, no si hubo error. Un aviso que no se pudo leer
+      // ahora deja entrada igual, esperando que digas cuánto y dónde; antes se contaba como
+      // "ilegible" y el correo se tiraba aquí mismo, con el gasto adentro.
+      if (!paso.entrada) {
+        repetidos++;
+        continue;
+      }
+      datos = paso.datos;
+      if (paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE) sinLeer++;
+      else nuevos++;
     }
 
+    const total = nuevos + sinLeer;
     app.vista = "bandeja";
-    app.aviso = nuevos
-      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.${repetidos ? ` ${repetidos} ya los tenías.` : ""}`
+    app.aviso = total
+      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.` +
+        (sinLeer ? ` ${sinLeer} que no supe leer y ${sinLeer === 1 ? "espera" : "esperan"} tus datos.` : "") +
+        (repetidos ? ` ${repetidos} ya los tenías.` : "")
       : avisos.length
         ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
         : "No encontré avisos de tus bancos en los últimos días.";
 
-    if (nuevos) await guardar(datos);
+    if (total) await guardar(datos);
     else render();
   },
 
@@ -1256,12 +1310,47 @@ const acciones = {
     });
   },
 
+  async "guardar-ilegible"(el) {
+    const id = el.dataset.id;
+    const entrada = app.datos.bandeja.find((e) => e.id === id);
+    if (!entrada) return;
+
+    const centavos = aCentavos((document.getElementById(`ileg-monto-${id}`) || {}).value || "");
+    const nota = ((document.getElementById(`ileg-nota-${id}`) || {}).value || "").trim();
+
+    // Sin monto no hay movimiento que registrar. Se dice y se deja la entrada donde está, en
+    // vez de aceptar un cero disfrazado de dato.
+    if (!Number.isFinite(centavos) || centavos <= 0) {
+      app.aviso = "Falta el monto: es lo único que no puedo adivinar.";
+      return render();
+    }
+
+    const { datos, error } = aceptarEntrada(app.datos, id, {
+      monto: centavos,
+      nota: nota || (entrada.banco ? nombreDeBanco(entrada.banco) : "Sin nombre"),
+      categoria: "otros",
+    }, app.hoy);
+
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    app.aviso = nota
+      ? `Guardado. Y ya aprendí: el siguiente aviso de ${nota} entra con su categoría.`
+      : "Guardado.";
+    await guardar(datos);
+  },
+
   "descartar-entrada"(el) {
     const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
     if (!entrada) return;
+    // Una entrada ilegible no trae movimiento: pedirle el monto aquí tumbaba la pantalla.
+    const que = entrada.movimiento
+      ? `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)}`
+      : `${entrada.resumen || "Este aviso"}`;
     confirmar({
       titulo: "Descartar",
-      mensaje: `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)} no se registrará, y no vuelvo a preguntar por él.`,
+      mensaje: `${que} no se registrará, y no vuelvo a preguntar por él.`,
       textoBoton: "Descartar",
       alConfirmar: async () => {
         await guardar(descartarEntrada(app.datos, entrada.id));

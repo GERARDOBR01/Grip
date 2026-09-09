@@ -15,7 +15,7 @@
 // propósito" y gana sobre cualquier copia que siga teniéndolo.
 
 import { mesDe, comparar } from "./ciclo.js";
-import { ESTADOS_BANDEJA } from "./modelo.js";
+import { esperaRespuesta } from "./modelo.js";
 
 /** Cuál de los dos documentos se escribió al último. */
 export function selloDe(documento) {
@@ -44,8 +44,11 @@ export function unirBandeja(viejas, nuevas) {
       porId.set(entrada.id, entrada);
       continue;
     }
-    const previaResuelta = previa.estado !== ESTADOS_BANDEJA.PENDIENTE;
-    const actualResuelta = entrada.estado !== ESTADOS_BANDEJA.PENDIENTE;
+    // Ojo con el matiz: "resuelta" es aceptada o descartada. Una entrada ILEGIBLE tampoco está
+    // pendiente, pero sigue siendo trabajo sin hacer, y dejarla ganar sobre una que el otro
+    // aparato ya resolvió resucitaría un aviso ya atendido.
+    const previaResuelta = !esperaRespuesta(previa);
+    const actualResuelta = !esperaRespuesta(entrada);
     porId.set(entrada.id, previaResuelta && !actualResuelta ? previa : entrada);
   }
   return [...porId.values()];
