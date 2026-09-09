@@ -334,6 +334,67 @@ await instalada.reload().catch(() => {});
 revisar("y una vez instalada, abre SIN CONEXIÓN", await instalada.locator(".barra").isVisible().catch(() => false));
 await contexto.setOffline(false);
 
+// ── La bandeja no crece para siempre ────────────────────────────────────────────
+//
+// Este es el defecto que ya se coló una vez: la función de purga existía, tenía su prueba,
+// y nadie la llamaba. Sin ella la bandeja crece sin freno y —cuando hay sincronización— el
+// documento topa y la sincronización se rompe. Aquí se comprueba sobre el almacén real.
+
+const conCarga = await contexto.newPage();
+await conCarga.goto(`http://127.0.0.1:${puerto}/index.html`);
+await conCarga.waitForSelector(".barra", { timeout: 8000 });
+
+await conCarga.evaluate(async () => {
+  const bandeja = [];
+  const entrada = (id, recibido, estado, monto, nota) => ({
+    id, recibido, estado, huella: `h${id}`, confianza: "alta", origen: "correo",
+    movimiento: { id: `m${id}`, fecha: recibido, monto, tipo: "gasto", categoria: "otros", nota },
+  });
+  for (let i = 0; i < 40; i++) bandeja.push(entrada(`viejo${i}`, "2026-01-10", "aceptado", 1000 + i, `VIEJO${i}`));
+  bandeja.push(entrada("pendiente-vieja", "2026-01-10", "pendiente", 9999, "PENDIENTE VIEJA"));
+  for (let i = 0; i < 40; i++) bandeja.push(entrada(`nuevo${i}`, "2026-09-08", "pendiente", 5000 + i, `NUEVO${i}`));
+
+  const doc = {
+    version: 2, creado: "2026-01-01", actualizado: "2026-09-08T00:00:00Z",
+    perfil: { moneda: "MXN", ingresoQuincenal: 800000, cortes: [15], colchonObjetivo: null },
+    categorias: [], movimientos: {}, presupuestos: {}, metas: [], reglas: [], fijos: [], deudas: [], bandeja,
+  };
+  await new Promise((ok, mal) => {
+    const q = indexedDB.open("finanzas", 1);
+    q.onsuccess = () => {
+      const tx = q.result.transaction("documento", "readwrite");
+      tx.objectStore("documento").put(doc, "raiz");
+      tx.oncomplete = ok; tx.onerror = mal;
+    };
+    q.onerror = mal;
+  });
+});
+
+await conCarga.reload();
+await conCarga.waitForSelector(".barra", { timeout: 8000 });
+await conCarga.click('[data-vista="bandeja"]');
+await conCarga.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+
+const pintadas = await conCarga.locator(".tarjeta.entrada").count();
+revisar("con 41 pendientes NO pinta 41 tarjetas de golpe", pintadas === 25, `${pintadas} tarjetas`);
+revisar("y ofrece ver el resto", (await conCarga.locator('[data-accion="ver-mas-bandeja"]').count()) === 1);
+await conCarga.click('[data-accion="ver-mas-bandeja"]');
+revisar("que las muestra al pedirlo", (await conCarga.locator(".tarjeta.entrada").count()) === 41);
+
+const tras = await conCarga.evaluate(() => new Promise((ok) => {
+  const q = indexedDB.open("finanzas", 1);
+  q.onsuccess = () => {
+    const g = q.result.transaction("documento", "readonly").objectStore("documento").get("raiz");
+    g.onsuccess = () => ok({
+      total: g.result.bandeja.length,
+      resueltas: g.result.bandeja.filter((e) => e.estado !== "pendiente").length,
+      pendienteVieja: g.result.bandeja.some((e) => e.id === "pendiente-vieja"),
+    });
+  };
+}));
+revisar("al abrir tira lo resuelto y viejo", tras.total === 41 && tras.resueltas === 0, `${tras.total} entradas, ${tras.resueltas} resueltas`);
+revisar("pero NUNCA lo pendiente, por viejo que sea", tras.pendienteVieja);
+
 // ── Compartir desde el celular ──────────────────────────────────────────────────
 //
 // Con la app instalada en Android, compartirle un correo la abre con el texto en la
@@ -394,15 +455,18 @@ await instalada.reload();
 await instalada.waitForSelector(".barra");
 await instalada.click('[data-vista="ajustes"]');
 await instalada.waitForSelector('[data-accion="traer-del-puente"]');
-// Esta página comparte origen con la de "compartir", así que ya hay algo en la bandeja:
-// lo que se mide es cuánto CRECE, no cuánto hay.
-await instalada.click('[data-vista="bandeja"]');
-const antes = await instalada.locator(".tarjeta.entrada").count();
+// Esta página comparte origen con las anteriores, así que ya hay cosas en la bandeja: lo que
+// se mide es cuánto CRECE. Y se cuenta por el contador de la barra, no por tarjetas pintadas
+// — la lista tiene tope, así que contar tarjetas daría siempre el mismo número.
+const contador = async () => Number((await instalada.locator(".globo").textContent().catch(() => "0")) || 0);
+await instalada.reload();
+await instalada.waitForSelector(".barra", { timeout: 8000 });
+const antes = await contador();
 await instalada.click('[data-vista="ajustes"]');
 await instalada.click('[data-accion="traer-del-puente"]');
 await instalada.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
 
-const traidas = (await instalada.locator(".tarjeta.entrada").count()) - antes;
+const traidas = (await contador()) - antes;
 revisar("el puente trae los dos avisos y caen leídos en la bandeja", traidas === 2, `${traidas} nuevas`);
 revisar(
   "sin petición de permiso previa: por eso se manda como text/plain",

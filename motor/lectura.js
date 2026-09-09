@@ -21,6 +21,9 @@ import { bancoDeRemitente } from "./reglas-banco.js";
 
 export const CONFIANZAS = { ALTA: "alta", MEDIA: "media", BAJA: "baja" };
 
+/** A cuántos días de hoy deja de ser creíble la fecha de un aviso. */
+const DIAS_RAZONABLES = 60;
+
 const MESES_ES = {
   ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6,
   jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12,
@@ -28,11 +31,20 @@ const MESES_ES = {
 
 // Un monto se reconoce por el signo o por la moneda. Pedir una de las dos evita confundir
 // un número de referencia de 6 dígitos con dinero.
-const PATRON_MONTO = /\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)|(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})\s*(?:MXN|M\.?N\.?|pesos)\b/gi;
+// Un monto se reconoce por el signo o por la moneda, y la moneda puede ir de los dos lados:
+// "$1,234.56", "1,234.56 MXN" y "MXN 1,234.56" son el mismo dinero. Pedir alguna de las dos
+// marcas evita confundir un número de referencia de seis dígitos con un importe.
+const CIFRA = String.raw`\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?`;
+const PATRON_MONTO = new RegExp(
+  String.raw`\$\s*(${CIFRA})` +                                   // $1,234.56
+  String.raw`|\b(?:MXN|M\.?N\.?)\s*(${CIFRA})\b` +                // MXN 1,234.56
+  String.raw`|\b(${CIFRA})\s*(?:MXN|M\.?N\.?|pesos)\b`,           // 1,234.56 MXN
+  "gi",
+);
 
 // Lo que aparece junto a un monto que NO es el de la operación. Es la regla que más errores
 // evita: casi todo aviso bancario trae el saldo, y el saldo no es un gasto.
-const CONTEXTO_AJENO = /(saldo|disponible|l[íi]mite|l[íi]nea de cr[ée]dito|puntos|cashback|pago m[íi]nimo|para no generar intereses)/i;
+const CONTEXTO_AJENO = /(saldo|disponible|l[íi]mite|l[íi]nea de cr[ée]dito|puntos|cashback|pago m[íi]nimo|para no generar intereses|meses sin intereses|promoci[óo]n|aprovecha|participantes|felicidades)/i;
 const CONTEXTO_PROPIO = /(monto|importe|cargo|compra|total|pago|retiro|abono|dep[óo]sito|transferencia|env[íi]o|cobro|consumo)/i;
 
 const PISTAS_INGRESO = /(recibiste|recibida|recibido|te depositaron|te enviaron|abono|dep[óo]sito|devoluci[óo]n|reembolso|bonificaci[óo]n|cancelaci[óo]n de cargo|nómina|n[óo]mina)/i;
@@ -59,33 +71,50 @@ export function limpiarAviso(entrada) {
  * `seguro` es false cuando el número existe pero nadie dijo de qué era: se lee, pero baja
  * la confianza en vez de fingir certeza.
  */
+/** A cuántos caracteres del monto queda la palabra más cercana que empate con `patron`. */
+function distanciaA(patron, antes, despues) {
+  const atras = [...antes.matchAll(new RegExp(patron.source, "gi"))].pop();
+  const adelante = despues.match(new RegExp(patron.source, "i"));
+  return Math.min(
+    atras ? antes.length - (atras.index + atras[0].length) : Infinity,
+    adelante ? adelante.index : Infinity,
+  );
+}
+
 export function montoDelAviso(texto) {
   const candidatos = [];
   PATRON_MONTO.lastIndex = 0;
   let hallazgo;
   while ((hallazgo = PATRON_MONTO.exec(texto))) {
-    const centavos = aCentavos(hallazgo[1] || hallazgo[2]);
+    const centavos = aCentavos(hallazgo[1] || hallazgo[2] || hallazgo[3]);
     if (centavos === null || centavos === 0) continue;
-    const desde = Math.max(0, hallazgo.index - 60);
-    const contexto = texto.slice(desde, hallazgo.index + hallazgo[0].length + 20);
-    candidatos.push({
-      centavos,
-      ajeno: CONTEXTO_AJENO.test(contexto),
-      propio: CONTEXTO_PROPIO.test(contexto),
-    });
+    // Gana la palabra MÁS CERCANA, no cualquiera de la ventana. En "Cargo por $89.00 en OXXO.
+    // Saldo disponible: $8,000" las dos palabras rodean al mismo número: mirar si existe un
+    // "saldo" por ahí descartaba el cargo de verdad.
+    const antes = texto.slice(Math.max(0, hallazgo.index - 60), hallazgo.index);
+    const despues = texto.slice(hallazgo.index + hallazgo[0].length, hallazgo.index + hallazgo[0].length + 25);
+    const aAjeno = distanciaA(CONTEXTO_AJENO, antes, despues);
+    const aPropio = distanciaA(CONTEXTO_PROPIO, antes, despues);
+    candidatos.push({ centavos, ajeno: aAjeno < aPropio, propio: aPropio < aAjeno });
   }
 
-  if (!candidatos.length) return { centavos: null, seguro: false };
-
-  const nombrado = candidatos.find((c) => c.propio && !c.ajeno);
-  if (nombrado) return { centavos: nombrado.centavos, seguro: true };
+  if (!candidatos.length) return { centavos: null, seguro: false, varios: false };
 
   const noAjeno = candidatos.filter((c) => !c.ajeno);
-  if (noAjeno.length === 1) return { centavos: noAjeno[0].centavos, seguro: true };
-  if (noAjeno.length) return { centavos: noAjeno[0].centavos, seguro: false };
+  // Un estado de cuenta trae varias operaciones y aquí solo cabe una. No se inventa nada:
+  // se lee la primera y se dice que había más, para que la persona revise el correo.
+  const varios = new Set(noAjeno.map((c) => c.centavos)).size > 1;
 
-  // Todos los montos parecían saldos. Se lee el primero, pero sin fingir seguridad.
-  return { centavos: candidatos[0].centavos, seguro: false };
+  const nombrado = candidatos.find((c) => c.propio && !c.ajeno);
+  if (nombrado) return { centavos: nombrado.centavos, seguro: true, varios };
+
+  if (noAjeno.length === 1) return { centavos: noAjeno[0].centavos, seguro: true, varios };
+  if (noAjeno.length) return { centavos: noAjeno[0].centavos, seguro: false, varios };
+
+  // Todos los montos eran saldos, límites o promociones. Eso no es una operación: es un
+  // aviso informativo. Antes se colaba como un gasto de confianza baja y ensuciaba la
+  // bandeja con cosas que nadie compró.
+  return { centavos: null, seguro: false, soloAjenos: true };
 }
 
 function fechaValida(anio, mes, dia) {
@@ -148,8 +177,11 @@ export function comercioDelAviso(texto) {
   // El monto suele meterse entre "compra" y "en", así que hay que saltárselo. Y el nombre
   // termina donde empieza a hablarse de la tarjeta o de la fecha, no en el primer punto:
   // "EL PALACIO DE HIERRO" tiene preposiciones adentro y no hay que cortarlo a la mitad.
+  // "compra ... en X", pero también "cargo domiciliado de X" — las suscripciones casi siempre
+  // usan "de", y son justo las que alimentan la detección de recurrentes. Y no todo banco dice
+  // "compra": hay quien encabeza con "movimiento" o "transacción".
   const conEn = texto.match(
-    /(?:compra|cargo|pago|consumo|compraste|pagaste)\b[^\n]{0,40}?\ben\s+(.{2,60}?)(?=\s+(?:con|usando|mediante|tu|su)\b|\s+el\s+\d|\s+a\s+las\b|\s+por\s+\$|[.,;|\n]|$)/i,
+    /(?:compra|cargo|pago|consumo|compraste|pagaste|movimiento|operaci[óo]n|transacci[óo]n|abono|dep[óo]sito)\b[^\n]{0,44}?\b(?:en|de)\s+((?![$\d]|MXN\b|M\.?N\.?\b)[^\n]{2,90}?)(?=\s+(?:con|usando|mediante|tu|su)\b|\s+el\s+\d|\s+a\s+las\b|\s+por\s+\$|[.,;|\n]|$)/i,
   );
   if (conEn) return recortarComercio(conEn[1]);
 
@@ -163,6 +195,7 @@ function recortarComercio(crudo) {
     .replace(/[\s.,;:-]+$/, "")
     .trim();
   if (!limpio || RUIDO_COMERCIO.test(limpio)) return null;
+  if (!/[a-záéíóúñ]{2}/i.test(limpio)) return null; // referencias y cifras sueltas no son un nombre
   return limpio.slice(0, 60);
 }
 
@@ -236,12 +269,15 @@ export function interpretar(entrada, remitente = "", hoy = hoyISO()) {
     return sinLectura(sinDatos("No hay texto que leer.", "pega el aviso del banco"), banco);
   }
 
-  const { centavos, seguro } = montoDelAviso(texto);
+  const { centavos, seguro, varios } = montoDelAviso(texto);
   if (centavos === null) {
-    return sinLectura(
-      sinDatos("No encontré un monto en este texto.", "revisa que el aviso traiga el importe con $ o MXN"),
-      banco,
-    );
+    const motivo = montoDelAviso(texto).soloAjenos
+      ? "Esto parece un aviso de saldo o una promoción, no un movimiento."
+      : "No encontré un monto en este texto.";
+    const falta = montoDelAviso(texto).soloAjenos
+      ? "si sí fue un cargo, captúralo con el botón +"
+      : "revisa que el aviso traiga el importe con $ o MXN";
+    return sinLectura(sinDatos(motivo, falta), banco);
   }
 
   const { iso, explicita } = fechaDelAviso(texto, hoy);
@@ -250,17 +286,26 @@ export function interpretar(entrada, remitente = "", hoy = hoyISO()) {
   const { tipo, explicito } = tipoDelAviso(texto);
   const traspaso = PISTAS_TRASPASO.test(texto);
 
-  const señales = [seguro, explicita, explicito, Boolean(comercio)].filter(Boolean).length;
-  const confianza =
-    banco && seguro && señales >= 3 ? CONFIANZAS.ALTA
-      : señales >= 2 ? CONFIANZAS.MEDIA
-        : CONFIANZAS.BAJA;
-
   const razones = [];
+  const lejos = Math.abs(diasEntre(hoy, iso));
+  if (lejos > DIAS_RAZONABLES) {
+    razones.push(`la fecha que leí (${iso}) queda a ${lejos} días de hoy — revísala antes de aceptar`);
+  }
+  if (varios) razones.push("el correo traía más de un cargo y solo leí el primero");
   if (!seguro) razones.push("el monto no venía etiquetado");
   if (!explicita) razones.push("no traía fecha, usé la de hoy");
   if (!explicito) razones.push("no decía si era cargo o abono, lo tomé como gasto");
   if (!comercio) razones.push("no identifiqué el comercio");
+
+  // ALTA significa exactamente una cosa: no quedó nada que revisar. Antes bastaban tres de
+  // cuatro señales, así que un aviso sin comercio —o con una fecha absurda— se anunciaba como
+  // "lo leí completo" mientras su propio motivo decía "revísalo". Prometer certeza donde
+  // faltó un dato es peor que admitir la duda.
+  const señales = [seguro, explicita, explicito, Boolean(comercio)].filter(Boolean).length;
+  const confianza =
+    banco && !razones.length && señales === 4 ? CONFIANZAS.ALTA
+      : señales >= 2 ? CONFIANZAS.MEDIA
+        : CONFIANZAS.BAJA;
 
   return {
     movimiento: {

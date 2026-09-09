@@ -10,6 +10,9 @@ quedarte corto, y si una meta de ahorro de verdad alcanza o no.
 **[Abrir la app](https://gerardobr01.github.io/grip/)** · desde el celular, *Añadir a
 pantalla de inicio* y queda instalada con su ícono, funcionando sin conexión.
 
+<sub>La dirección va en minúscula aunque el repositorio se llame `Grip`: así la publica GitHub
+Pages. No es una errata.</sub>
+
 **Sin servidor, sin cuenta y sin dependencias.** No hay registro ni login. Los datos se
 guardan en el navegador de quien la usa: aquí no hay backend al que mandarlos.
 
@@ -68,6 +71,12 @@ NO_ALCANZA — requiere $3,750.00 por quincena, capacidad estimada $530.00 — f
   de una misma compra no se cuentan dos veces.
 - **Dos cargos no son una suscripción.** Se piden tres, y con un ritmo reconocible; si no,
   no se propone nada.
+- **Confianza alta significa que no quedó nada que revisar.** Si el lector tuvo que suponer
+  algo —la fecha, el tipo, el comercio— lo dice y baja la confianza. Un aviso de saldo o una
+  promoción no producen un movimiento: se declaran como lo que son.
+- **La bandeja es un buzón, no un archivo.** Lo ya resuelto se tira a los 60 días; lo
+  pendiente nunca, por viejo que sea. Sin eso, un año de uso llenaba el 88% del documento
+  que se sincroniza y acababa rompiéndolo.
 
 **3. Los datos reales nunca entran al repositorio.** Lo que se versiona es el motor.
 
@@ -122,7 +131,7 @@ compartir a mano.
 ## Cómo se trabaja
 
 ```bash
-node --test pruebas/*.test.js      # 158 pruebas: sin red, sin API, sin gastar un peso
+node --test pruebas/*.test.js      # 167 pruebas: sin red, sin API, sin gastar un peso
 node herramientas/armar.mjs        # arma index.html y finanzas.html desde motor/ e interfaz/
 node herramientas/humo.mjs         # navegador real: disco, sin almacenamiento, e instalada
 node herramientas/logo.mjs         # solo si cambia el logo

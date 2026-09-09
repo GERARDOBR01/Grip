@@ -150,6 +150,78 @@ test("la huella no depende de cómo venía escrito el comercio", () => {
   assert.equal(a, b);
 });
 
+// --- Lo que salió del sangrado: textos que no escribí pensando en que pasaran ---
+
+test("la moneda puede ir antes del monto: MXN 1,234.56", () => {
+  const r = interpretar("Cargo de MXN 1,234.56 en STARBUCKS el 08/09/2026", "x@banorte.com", HOY);
+  assert.equal(r.movimiento.monto, 123456);
+  assert.equal(r.comercio, "STARBUCKS", "y el comercio no se confunde con el monto");
+});
+
+// Un aviso de saldo o una promoción NO son movimientos. Antes se colaban como gastos de
+// confianza baja y llenaban la bandeja de cosas que nadie compró.
+test("un aviso de saldo no es un gasto", () => {
+  const r = interpretar("Hola, tu saldo disponible es de $8,432.10 MXN al corte de hoy.", "x@banorte.com", HOY);
+  assert.equal(r.movimiento, null);
+  assert.equal(r.veredicto.estado, ESTADOS.SIN_DATOS);
+  assert.match(r.veredicto.motivo, /saldo|promoci/i);
+});
+
+test("una promoción tampoco", () => {
+  const r = interpretar("¡Aprovecha! Meses sin intereses desde $500.00 en tiendas participantes.", "x@banorte.com", HOY);
+  assert.equal(r.movimiento, null);
+  assert.equal(r.veredicto.estado, ESTADOS.SIN_DATOS);
+});
+
+// Las suscripciones dicen "de", no "en" — y son justo las que alimentan las recurrentes.
+test("reconoce el comercio también con 'de'", () => {
+  const r = interpretar("Se aplicó el cargo domiciliado de $399.00 de SPOTIFY el 08/09/2026", "x@banorte.com", HOY);
+  assert.equal(r.comercio, "SPOTIFY");
+  assert.equal(r.movimiento.monto, 39900, "y el monto sigue siendo el monto, no el comercio");
+});
+
+test("no todo banco dice 'compra': también lee 'movimiento' u 'operación'", () => {
+  const r = interpretar("Movimiento: -$450.00 MXN en FARMACIAS el 08/09/2026", "x@banorte.com", HOY);
+  assert.equal(r.comercio, "FARMACIAS");
+  assert.equal(r.movimiento.monto, 45000);
+});
+
+test("un comercio largo no se pierde entero", () => {
+  const r = interpretar(
+    "Compra por $99.00 en OPERADORA DE SERVICIOS INTEGRALES DEL CENTRO SA DE CV SUCURSAL SATELITE el 08/09/2026",
+    "x@banorte.com", HOY,
+  );
+  assert.match(r.comercio, /^OPERADORA DE SERVICIOS/);
+});
+
+// Un movimiento a cuatro años se vuelve invisible en todas las pantallas.
+test("una fecha absurda levanta la mano en vez de entrar callada", () => {
+  const r = interpretar("Compra por $50.00 en TIENDA el 08/09/2030", "x@banorte.com", HOY);
+  assert.match(r.veredicto.motivo, /fecha/i);
+  assert.notEqual(r.confianza, CONFIANZAS.ALTA);
+});
+
+test("si el correo traía varios cargos, lo dice en vez de fingir que era uno", () => {
+  const r = interpretar(
+    "Compra $120.00 en OXXO el 07/09/2026. Compra $340.00 en CINEPOLIS el 08/09/2026.",
+    "x@banorte.com", HOY,
+  );
+  assert.match(r.veredicto.motivo, /m[áa]s de un cargo/i);
+  assert.notEqual(r.confianza, CONFIANZAS.ALTA);
+});
+
+// La incoherencia que encontré: la insignia decía "lo leí completo" y el motivo "revísalo".
+test("confianza ALTA significa que NO quedó nada que revisar", () => {
+  const limpio = interpretar(
+    "Compra por $189.50 MXN en STARBUCKS con tarjeta terminacion 4821 el 08/09/2026", "x@banorte.com", HOY,
+  );
+  assert.equal(limpio.confianza, CONFIANZAS.ALTA);
+  assert.deepEqual(limpio.veredicto.datos.razones, [], "alta y con pendientes es una contradicción");
+
+  const sinComercio = interpretar("Retiro en cajero por $2,000.00 MXN el 08/09/2026", "x@banorte.com", HOY);
+  assert.notEqual(sinComercio.confianza, CONFIANZAS.ALTA, "sin comercio no se promete certeza");
+});
+
 test("nunca lanza, pase lo que pase", () => {
   for (const basura of [null, undefined, "", 12345, {}, "<<<>>>", "$"]) {
     assert.doesNotThrow(() => interpretar(basura, "", HOY));

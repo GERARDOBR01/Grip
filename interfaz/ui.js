@@ -8,7 +8,7 @@
 // un cero disfrazado de dato.
 
 import { formatear, aCentavos } from "../motor/dinero.js";
-import { hoyISO, mesDe, cicloDe, vencimientoEnMes } from "../motor/ciclo.js";
+import { hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
   ORIGENES,
@@ -17,14 +17,15 @@ import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presup
 import { panelHoy, capacidadPorCiclo, estadoColchon, ahorroLibre } from "../motor/ahorro.js";
 import { resumenMetas, exigenciaTotal } from "../motor/metas.js";
 import { proximosVencimientos, totalFijosMensual, movimientoDeFijo, venceEnMes, montoMensualizado } from "../motor/fijos.js";
-import { planDeDeuda } from "../motor/deudas.js";
+import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
 import {
   recibirAviso, pendientes, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja, impactoPendiente,
+  purgarBandeja,
 } from "../motor/bandeja.js";
 import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
-import { nombreDeBanco } from "../motor/reglas-banco.js";
+import { nombreDeBanco, BANCOS, bancosQueAvisan } from "../motor/reglas-banco.js";
 import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
 import { exportar, importar, nombreDeRespaldo } from "../almacen/archivo.js";
 
@@ -39,6 +40,8 @@ const app = {
   // Lo que la persona eligió en la bandeja antes de aceptar, por entrada. Vive solo en la
   // pantalla: si cierra la app sin aceptar, no queda rastro de una decisión a medias.
   eleccion: {},
+  // Cuántas entradas de la bandeja se pintan. Sube cuando la persona pide ver más.
+  verBandeja: 25,
   // Lo que lleva escrito en la caja de pegar. Vive en el estado y no solo en el DOM porque
   // cualquier re-dibujo —un guardado, o que otro dispositivo escriba— lo borraría a media
   // captura. Perder lo que alguien acaba de pegar es la clase de detalle que hace que una
@@ -285,6 +288,13 @@ const CONFIANZA_TEXTO = { alta: "Lo leí completo", media: "Revísalo", baja: "C
 const FICHAS_VISIBLES = 6;
 
 /**
+ * Cuántas entradas se dibujan de una vez.
+ * El puente puede traer cuarenta de golpe después de unas vacaciones, y pintarlas todas son
+ * cientos de botones en una sola pasada — en un teléfono eso se siente.
+ */
+const ENTRADAS_POR_TANDA = 25;
+
+/**
  * Las categorías que conviene ofrecer de un toque: la que ya está puesta, y después las que
  * esta persona más usa. El resto siguen ahí, en "Editar" — pero no estorbando.
  */
@@ -364,7 +374,14 @@ function vistaBandeja() {
     <div class="rotulo">es lo que cambiaría si aceptas todo</div>
   </div>`;
 
-  return `${resumen}${espera.map(tarjetaEntrada).join("")}${pegar}`;
+  const visibles = espera.slice(0, app.verBandeja);
+  const faltan = espera.length - visibles.length;
+  const masBoton = faltan
+    ? `<div class="acciones"><button class="boton tenue" data-accion="ver-mas-bandeja">
+        Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
+    : "";
+
+  return `${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
 }
 
 function filaMovimiento(m) {
@@ -622,6 +639,25 @@ function comoFrecuencia(fijo) {
   return `${etiqueta.toLowerCase()}${ancla}`;
 }
 
+/**
+ * Qué pasaría pagando un poco más al mes. Suele ser el número que más mueve la aguja y la
+ * app ya lo calculaba: solo que nadie lo veía.
+ */
+function tarjetaPagarMas(datos, deuda, plan) {
+  if (plan.meses === null || !plan.pago.monto) return "";
+
+  const opciones = [50000, 100000, 200000]
+    .map((extra) => siPagarasMas(datos, deuda, extra))
+    .filter((r) => r && r.mesesMenos > 0);
+  if (!opciones.length) return "";
+
+  const mejor = opciones[0];
+  return `<div class="rotulo" style="margin-top:10px">
+    Pagando ${monto(mejor.extra)} más al mes la liquidas
+    <b>${mejor.mesesMenos} ${mejor.mesesMenos === 1 ? "mes" : "meses"} antes</b>
+    y te ahorras ${monto(mejor.interesesMenos)} de intereses.</div>`;
+}
+
 function vistaFijos() {
   const { datos, hoy } = app;
   const total = totalFijosMensual(datos, hoy);
@@ -681,6 +717,7 @@ function vistaFijos() {
               <div class="monto">${monto(plan.saldo)}</div>
             </div>
             ${veredictoHTML(plan.veredicto)}
+            ${tarjetaPagarMas(datos, d, plan)}
             <div class="acciones">
               <button class="boton chico" data-accion="pagar-deuda" data-id="${esc(d.id)}">Registrar pago</button>
               <button class="boton chico tenue" data-accion="editar-deuda" data-id="${esc(d.id)}">Editar</button>
@@ -731,8 +768,13 @@ function vistaAjustes() {
          </div>
          <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
          ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
-         <div class="rotulo">Ojo: hay bancos que no mandan correo por cada movimiento. Nu es uno:
-           sus avisos solo viven dentro de su app. Para esos, comparte el aviso a Grip.</div>
+         <div class="rotulo" style="margin-top:10px"><b>Llegan por correo:</b>
+           ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
+         <div class="rotulo aviso-linea"><b>No llegan:</b>
+           ${esc(BANCOS.filter((b) => !b.avisaCadaMovimiento).map((b) => b.nombre).join(", "))} —
+           ${esc(BANCOS.find((b) => b.id === "nu").nombre)} solo notifica dentro de su app, y
+           ${esc(BANCOS.find((b) => b.id === "hsbc").nombre)} solo avisa arriba de $1,500.
+           Para esos, compártele el aviso a Grip desde el celular.</div>
        </div>`
     : "";
 
@@ -926,6 +968,31 @@ function opcionesCategorias() {
   return app.datos.categorias.filter((c) => !c.archivada).map((c) => ({ valor: c.id, etiqueta: `${c.emoji} ${c.nombre}` }));
 }
 
+/** Días que se conserva un aviso ya resuelto antes de tirarlo. */
+const DIAS_DE_BANDEJA = 60;
+
+/**
+ * Vacía de la bandeja lo ya resuelto y viejo, cada vez que se abre la app.
+ *
+ * Sin esto la bandeja crece para siempre, y no es un problema estético: todo lo que no son
+ * movimientos viaja junto en UN documento cuando hay sincronización, y ese documento tiene
+ * tope. Medido, cada entrada pesa ~458 B; sin purgar, la sincronización se rompería alrededor
+ * de las 570 entradas — cosa de un año trayendo correos.
+ *
+ * Lo PENDIENTE nunca se tira, por viejo que sea: eso sigue siendo trabajo sin hacer.
+ */
+async function tirarLoViejo() {
+  if (!app.almacen || app.bloqueado) return;
+  const antes = (app.datos.bandeja || []).length;
+  const limpio = purgarBandeja(app.datos, sumarDias(app.hoy, -DIAS_DE_BANDEJA));
+  if (limpio.bandeja.length === antes) return;
+  try {
+    app.datos = await app.almacen.guardar(limpio);
+  } catch (e) {
+    app.datos = limpio; // que no se pueda guardar la limpieza no debe tumbar el arranque
+  }
+}
+
 /**
  * Lo que llegó por "Compartir" desde el celular.
  *
@@ -989,6 +1056,7 @@ async function guardar(datos) {
 const acciones = {
   ir(el) {
     app.vista = el.dataset.vista;
+    if (app.vista === "bandeja") app.verBandeja = ENTRADAS_POR_TANDA;
     render();
   },
 
@@ -1098,6 +1166,11 @@ const acciones = {
 
   async "olvidar-regla"(el) {
     await guardar(olvidar(app.datos, el.dataset.clave));
+  },
+
+  "ver-mas-bandeja"() {
+    app.verBandeja += ENTRADAS_POR_TANDA;
+    render();
   },
 
   "elegir-categoria"(el) {
@@ -1748,6 +1821,7 @@ export async function arrancar() {
   if (estado && estado.modo === MODOS.EFIMERO && !app.aviso) {
     app.aviso = estado.motivo || "Este navegador no deja guardar datos: descarga un respaldo antes de cerrar la pestaña.";
   }
+  await tirarLoViejo();
   render();
   await atenderCompartido();
 
