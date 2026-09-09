@@ -46,6 +46,9 @@ export async function abrirAlmacen(opciones = {}) {
   const estado = {
     modo: espejo ? MODOS.SINCRONIZADO : local.duradero ? MODOS.LOCAL : MODOS.EFIMERO,
     tipoLocal: local.tipo,
+    // ¿El navegador se comprometió a no borrar esto si anda corto de espacio? Es distinto de
+    // `duradero` (sobrevivir a cerrar la pestaña) y la interfaz tiene que poder decirlo.
+    persistente: local.persistente === true,
     motivo: local.motivo || null,
     // Se enciende cuando se leyeron datos que este código no sabe abrir (versión más
     // nueva). Mientras esté encendido NO se escribe: escribir sería borrarlos.

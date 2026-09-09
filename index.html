@@ -3164,6 +3164,12 @@ function importar(texto) {
 // no está disponible, y memoria como último recurso. El nivel que se logró se DECLARA:
 // una app que guarda en memoria y no lo dice es una app que te va a perder los datos.
 //
+// Y hay DOS preguntas distintas que antes se respondían con un solo `true`:
+//   `duradero`   — ¿sobrevive a cerrar la pestaña?  (sí en IndexedDB y localStorage)
+//   `persistente`— ¿el navegador se comprometió a no borrarlo si anda corto de espacio?
+// La segunda hay que PEDIRLA y puede negarse. Decir que sí sin haberla pedido —que es lo que
+// hacía este archivo— es la clase de mentira que se cobra el día que el sistema hace limpieza.
+//
 // Cuidado con las guardas: en un origen aislado (un iframe sin `allow-same-origin`, o un
 // navegador con los datos de sitio bloqueados) **hasta leer** `window.localStorage` lanza
 // SecurityError. Por eso aquí no se pregunta con `typeof`: se intenta de verdad, dentro de
@@ -3179,6 +3185,32 @@ function leerGlobal(nombre) {
     return globalThis[nombre] || null;
   } catch (e) {
     return null;
+  }
+}
+
+/**
+ * Le pide al navegador que NO borre estos datos cuando ande corto de espacio.
+ *
+ * Sin esto, lo guardado es "mejor esfuerzo": Safari borra todo el almacenamiento de scripts a
+ * los 7 días sin interacción, y Chrome desaloja primero los orígenes que no lo pidieron. Una
+ * app de finanzas que pierde el historial no es una app de finanzas.
+ *
+ * Devuelve lo que el navegador CONCEDIÓ, no lo que se pidió: si dice que no, hay que decirlo
+ * en pantalla en vez de suponer que sí. Nunca lanza y nunca se queda colgada.
+ */
+async function pedirPersistencia() {
+  const almacenamiento = leerGlobal("navigator") && leerGlobal("navigator").storage;
+  if (!almacenamiento || typeof almacenamiento.persist !== "function") return false;
+  try {
+    // Si ya estaba concedida, no se vuelve a pedir: en Firefox eso le sale al usuario como
+    // una pregunta, y preguntar dos veces por lo mismo es una forma de gastarle el permiso.
+    if (typeof almacenamiento.persisted === "function" && (await almacenamiento.persisted())) return true;
+    return (await Promise.race([
+      almacenamiento.persist(),
+      new Promise((r) => setTimeout(() => r(false), 3000)),
+    ])) === true;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -3243,6 +3275,7 @@ function enMemoria(motivo) {
   return {
     tipo: "memoria",
     duradero: false,
+    persistente: false,
     motivo,
     async cargar() {
       return memoria;
@@ -3266,9 +3299,13 @@ async function abrirLocal() {
   }
 
   if (bd) {
+    const persistente = await pedirPersistencia();
     return {
       tipo: "indexeddb",
       duradero: true,
+      persistente,
+      // `motivo` es para cuando algo se degradó. Que no haya persistencia no degrada nada
+      // aquí: es un hecho que la interfaz tiene que contar con sus palabras, no un fallo.
       motivo: null,
       async cargar() {
         try {
@@ -3291,6 +3328,8 @@ async function abrirLocal() {
     return {
       tipo: "localstorage",
       duradero: true,
+      // localStorage es el nivel de abajo: nunca tuvo garantía de permanencia y no se le pide.
+      persistente: false,
       motivo: null,
       async cargar() {
         try {
@@ -3329,6 +3368,7 @@ async function abrirLocal() {
 
 
 
+
 const MODOS = {
   SINCRONIZADO: "sincronizado",
   LOCAL: "local",
@@ -3360,6 +3400,9 @@ async function abrirAlmacen(opciones = {}) {
   const estado = {
     modo: espejo ? MODOS.SINCRONIZADO : local.duradero ? MODOS.LOCAL : MODOS.EFIMERO,
     tipoLocal: local.tipo,
+    // ¿El navegador se comprometió a no borrar esto si anda corto de espacio? Es distinto de
+    // `duradero` (sobrevivir a cerrar la pestaña) y la interfaz tiene que poder decirlo.
+    persistente: local.persistente === true,
     motivo: local.motivo || null,
     // Se enciende cuando se leyeron datos que este código no sabe abrir (versión más
     // nueva). Mientras esté encendido NO se escribe: escribir sería borrarlos.
@@ -3387,22 +3430,43 @@ async function abrirAlmacen(opciones = {}) {
         }
       }
 
-      const elegido = masReciente(crudoLocal, crudoEspejo);
-      if (!elegido) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
+      if (!crudoLocal && !crudoEspejo) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
 
-      const resultado = migrar(elegido);
-      if (!resultado.ok) {
-        // Ni se abre a medias ni se borra: se conserva, se explica y se traba la escritura.
+      // Cada lado se sube a la versión de hoy ANTES de unirlos. Fusionar un documento v2 con
+      // uno v3 mezclaría dos formas distintas de los mismos datos, que es peor que no unir.
+      const ladoLocal = crudoLocal ? migrar(crudoLocal) : null;
+      const ladoEspejo = crudoEspejo ? migrar(crudoEspejo) : null;
+
+      // Si CUALQUIERA de los dos no se sabe abrir, no se toca nada: ni se abre a medias ni se
+      // borra. Se conserva, se explica y se traba la escritura.
+      const fallo = [ladoLocal, ladoEspejo].find((lado) => lado && !lado.ok);
+      if (fallo) {
         estado.bloqueado = true;
-        estado.motivo = resultado.motivo;
-        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: resultado.motivo, bloqueado: true };
+        estado.motivo = fallo.motivo;
+        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: fallo.motivo, bloqueado: true };
       }
       estado.bloqueado = false;
 
-      // El que iba atrás se pone al día con el que ganó.
-      if (elegido === crudoEspejo && crudoEspejo) await local.guardar(resultado.datos);
+      const datosLocal = ladoLocal ? ladoLocal.datos : null;
+      const datosEspejo = ladoEspejo ? ladoEspejo.datos : null;
 
-      return { datos: resultado.datos, nuevo: false, aviso: resultado.motivo || null };
+      // Y aquí lo importante: se UNEN. Antes ganaba un documento entero por su fecha y el otro
+      // se descartaba completo — lo capturado en el aparato que sincronizó primero desaparecía
+      // sin avisar. Ahora no se pierde nada que alguien no haya borrado a propósito.
+      const unido = normalizar(fusionar(datosLocal, datosEspejo));
+
+      // El que iba atrás se pone al día. `difieren` evita reescribir cuando ya decían lo mismo.
+      if (difieren(unido, datosLocal)) await local.guardar(unido);
+      if (espejo && difieren(unido, datosEspejo)) {
+        try {
+          await espejo.guardar(unido);
+        } catch (e) {
+          degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+        }
+      }
+
+      const avisos = [ladoLocal, ladoEspejo].filter((lado) => lado && lado.motivo).map((lado) => lado.motivo);
+      return { datos: unido, nuevo: false, aviso: avisos.length ? avisos.join(" ") : null };
     },
 
     async guardar(datos) {
@@ -3439,15 +3503,6 @@ async function abrirAlmacen(opciones = {}) {
       estado.motivo = local.motivo || null;
     },
   };
-}
-
-/** Gana el documento con el `actualizado` más reciente. Un solo usuario: no hay que fusionar. */
-function masReciente(a, b) {
-  if (!a) return b || null;
-  if (!b) return a;
-  const fechaA = a.actualizado || a.creado || "";
-  const fechaB = b.actualizado || b.creado || "";
-  return fechaB > fechaA ? b : a;
 }
 
 // ═══ almacen/anfitrion-claude.js ═══
@@ -3803,6 +3858,34 @@ function vistaActual() {
 
 function nombreCiclo(ciclo) {
   return ciclo.total > 1 ? "quincena" : "mensualidad";
+}
+
+/**
+ * Qué se le dice a la persona sobre dónde viven sus datos.
+ *
+ * Son DOS preguntas y antes se contestaban con una sola frase optimista: si sobrevive a cerrar
+ * la pestaña, y si el navegador se comprometió a no borrarlo cuando ande corto de espacio. Lo
+ * segundo hay que pedirlo y puede negarse — Safari borra el almacenamiento de scripts a los 7
+ * días sin interacción, y ahí se va un historial entero. Cuando no está concedido, se dice, y
+ * se dice también qué hacer: instalarla en la pantalla de inicio y bajar un respaldo.
+ */
+function textoDelAlmacenamiento(estado) {
+  if (estado.modo === MODOS.EFIMERO) {
+    return "Este navegador no deja guardar nada: al cerrar la pestaña se pierde lo capturado. Descarga un respaldo antes de cerrar.";
+  }
+
+  const donde =
+    estado.modo === MODOS.SINCRONIZADO
+      ? "Lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda en éste."
+      : `Todo se guarda en este dispositivo (${estado.tipoLocal}). Para pasarlo a otro lado, usa el respaldo en Ajustes.`;
+
+  const permanencia = estado.persistente
+    ? "El navegador se comprometió a no borrarlo aunque ande corto de espacio."
+    : "Ojo: el navegador NO concedió almacenamiento permanente, así que el sistema puede borrarlo si se " +
+      "queda sin espacio o si pasan semanas sin abrir la app. Instálala en tu pantalla de inicio para que " +
+      "sea mucho menos probable, y baja un respaldo de vez en cuando.";
+
+  return [donde, permanencia, estado.motivo].filter(Boolean).join(" ");
 }
 
 function vistaHoy() {
@@ -4718,14 +4801,7 @@ const acciones = {
   },
 
   "ver-estado"() {
-    const estado = app.almacen.estado();
-    const texto =
-      estado.modo === MODOS.SINCRONIZADO
-        ? "Sincronizado: lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda guardada en éste."
-        : estado.modo === MODOS.EFIMERO
-          ? "Este navegador no deja guardar nada. Descarga un respaldo antes de cerrar la pestaña."
-          : `Todo se guarda en este dispositivo (${estado.tipoLocal}). No hay sincronización, así que para pasarlo a otro lado usa el respaldo en Ajustes.`;
-    app.aviso = estado.motivo ? `${texto} ${estado.motivo}` : texto;
+    app.aviso = textoDelAlmacenamiento(app.almacen.estado());
     render();
   },
 

@@ -39,7 +39,7 @@ test("el nombre del respaldo lleva la fecha", () => {
 // la app en otro dispositivo.
 
 import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
-import { enMemoria } from "../almacen/local.js";
+import { enMemoria, pedirPersistencia } from "../almacen/local.js";
 import { datosVacios } from "../motor/modelo.js";
 
 function localFalso({ guardado = null, alGuardar = null, duradero = true, tipo = "falso" } = {}) {
@@ -194,4 +194,68 @@ test("si un lado trae una versión que no se sabe abrir, no se fusiona NADA", as
   assert.equal(bloqueado, true);
   assert.match(aviso, /versión más nueva/i);
   await assert.rejects(() => almacen.guardar(datosDePrueba()), /no se guarda nada/i);
+});
+
+// ————————————————————————————————————————————————————————————————————————————————
+// Permanencia. Antes este archivo declaraba `duradero: true` sin haber pedido nada, y la app
+// le decía a la persona "todo se guarda en este dispositivo". Safari borra el almacenamiento
+// de scripts a los 7 días sin interacción: esa frase podía costar un historial entero.
+
+/** Pone un `navigator` de mentira, corre algo, y lo deja como estaba pase lo que pase. */
+async function conNavigator(falso, hacer) {
+  const previo = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: falso, configurable: true, writable: true });
+  try {
+    return await hacer();
+  } finally {
+    if (previo) Object.defineProperty(globalThis, "navigator", previo);
+    else delete globalThis.navigator;
+  }
+}
+
+test("si el navegador concede permanencia, se reporta concedida", async () => {
+  const concedido = await conNavigator(
+    { storage: { persisted: async () => false, persist: async () => true } },
+    () => pedirPersistencia(),
+  );
+  assert.equal(concedido, true);
+});
+
+test("si la niega, se reporta negada — no se supone que sí", async () => {
+  const concedido = await conNavigator(
+    { storage: { persisted: async () => false, persist: async () => false } },
+    () => pedirPersistencia(),
+  );
+  assert.equal(concedido, false, "suponer que sí es justo la mentira que se está quitando");
+});
+
+test("si ya estaba concedida, no se vuelve a preguntar", async () => {
+  let veces = 0;
+  const concedido = await conNavigator(
+    { storage: { persisted: async () => true, persist: async () => { veces++; return true; } } },
+    () => pedirPersistencia(),
+  );
+  assert.equal(concedido, true);
+  assert.equal(veces, 0, "en Firefox preguntar es una ventana al usuario: no se gasta dos veces");
+});
+
+test("un navegador sin StorageManager no truena: simplemente no hay permanencia", async () => {
+  assert.equal(await conNavigator({}, () => pedirPersistencia()), false);
+  assert.equal(await conNavigator(undefined, () => pedirPersistencia()), false);
+});
+
+test("si persist() se cuelga, no deja la app colgada", async () => {
+  const concedido = await conNavigator(
+    { storage: { persisted: async () => false, persist: () => new Promise(() => {}) } },
+    () => pedirPersistencia(),
+  );
+  assert.equal(concedido, false, "a los 3 segundos se rinde y sigue");
+});
+
+test("si persist() lanza, se trata como negada en vez de tumbar el arranque", async () => {
+  const concedido = await conNavigator(
+    { storage: { persisted: async () => { throw new Error("bloqueado"); }, persist: async () => true } },
+    () => pedirPersistencia(),
+  );
+  assert.equal(concedido, false);
 });

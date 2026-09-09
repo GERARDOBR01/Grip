@@ -163,6 +163,34 @@ function nombreCiclo(ciclo) {
   return ciclo.total > 1 ? "quincena" : "mensualidad";
 }
 
+/**
+ * Qué se le dice a la persona sobre dónde viven sus datos.
+ *
+ * Son DOS preguntas y antes se contestaban con una sola frase optimista: si sobrevive a cerrar
+ * la pestaña, y si el navegador se comprometió a no borrarlo cuando ande corto de espacio. Lo
+ * segundo hay que pedirlo y puede negarse — Safari borra el almacenamiento de scripts a los 7
+ * días sin interacción, y ahí se va un historial entero. Cuando no está concedido, se dice, y
+ * se dice también qué hacer: instalarla en la pantalla de inicio y bajar un respaldo.
+ */
+function textoDelAlmacenamiento(estado) {
+  if (estado.modo === MODOS.EFIMERO) {
+    return "Este navegador no deja guardar nada: al cerrar la pestaña se pierde lo capturado. Descarga un respaldo antes de cerrar.";
+  }
+
+  const donde =
+    estado.modo === MODOS.SINCRONIZADO
+      ? "Lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda en éste."
+      : `Todo se guarda en este dispositivo (${estado.tipoLocal}). Para pasarlo a otro lado, usa el respaldo en Ajustes.`;
+
+  const permanencia = estado.persistente
+    ? "El navegador se comprometió a no borrarlo aunque ande corto de espacio."
+    : "Ojo: el navegador NO concedió almacenamiento permanente, así que el sistema puede borrarlo si se " +
+      "queda sin espacio o si pasan semanas sin abrir la app. Instálala en tu pantalla de inicio para que " +
+      "sea mucho menos probable, y baja un respaldo de vez en cuando.";
+
+  return [donde, permanencia, estado.motivo].filter(Boolean).join(" ");
+}
+
 function vistaHoy() {
   const { datos, hoy } = app;
   const panel = panelHoy(datos, hoy);
@@ -1076,14 +1104,7 @@ const acciones = {
   },
 
   "ver-estado"() {
-    const estado = app.almacen.estado();
-    const texto =
-      estado.modo === MODOS.SINCRONIZADO
-        ? "Sincronizado: lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda guardada en éste."
-        : estado.modo === MODOS.EFIMERO
-          ? "Este navegador no deja guardar nada. Descarga un respaldo antes de cerrar la pestaña."
-          : `Todo se guarda en este dispositivo (${estado.tipoLocal}). No hay sincronización, así que para pasarlo a otro lado usa el respaldo en Ajustes.`;
-    app.aviso = estado.motivo ? `${texto} ${estado.motivo}` : texto;
+    app.aviso = textoDelAlmacenamiento(app.almacen.estado());
     render();
   },
 
