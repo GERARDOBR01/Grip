@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { exportar, importar, nombreDeRespaldo } from "../almacen/archivo.js";
-import { masReciente } from "../almacen/almacen.js";
 import { VERSION_DATOS } from "../motor/modelo.js";
 import { datosDePrueba, conMovimientos } from "./ayuda.js";
 
@@ -27,16 +26,6 @@ test("un respaldo de una versión más nueva no se abre a medias", () => {
   const r = importar(JSON.stringify({ ...datosDePrueba(), version: VERSION_DATOS + 3 }));
   assert.equal(r.ok, false);
   assert.match(r.motivo, /más nueva/);
-});
-
-test("gana la copia con el sello más reciente", () => {
-  const viejo = { actualizado: "2026-09-01T10:00:00.000Z", marca: "viejo" };
-  const nuevo = { actualizado: "2026-09-08T10:00:00.000Z", marca: "nuevo" };
-  assert.equal(masReciente(viejo, nuevo).marca, "nuevo");
-  assert.equal(masReciente(nuevo, viejo).marca, "nuevo");
-  assert.equal(masReciente(null, nuevo).marca, "nuevo");
-  assert.equal(masReciente(viejo, null).marca, "viejo");
-  assert.equal(masReciente(null, null), null);
 });
 
 test("el nombre del respaldo lleva la fecha", () => {
@@ -126,4 +115,83 @@ test("un espejo caído no impide guardar en local: baja el modo y lo dice", asyn
   assert.equal(almacen.estado().modo, MODOS.LOCAL, "baja de modo en vez de mentir");
   assert.match(almacen.estado().motivo, /no se pudo sincronizar/i);
   assert.ok(local.leer(), "y el dato quedó a salvo en este dispositivo");
+});
+
+// ————————————————————————————————————————————————————————————————————————————————
+// La prueba que faltaba y que costó caro: hasta hoy, sincronizar DESCARTABA un documento
+// entero. `motor/fusion.js` existía y estaba probado por su cuenta, pero nadie lo llamaba,
+// así que el fallo seguía vivo con las pruebas en verde. Esto lo ejerce por el camino real
+// —el que usa la app— en vez de por la función suelta.
+
+/** Un espejo de mentira con contenido propio, como el otro dispositivo. */
+function espejoFalso(guardado = null) {
+  let contenido = guardado;
+  return {
+    proveedor: async () => ({
+      tipo: "sincronizado",
+      async cargar() { return contenido; },
+      async guardar(datos) { contenido = datos; },
+    }),
+    leer: () => contenido,
+  };
+}
+
+const notasDe = (datos) =>
+  Object.values(datos.movimientos).flat().map((m) => m.nota).sort();
+
+test("dos dispositivos capturando distinto: al abrir sobreviven LOS DOS", async () => {
+  const enElCelular = conMovimientos(datosDePrueba(), [
+    { fecha: "2026-09-07", monto: 45000, tipo: "gasto", categoria: "super", nota: "DESPENSA" },
+  ]);
+  const enLaPC = conMovimientos(datosDePrueba(), [
+    { fecha: "2026-09-08", monto: 18000, tipo: "gasto", categoria: "super", nota: "CINE" },
+  ]);
+  enElCelular.actualizado = "2026-09-08T18:00:00.000Z";
+  enLaPC.actualizado = "2026-09-08T19:00:00.000Z"; // la PC sincronizó después
+
+  const local = localFalso({ guardado: enElCelular });
+  const espejo = espejoFalso(enLaPC);
+  const almacen = await abrirAlmacen({ local, proveedorSincronizacion: espejo.proveedor });
+
+  const { datos } = await almacen.cargar();
+  assert.deepEqual(notasDe(datos), ["CINE", "DESPENSA"], "la captura del celular NO desaparece");
+
+  // Y los dos lados quedan al día, para que la próxima apertura no tenga nada que reconciliar.
+  assert.deepEqual(notasDe(local.leer()), ["CINE", "DESPENSA"]);
+  assert.deepEqual(notasDe(espejo.leer()), ["CINE", "DESPENSA"]);
+});
+
+test("lo borrado a propósito NO resucita al unirse con una copia vieja", async () => {
+  const conGasto = conMovimientos(datosDePrueba(), [
+    { fecha: "2026-09-07", monto: 45000, tipo: "gasto", categoria: "super", nota: "DESPENSA" },
+  ]);
+  const id = Object.values(conGasto.movimientos).flat()[0].id;
+
+  // El celular lo borró: queda la lápida y el movimiento se va.
+  const yaBorrado = { ...conGasto, movimientos: {}, borrados: [{ id, cuando: "2026-09-08" }] };
+  yaBorrado.actualizado = "2026-09-08T19:00:00.000Z";
+  conGasto.actualizado = "2026-09-08T18:00:00.000Z"; // la PC todavía lo tiene
+
+  const local = localFalso({ guardado: yaBorrado });
+  const almacen = await abrirAlmacen({
+    local,
+    proveedorSincronizacion: espejoFalso(conGasto).proveedor,
+  });
+
+  const { datos } = await almacen.cargar();
+  assert.deepEqual(notasDe(datos), [], "la lápida gana sobre la copia que todavía lo tenía");
+});
+
+test("si un lado trae una versión que no se sabe abrir, no se fusiona NADA", async () => {
+  // Fusionar contra un documento que no se entiende sería inventar. Se traba y se explica.
+  const local = localFalso({ guardado: datosDePrueba() });
+  const almacen = await abrirAlmacen({
+    local,
+    proveedorSincronizacion: espejoFalso({ ...datosVacios("2026-09-08"), version: 99 }).proveedor,
+  });
+
+  const { bloqueado, aviso } = await almacen.cargar();
+  assert.equal(bloqueado, true);
+  assert.match(aviso, /versión más nueva/i);
+  await assert.rejects(() => almacen.guardar(datosDePrueba()), /no se guarda nada/i);
 });

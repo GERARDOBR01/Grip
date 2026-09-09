@@ -11,6 +11,7 @@
 
 import { abrirLocal, enMemoria } from "./local.js";
 import { migrar } from "../motor/migraciones.js";
+import { fusionar, difieren } from "../motor/fusion.js";
 import { datosVacios, normalizar } from "../motor/modelo.js";
 import { hoyISO, mesDe } from "../motor/ciclo.js";
 
@@ -72,22 +73,43 @@ export async function abrirAlmacen(opciones = {}) {
         }
       }
 
-      const elegido = masReciente(crudoLocal, crudoEspejo);
-      if (!elegido) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
+      if (!crudoLocal && !crudoEspejo) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
 
-      const resultado = migrar(elegido);
-      if (!resultado.ok) {
-        // Ni se abre a medias ni se borra: se conserva, se explica y se traba la escritura.
+      // Cada lado se sube a la versión de hoy ANTES de unirlos. Fusionar un documento v2 con
+      // uno v3 mezclaría dos formas distintas de los mismos datos, que es peor que no unir.
+      const ladoLocal = crudoLocal ? migrar(crudoLocal) : null;
+      const ladoEspejo = crudoEspejo ? migrar(crudoEspejo) : null;
+
+      // Si CUALQUIERA de los dos no se sabe abrir, no se toca nada: ni se abre a medias ni se
+      // borra. Se conserva, se explica y se traba la escritura.
+      const fallo = [ladoLocal, ladoEspejo].find((lado) => lado && !lado.ok);
+      if (fallo) {
         estado.bloqueado = true;
-        estado.motivo = resultado.motivo;
-        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: resultado.motivo, bloqueado: true };
+        estado.motivo = fallo.motivo;
+        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: fallo.motivo, bloqueado: true };
       }
       estado.bloqueado = false;
 
-      // El que iba atrás se pone al día con el que ganó.
-      if (elegido === crudoEspejo && crudoEspejo) await local.guardar(resultado.datos);
+      const datosLocal = ladoLocal ? ladoLocal.datos : null;
+      const datosEspejo = ladoEspejo ? ladoEspejo.datos : null;
 
-      return { datos: resultado.datos, nuevo: false, aviso: resultado.motivo || null };
+      // Y aquí lo importante: se UNEN. Antes ganaba un documento entero por su fecha y el otro
+      // se descartaba completo — lo capturado en el aparato que sincronizó primero desaparecía
+      // sin avisar. Ahora no se pierde nada que alguien no haya borrado a propósito.
+      const unido = normalizar(fusionar(datosLocal, datosEspejo));
+
+      // El que iba atrás se pone al día. `difieren` evita reescribir cuando ya decían lo mismo.
+      if (difieren(unido, datosLocal)) await local.guardar(unido);
+      if (espejo && difieren(unido, datosEspejo)) {
+        try {
+          await espejo.guardar(unido);
+        } catch (e) {
+          degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+        }
+      }
+
+      const avisos = [ladoLocal, ladoEspejo].filter((lado) => lado && lado.motivo).map((lado) => lado.motivo);
+      return { datos: unido, nuevo: false, aviso: avisos.length ? avisos.join(" ") : null };
     },
 
     async guardar(datos) {
@@ -124,13 +146,4 @@ export async function abrirAlmacen(opciones = {}) {
       estado.motivo = local.motivo || null;
     },
   };
-}
-
-/** Gana el documento con el `actualizado` más reciente. Un solo usuario: no hay que fusionar. */
-export function masReciente(a, b) {
-  if (!a) return b || null;
-  if (!b) return a;
-  const fechaA = a.actualizado || a.creado || "";
-  const fechaB = b.actualizado || b.creado || "";
-  return fechaB > fechaA ? b : a;
 }
