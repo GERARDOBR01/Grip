@@ -66,9 +66,10 @@ NO_ALCANZA — requiere $3,750.00 por quincena, capacidad estimada $530.00 — f
   en dos números: el promedio mensualizado (lo que hay que ir apartando) y lo que de verdad
   se paga este mes.
 - **Un aviso leído a medias no entra a las cuentas.** Todo lo que llega solo espera
-  confirmación, y viene con qué tan seguro está el lector y qué tuvo que suponer. Dos
-  cargos iguales del mismo comercio comparten huella, así que la autorización y el cargo
-  de una misma compra no se cuentan dos veces.
+  confirmación, y viene con qué tan seguro está el lector y qué tuvo que suponer.
+- **Una preautorización y su cargo final no son dos gastos.** La gasolinera retiene $100 y
+  cobra $43; el restaurante autoriza sin propina y cobra con ella. Cuando el monto cambia, la
+  app lo reconoce y ofrece **reemplazar** el anterior en vez de sumar otro.
 - **Dos cargos no son una suscripción.** Se piden tres, y con un ritmo reconocible; si no,
   no se propone nada.
 - **Confianza alta significa que no quedó nada que revisar.** Si el lector tuvo que suponer
@@ -95,6 +96,13 @@ NO_ALCANZA — requiere $3,750.00 por quincena, capacidad estimada $530.00 — f
   **niega a escribir** en vez de pisarlos.
 - **El correo nunca se guarda.** De un aviso se extraen monto, fecha, comercio y los últimos
   4 de la tarjeta. El texto se usa y se tira.
+- **El texto se canoniza antes de leerse.** Quoted-printable, viñetas de enmascarado, comillas
+  tipográficas y caracteres invisibles se normalizan en una sola pasada. Sin eso —medido— una
+  tarjeta `••••4574` no se extrae y encima se cuela dentro del nombre del comercio.
+- **Sincronizar FUSIONA, no elige.** Antes se quedaba el documento entero más reciente y el
+  otro se descartaba: capturar en el celular y en la PC la misma tarde hacía desaparecer una de
+  las dos, en silencio. Ahora los movimientos se unen por `id`, y lo borrado a propósito deja
+  lápida para que la otra copia no lo resucite.
 
 ## No depende de nadie para abrirse
 
@@ -124,14 +132,15 @@ Tres formas de llenar la bandeja, todas contra el mismo lector:
    quieras.
 
 Lo que hay que decir antes de que alguien se ilusione: **el correo no cubre todo tu dinero.**
-Nu no manda correo por cada compra —lo dice Nu: sus avisos solo viven dentro de su app— y
-HSBC solo avisa arriba de $1,500. Mercado Pago, DiDi, OXXO y Banorte sí. Para el resto,
-compartir a mano.
+Nu manda correo de las transferencias que envías, pero no de las compras con tarjeta. HSBC solo
+avisa de operaciones arriba de $1,500, así que los gastos chicos no llegan. Banorte, Santander,
+Banamex, Mercado Pago, DiDi y OXXO sí avisan completo. La app lo dice en Ajustes, banco por
+banco, en vez de prometer de más.
 
 ## Cómo se trabaja
 
 ```bash
-node --test pruebas/*.test.js      # 167 pruebas: sin red, sin API, sin gastar un peso
+node --test pruebas/*.test.js      # 197 pruebas: sin red, sin API, sin gastar un peso
 node herramientas/armar.mjs        # arma index.html y finanzas.html desde motor/ e interfaz/
 node herramientas/humo.mjs         # navegador real: disco, sin almacenamiento, e instalada
 node herramientas/logo.mjs         # solo si cambia el logo
@@ -144,14 +153,29 @@ que existe pero nadie metió en la lista, dos nombres de nivel superior repetido
 La prueba de navegador corre tres escenarios: la app abierta desde el disco, servida en un
 navegador que no deja guardar nada, e instalada y abriendo **con la red apagada**.
 
+## Cómo se prueba
+
+Tres capas, porque cada una atrapa lo que las otras no:
+
+| Capa | Qué comprueba |
+|---|---|
+| **Ejemplos** | los casos concretos que ya se rompieron una vez |
+| **Corpus** (`pruebas/correos/`) | un archivo por aviso real, con lo que debe salir de él. Añadir un banco es añadir dos archivos, no escribir código |
+| **Invariantes** (`pruebas/invariantes.test.js`) | lo que debe cumplirse para *cualquier* entrada, sobre miles generadas con semilla fija: que nunca lance, que **nunca invente dinero** (el monto que devuelve tiene que estar en el texto), que la fecha siempre exista en el calendario, que canonizar sea idempotente, y que "confianza alta" signifique de verdad que no quedó nada que revisar |
+
+La última capa incluye un candado de rendimiento: leer una entrada patológica —60,000
+caracteres, miles de disparadores encadenados— debe tardar menos de 50 ms. Los topes de los
+cuantificadores son lo que evita el *backtracking* catastrófico, y esa prueba avisa el día que
+alguien afloje uno.
+
 ## Estructura
 
 ```
 motor/       cálculo puro, sin DOM: dinero, ciclos, presupuesto, ahorro, metas, fijos, deudas,
-             lectura de avisos, bandeja, aprendizaje, recurrentes y tendencia
+             lectura de avisos, bandeja, aprendizaje, recurrentes, tendencia y fusión
 almacen/     persistencia detrás de 4 métodos, con adaptadores intercambiables
 interfaz/    plantilla, estilos, render y el logo
-pruebas/     node --test, incluidas las pruebas de independencia
+pruebas/     node --test: ejemplos, corpus de avisos e invariantes sobre entrada generada
 herramientas/armar.mjs (build), humo.mjs (navegador) y logo.mjs (íconos)
 puente/      el script de Google Apps Script que lee el correo, con sus instrucciones
 publicar/    la variante para publicar en un enlace privado

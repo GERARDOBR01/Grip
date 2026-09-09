@@ -171,7 +171,7 @@ test("una regla se puede borrar igual de fácil que se creó", () => {
 
 // --- Migración ---
 
-test("un documento v1 de verdad se abre en v2 sin perder un movimiento", () => {
+test("un documento v1 de verdad se abre en la versión actual sin perder un movimiento", () => {
   const v1 = {
     version: 1,
     perfil: { ingresoQuincenal: 800000, cortes: [15] },
@@ -181,13 +181,64 @@ test("un documento v1 de verdad se abre en v2 sin perder un movimiento", () => {
   };
   const r = migrar(v1);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.aplicadas, ["v1→v2"]);
+  assert.deepEqual(r.aplicadas, ["v1→v2", "v2→v3"], "la cadena se aplica entera, en orden");
   assert.equal(r.datos.movimientos["2026-09"][0].monto, 12345);
   assert.equal(r.datos.fijos[0].nombre, "Renta");
   assert.deepEqual(r.datos.bandeja, []);
   assert.deepEqual(r.datos.reglas, []);
+  assert.deepEqual(r.datos.borrados, [], "y las lápidas nacen vacías: no sabemos qué se borró antes");
 });
 
 test("un documento de una versión más nueva sigue sin abrirse", () => {
   assert.equal(migrar({ version: 99 }).ok, false);
+});
+
+// --- Preautorización y cargo final ---
+//
+// Un cargo pendiente y su cargo final NO traen el mismo monto: la gasolinera retiene $100 y
+// cobra $43; el restaurante autoriza sin propina y cobra con ella. La huella incluye el monto,
+// así que sin esto los dos entraban como gastos distintos y la app mentía hacia arriba.
+
+test("el cargo final de una preautorización se reconoce, no se suma a ciegas", () => {
+  const base = conMovimientos(datosDePrueba(), [
+    { fecha: "2026-09-07", monto: 10000, tipo: TIPOS.GASTO, categoria: "transporte", nota: "GASOLINERA SHELL" },
+  ]);
+  const { entrada } = recibirAviso(base, "Cargo por $43.00 MXN en GASOLINERA SHELL el 09/09/2026", "x@banorte.com", "correo", HOY);
+  assert.ok(entrada.reemplaza, "queda apuntando al cargo que va a sustituir");
+});
+
+test("reemplazar deja UN solo movimiento, con el monto final", () => {
+  const base = conMovimientos(datosDePrueba(), [
+    { fecha: "2026-09-07", monto: 10000, tipo: TIPOS.GASTO, categoria: "transporte", nota: "GASOLINERA SHELL" },
+  ]);
+  const { datos, entrada } = recibirAviso(base, "Cargo por $43.00 MXN en GASOLINERA SHELL el 09/09/2026", "x@banorte.com", "correo", HOY);
+  const r = aceptarEntrada(datos, entrada.id, { reemplazar: true }, HOY);
+
+  const movimientos = Object.values(r.datos.movimientos).flat();
+  assert.equal(movimientos.length, 1);
+  assert.equal(movimientos[0].monto, 4300);
+  assert.equal(r.datos.borrados.length, 1, "y el reemplazado deja lápida, para que no resucite");
+});
+
+test("si NO es el mismo consumo, se puede sumar aparte", () => {
+  const base = conMovimientos(datosDePrueba(), [
+    { fecha: "2026-09-07", monto: 10000, tipo: TIPOS.GASTO, categoria: "transporte", nota: "GASOLINERA SHELL" },
+  ]);
+  const { datos, entrada } = recibirAviso(base, "Cargo por $43.00 MXN en GASOLINERA SHELL el 09/09/2026", "x@banorte.com", "correo", HOY);
+  const r = aceptarEntrada(datos, entrada.id, {}, HOY);
+  assert.equal(Object.values(r.datos.movimientos).flat().length, 2, "quedan los dos");
+});
+
+test("un comercio distinto o una fecha lejana NO se confunden con una liquidación", () => {
+  const base = conMovimientos(datosDePrueba(), [
+    { fecha: "2026-09-07", monto: 10000, tipo: TIPOS.GASTO, categoria: "transporte", nota: "GASOLINERA SHELL" },
+  ]);
+  for (const texto of [
+    "Cargo por $43.00 MXN en FARMACIA GDL el 09/09/2026",
+    "Cargo por $43.00 MXN en GASOLINERA SHELL el 27/09/2026",
+    "Cargo por $2,500.00 MXN en GASOLINERA SHELL el 09/09/2026",
+  ]) {
+    const { entrada } = recibirAviso(base, texto, "x@banorte.com", "correo", HOY);
+    assert.equal(entrada.reemplaza, null, `no debería proponer reemplazo: ${texto}`);
+  }
 });

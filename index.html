@@ -627,7 +627,7 @@ function vencimientoEnMes(mes, diaCorte) {
 
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-const VERSION_DATOS = 2;
+const VERSION_DATOS = 3;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -672,6 +672,9 @@ function datosVacios(iso = hoyISO()) {
     bandeja: [],
     // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría".
     reglas: [],
+    // Lápidas. Sin ellas, borrar algo en un dispositivo lo resucitaría al sincronizar con otro
+    // que todavía lo tiene: la unión no sabría distinguir "esto es nuevo" de "esto se borró".
+    borrados: [],
   };
 }
 
@@ -750,7 +753,14 @@ function normalizar(entrada) {
     metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
+    borrados: (Array.isArray(datos.borrados) ? datos.borrados : []).map(normalizarLapida).filter(Boolean),
   };
+}
+
+/** Una lápida: qué se borró y cuándo. Es lo que hace que borrar gane sobre resucitar. */
+function normalizarLapida(t) {
+  if (!t || !t.id) return null;
+  return { id: String(t.id).slice(0, 60), cuando: t.cuando ? String(t.cuando).slice(0, 40) : "" };
 }
 
 const ESTADOS_BANDEJA = { PENDIENTE: "pendiente", ACEPTADO: "aceptado", DESCARTADO: "descartado" };
@@ -774,11 +784,14 @@ function normalizarEntrada(e) {
     confianza: ["alta", "media", "baja"].includes(e.confianza) ? e.confianza : "baja",
     banco: e.banco ? String(e.banco).slice(0, 40) : null,
     comercio: e.comercio ? String(e.comercio).slice(0, 60) : null,
-    ultimos4: /^\d{4}$/.test(e.ultimos4 || "") ? e.ultimos4 : null,
+    // 3 o 4: hay bancos que enmascaran dejando solo tres. Se guarda lo que enseñaron.
+    ultimos4: /^\d{3,4}$/.test(e.ultimos4 || "") ? e.ultimos4 : null,
     origen: Object.values(ORIGENES).includes(e.origen) ? e.origen : ORIGENES.PEGADO,
     aviso: e.aviso ? String(e.aviso).slice(0, 280) : "",
     posibleTraspaso: Boolean(e.posibleTraspaso),
     movimientoId: e.movimientoId || null, // el que se creó al aceptarla, para poder deshacer
+    // Si esto parece el cargo final de una preautorización ya registrada, aquí va cuál.
+    reemplaza: e.reemplaza || null,
   };
 }
 
@@ -903,13 +916,35 @@ function agregarMovimiento(datos, entrada) {
   };
 }
 
-function eliminarMovimiento(datos, id) {
+/**
+ * Borra un movimiento Y deja su lápida.
+ * La lápida no es burocracia: sin ella, el otro dispositivo —que todavía lo tiene— lo
+ * devolvería a la vida en la siguiente sincronización.
+ */
+function eliminarMovimiento(datos, id, cuando = new Date().toISOString()) {
   const movimientos = {};
+  let existia = false;
   for (const [mes, lista] of Object.entries(datos.movimientos)) {
     const filtrada = lista.filter((m) => m.id !== id);
+    if (filtrada.length !== lista.length) existia = true;
     if (filtrada.length) movimientos[mes] = filtrada;
   }
-  return { ...datos, movimientos };
+  const borrados = existia && !(datos.borrados || []).some((t) => t.id === id)
+    ? [{ id, cuando }, ...(datos.borrados || [])]
+    : datos.borrados || [];
+
+  return { ...datos, movimientos, borrados };
+}
+
+/** Entierra cualquier registro con id (un fijo, una meta, una deuda) dejando su lápida. */
+function marcarBorrado(datos, id, cuando = new Date().toISOString()) {
+  if (!id || (datos.borrados || []).some((t) => t.id === id)) return datos;
+  return { ...datos, borrados: [{ id, cuando }, ...(datos.borrados || [])] };
+}
+
+/** Las lápidas viejas se tiran: ya nadie tiene una copia tan antigua que pueda resucitar nada. */
+function purgarBorrados(datos, antesDe) {
+  return { ...datos, borrados: (datos.borrados || []).filter((t) => !t.cuando || t.cuando >= antesDe) };
 }
 
 // ═══ motor/migraciones.js ═══
@@ -934,6 +969,14 @@ const MIGRACIONES = {
     ...datos,
     bandeja: Array.isArray(datos.bandeja) ? datos.bandeja : [],
     reglas: Array.isArray(datos.reglas) ? datos.reglas : [],
+  }),
+
+  // v2 → v3: aparecen las lápidas, que son lo que permite fusionar dos dispositivos sin
+  // resucitar lo borrado. Un documento de v2 no tenía ninguna y esa lista nace vacía: no
+  // sabemos qué se borró antes, y suponerlo sería peor que no saberlo.
+  2: (datos) => ({
+    ...datos,
+    borrados: Array.isArray(datos.borrados) ? datos.borrados : [],
   }),
 };
 
@@ -968,6 +1011,128 @@ function migrar(entrada) {
   }
 
   return { ok: true, motivo: aplicadas.length ? `Datos actualizados: ${aplicadas.join(", ")}.` : "", datos: normalizar(actual), aplicadas };
+}
+
+// ═══ motor/fusion.js ═══
+// Fusión — juntar dos copias del documento sin perder nada de ninguna.
+//
+// Antes, sincronizar elegía UN documento entero por su fecha y descartaba el otro completo.
+// Con un solo dispositivo eso basta; con dos, no. Medido: capturar un gasto en el celular y
+// otro en la PC la misma tarde hacía desaparecer uno de los dos, en silencio. Perder una
+// captura sin avisar es el peor fallo que puede tener esta app.
+//
+// La respuesta no necesita CRDTs ni dependencias, porque estos datos tienen la forma correcta:
+// los movimientos y las entradas de bandeja son registros con `id` propio. Unirlos por id no
+// pierde nada. Lo escalar —el perfil, los topes— sí se resuelve por el más reciente, que es lo
+// razonable cuando no hay forma de saber más.
+//
+// Borrar necesita LÁPIDAS. Sin ellas, borrar un movimiento en el celular lo resucitaría al
+// unirse con la copia vieja de la PC, que todavía lo tiene. Una lápida dice "esto se borró a
+// propósito" y gana sobre cualquier copia que siga teniéndolo.
+
+
+
+/** Cuál de los dos documentos se escribió al último. */
+function selloDe(documento) {
+  return (documento && (documento.actualizado || documento.creado)) || "";
+}
+
+/** Une dos listas de registros con `id`. Si el mismo id está en las dos, gana el del más nuevo. */
+function unirPorId(viejos, nuevos) {
+  const porId = new Map();
+  for (const registro of viejos || []) if (registro && registro.id) porId.set(registro.id, registro);
+  for (const registro of nuevos || []) if (registro && registro.id) porId.set(registro.id, registro);
+  return [...porId.values()];
+}
+
+/**
+ * Une la bandeja. Además de por id, resuelve el estado: si un dispositivo ya lo aceptó o lo
+ * descartó y el otro lo sigue teniendo pendiente, gana el resuelto — lo contrario resucitaría
+ * un aviso que la persona ya atendió.
+ */
+function unirBandeja(viejas, nuevas) {
+  const porId = new Map();
+  for (const entrada of [...(viejas || []), ...(nuevas || [])]) {
+    if (!entrada || !entrada.id) continue;
+    const previa = porId.get(entrada.id);
+    if (!previa) {
+      porId.set(entrada.id, entrada);
+      continue;
+    }
+    const previaResuelta = previa.estado !== ESTADOS_BANDEJA.PENDIENTE;
+    const actualResuelta = entrada.estado !== ESTADOS_BANDEJA.PENDIENTE;
+    porId.set(entrada.id, previaResuelta && !actualResuelta ? previa : entrada);
+  }
+  return [...porId.values()];
+}
+
+/** Todos los movimientos de un documento, en una sola lista. */
+function movimientosPlanos(documento) {
+  return Object.values((documento && documento.movimientos) || []).flat();
+}
+
+/** Los movimientos vueltos a agrupar por mes, ordenados como los deja el modelo. */
+function porMes(lista) {
+  const salida = {};
+  for (const movimiento of lista) {
+    if (!movimiento || !movimiento.fecha) continue;
+    const mes = mesDe(movimiento.fecha);
+    (salida[mes] = salida[mes] || []).push(movimiento);
+  }
+  for (const mes of Object.keys(salida)) {
+    salida[mes].sort((a, b) => comparar(b.fecha, a.fecha) || (a.id < b.id ? 1 : -1));
+  }
+  return salida;
+}
+
+/**
+ * Fusiona dos copias del documento. Nunca pierde un movimiento que exista en alguna de las dos
+ * y que nadie haya borrado a propósito.
+ *
+ * Devuelve un documento nuevo; no muta ninguno de los dos.
+ */
+function fusionar(a, b) {
+  if (!a) return b || null;
+  if (!b) return a;
+
+  // Lo escalar y lo que se edita entero se toma del que se escribió al último.
+  const [viejo, nuevo] = comparar(selloDe(a), selloDe(b)) <= 0 ? [a, b] : [b, a];
+
+  const borrados = unirPorId(viejo.borrados, nuevo.borrados);
+  const enterrados = new Set(borrados.map((t) => t.id));
+  const vivo = (registro) => !enterrados.has(registro.id);
+
+  return {
+    ...nuevo,
+    // Un movimiento existe si estaba en cualquiera de las dos copias y nadie lo borró.
+    movimientos: porMes(unirPorId(movimientosPlanos(viejo), movimientosPlanos(nuevo)).filter(vivo)),
+    bandeja: unirBandeja(viejo.bandeja, nuevo.bandeja).filter(vivo),
+    // Estos también son listas con id: unirlas evita perder un fijo creado en el otro aparato.
+    fijos: unirPorId(viejo.fijos, nuevo.fijos).filter(vivo),
+    deudas: unirPorId(viejo.deudas, nuevo.deudas).filter(vivo),
+    metas: unirPorId(viejo.metas, nuevo.metas).filter(vivo),
+    // Las reglas aprendidas se llevan por clave, no por id: gana la más reciente de cada una.
+    reglas: unirReglas(viejo.reglas, nuevo.reglas),
+    borrados,
+    actualizado: selloDe(nuevo),
+  };
+}
+
+/** Las reglas se identifican por su comercio. Ante la misma clave, gana la que se usó al último. */
+function unirReglas(viejas, nuevas) {
+  const porClave = new Map();
+  for (const regla of [...(viejas || []), ...(nuevas || [])]) {
+    if (!regla || !regla.clave) continue;
+    const previa = porClave.get(regla.clave);
+    if (!previa || comparar(previa.ultima || "", regla.ultima || "") <= 0) porClave.set(regla.clave, regla);
+  }
+  return [...porClave.values()];
+}
+
+/** ¿Hace falta escribir la fusión de vuelta, o los dos lados ya decían lo mismo? */
+function difieren(a, b) {
+  if (!a || !b) return true;
+  return JSON.stringify(a) !== JSON.stringify(b);
 }
 
 // ═══ motor/presupuesto.js ═══
@@ -1821,10 +1986,12 @@ function siPagarasMas(datos, deuda, extra) {
 // propósito: escribir una expresión regular para un correo que nunca vi es inventar. Cada
 // banco se afina cuando llega un correo real suyo, tapado, y con su prueba al lado.
 //
-// IMPORTANTE, y no es un detalle técnico: hay bancos que NUNCA van a estar aquí porque no
-// mandan correo por cada movimiento. Nu es el caso claro: sus avisos viven solo dentro de su
-// app. Para esos, la vía es compartir o pegar el texto a mano. Prometer lo contrario sería
-// venderle a alguien una automatización que no existe.
+// IMPORTANTE, y no es un detalle técnico: no todos los bancos avisan de todo por correo, y
+// decir de más aquí es venderle a alguien una automatización que no existe. Cada banco declara
+// QUÉ avisa, no solo si avisa — porque "manda correos" y "manda correo por cada compra" son
+// cosas distintas, y confundirlas ya me costó afirmar algo falso sobre Nu.
+//
+// `avisa` es una de tres: "todo", "parcial" o "nada"; `nota` dice exactamente qué esperar.
 
 const BANCOS = [
   {
@@ -1832,71 +1999,75 @@ const BANCOS = [
     nombre: "Banorte",
     remitentes: [/@banorte\.com$/i, /banorte/i],
     // Manda alerta por cada operación, pero solo si el titular la activa en su banca en línea.
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "santander",
     nombre: "Santander",
     remitentes: [/@santander\.com\.mx$/i, /santander/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "banamex",
     nombre: "Banamex",
     remitentes: [/@banamex\.com$/i, /@banamex\.com\.mx$/i, /banamex|citibanamex/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "hsbc",
     nombre: "HSBC",
     remitentes: [/@hsbc\.com\.mx$/i, /hsbc/i],
-    // Solo avisa por operaciones grandes. Los gastos chicos NO llegan por correo.
-    avisaCadaMovimiento: false,
-    limiteConocido: 150000, // $1,500.00 — debajo de esto no manda nada
+    // Solo avisa por operaciones grandes: los gastos chicos NO llegan por correo.
+    avisa: "parcial",
+    nota: "solo avisa de operaciones arriba de $1,500 — los gastos chicos no llegan",
+    limiteConocido: 150000,
   },
   {
     id: "mercadopago",
     nombre: "Mercado Pago",
     remitentes: [/@mercadopago\.com(\.mx)?$/i, /mercadopago|mercadolibre/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "didi",
     nombre: "DiDi",
     remitentes: [/@didiglobal\.com$/i, /didi/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "spin",
     nombre: "Spin by OXXO",
     remitentes: [/@spin(byoxxo)?\.com(\.mx)?$/i, /spin.?by.?oxxo|oxxo/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "klar",
     nombre: "Klar",
     remitentes: [/@klar\.mx$/i, /klar/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "stori",
     nombre: "Stori",
     remitentes: [/@storicard\.com$/i, /stori/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "hey",
     nombre: "Hey Banco",
     remitentes: [/@hey\.inc$/i, /hey ?banco/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "nu",
     nombre: "Nu",
     remitentes: [/@nu\.com\.mx$/i, /\bnu\b|nubank/i],
-    // Nu lo dice en su propia documentación: sus notificaciones nunca llegan por correo ni
-    // SMS, solo dentro de su app. Lo que llegue por aquí serán estados de cuenta, no compras.
-    avisaCadaMovimiento: false,
+    // Corregido con un comprobante real en la mano: Nu SÍ manda correo de las transferencias
+    // que envías, con monto, fecha, destinatario y entidad. Lo que no manda es aviso de cada
+    // compra con tarjeta: eso vive solo en su app. Antes aquí decía que no mandaba nada, y era
+    // falso — la app llegó a afirmarlo en pantalla.
+    avisa: "parcial",
+    nota: "manda correo de las transferencias que envías, pero no de las compras con tarjeta",
   },
 ];
 
@@ -1910,9 +2081,14 @@ function bancoDeRemitente(remitente) {
   return null;
 }
 
-/** Los que sí sirven para automatizar. Se usa para no prometer de más en la pantalla. */
+/** Los que avisan de todo por correo: con esos el puente cubre solo. */
 function bancosQueAvisan() {
-  return BANCOS.filter((b) => b.avisaCadaMovimiento);
+  return BANCOS.filter((b) => b.avisa === "todo");
+}
+
+/** Los que avisan a medias. Son los que hay que explicar, no esconder. */
+function bancosParciales() {
+  return BANCOS.filter((b) => b.avisa === "parcial");
 }
 
 /** El nombre como se escribe, a partir del id que se guardó. */
@@ -1947,6 +2123,12 @@ const CONFIANZAS = { ALTA: "alta", MEDIA: "media", BAJA: "baja" };
 /** A cuántos días de hoy deja de ser creíble la fecha de un aviso. */
 const DIAS_RAZONABLES = 60;
 
+/** Días que puede tardar una preautorización en liquidarse. Los bancos documentan hasta 5. */
+const DIAS_LIQUIDACION = 5;
+
+/** Cuánto puede moverse el monto entre la preautorización y el cargo final. */
+const MARGEN_LIQUIDACION = 0.6;
+
 const MESES_ES = {
   ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6,
   jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12,
@@ -1970,13 +2152,44 @@ const PATRON_MONTO = new RegExp(
 const CONTEXTO_AJENO = /(saldo|disponible|l[íi]mite|l[íi]nea de cr[ée]dito|puntos|cashback|pago m[íi]nimo|para no generar intereses|meses sin intereses|promoci[óo]n|aprovecha|participantes|felicidades)/i;
 const CONTEXTO_PROPIO = /(monto|importe|cargo|compra|total|pago|retiro|abono|dep[óo]sito|transferencia|env[íi]o|cobro|consumo)/i;
 
-const PISTAS_INGRESO = /(recibiste|recibida|recibido|te depositaron|te enviaron|abono|dep[óo]sito|devoluci[óo]n|reembolso|bonificaci[óo]n|cancelaci[óo]n de cargo|nómina|n[óo]mina)/i;
-const PISTAS_GASTO = /(compra|cargo|retiro|disposici[óo]n|pagaste|enviaste|realizaste un pago|transferencia enviada|spei enviado|domiciliaci[óo]n)/i;
+const PISTAS_INGRESO = /(recibiste|recibida|recibido|te depositaron|te enviaron|abono(?: v[íi]a spei)?|dep[óo]sito|devoluci[óo]n|reembolso|bonificaci[óo]n|cancelaci[óo]n de cargo|n[óo]mina)/i;
+const PISTAS_GASTO = /(compra|cargo|retiro|disposici[óo]n|pagaste|enviaste|se envi[óo]|transferencia (?:enviada|para)|spei enviado|realizaste un pago|domiciliaci[óo]n)/i;
 const PISTAS_TRASPASO = /(entre tus cuentas|entre cuentas propias|a tu cuenta|traspaso|cuenta propia)/i;
+
+/**
+ * Canoniza el texto ANTES de intentar leerlo.
+ *
+ * Es el paso que separa un lector frágil de uno robusto, y no es teórico: medido contra
+ * formatos reales, sin esto la tarjeta `••••4574` no se extrae Y ADEMÁS se cuela dentro del
+ * nombre del comercio; un salto suave de quoted-printable parte el nombre en `"OX="`; y las
+ * comillas tipográficas se arrastran hasta el historial. Con una sola pasada, todo lo que
+ * viene después lee texto predecible.
+ *
+ * Es idempotente a propósito: canonizar dos veces da lo mismo que canonizar una.
+ */
+function canonizar(entrada) {
+  return String(entrada || "")
+    // Quoted-printable: el salto suave parte palabras a los 76 caracteres.
+    .replace(/=\r?\n/g, "")
+    .replace(/=([0-9A-F]{2})/gi, (crudo, hex) => {
+      const codigo = parseInt(hex, 16);
+      return codigo >= 32 && codigo < 127 ? String.fromCharCode(codigo) : crudo;
+    })
+    // Caracteres invisibles que algunos correos meten entre letras.
+    .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "")
+    // Espacios que no son el espacio normal.
+    .replace(/[\u00A0\u2007\u202F\u2009\u2002-\u2006]/g, " ")
+    // Comillas y rayas tipográficas: se van al historial si no se normalizan.
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    // Enmascarado de tarjetas: cada banco usa su propia viñeta.
+    .replace(/[\u2022\u00B7\u25CF\u2219\u2043\u2027]/g, "*");
+}
 
 /** Quita el HTML y deja texto plano. Los avisos de banco llegan casi siempre en HTML. */
 function limpiarAviso(entrada) {
-  return String(entrada || "")
+  return canonizar(entrada)
     .replace(/<(style|script|head)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<br\s*\/?>|<\/(p|div|tr|td|li|h\d)>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
@@ -2064,20 +2277,20 @@ function fechaDelAviso(texto, hoy = hoyISO()) {
     if (f) return { iso: f, explicita: true };
   }
 
-  const conLetra = texto.match(/\b(\d{1,2})\s*(?:de\s+)?[\/\- ]?\s*([a-záéíóú]{3,10})\.?\s*(?:de\s+)?[\/\- ]?\s*(\d{2,4})?\b/i);
-  if (conLetra) {
-    const mes = MESES_ES[conLetra[2].slice(0, 3).toLowerCase()];
-    if (mes) {
-      const anio = conLetra[3] ? anioCompleto(conLetra[3], hoy) : Number(hoy.slice(0, 4));
-      const f = fechaValida(anio, mes, Number(conLetra[1]));
-      if (f) return { iso: f, explicita: true };
-    }
+  // Se recorren TODOS los candidatos, no solo el primero. Medido contra correos reales, el
+  // primer candidato suele ser la propia etiqueta —"07... Fecha"— y la fecha buena es la
+  // siguiente. Rendirse con el primero mandaba el gasto a la quincena equivocada.
+  for (const c of texto.matchAll(/\b(\d{1,2})\s*(?:de\s+)?[\/\- ]?\s*([a-záéíóúñ]{3,10})\.?\s*(?:de\s+)?[\/\- ]?\s*(\d{2,4})?\b/gi)) {
+    const mes = MESES_ES[c[2].slice(0, 3).toLowerCase()];
+    if (!mes) continue;
+    const anio = c[3] ? anioCompleto(c[3], hoy) : Number(hoy.slice(0, 4));
+    const f = fechaValida(anio, mes, Number(c[1]));
+    if (f) return { iso: f, explicita: true };
   }
 
   // En México el orden es día/mes/año. Asumir el orden gringo movería gastos de mes.
-  const numerica = texto.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/);
-  if (numerica) {
-    const f = fechaValida(anioCompleto(numerica[3], hoy), Number(numerica[2]), Number(numerica[1]));
+  for (const c of texto.matchAll(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/g)) {
+    const f = fechaValida(anioCompleto(c[3], hoy), Number(c[2]), Number(c[1]));
     if (f) return { iso: f, explicita: true };
   }
 
@@ -2086,16 +2299,34 @@ function fechaDelAviso(texto, hoy = hoyISO()) {
 
 /** Los últimos 4 de la tarjeta. Es lo único de la tarjeta que se guarda, nunca más. */
 function tarjetaDelAviso(texto) {
-  const m = texto.match(/(?:\*{2,}|x{2,}|terminaci[óo]n(?:\s+en)?|terminada en|final)\s*[:\-]?\s*(\d{4})\b/i);
-  return m ? m[1] : null;
+  const m = texto.match(/(?:\*{2,}|x{2,}|terminaci[óo]n(?:\s+en)?|terminada en|final)\s*[:\-]?\s*(\d{3,4})\b/i);
+  return m ? m[1] : null; // si el banco enseñó 3 dígitos, se guardan 3: rellenar sería inventar
 }
 
-const RUIDO_COMERCIO = /^(el|la|los|las|un|una|tu|su|de|del|en|por|con|monto|importe|cargo|compra|pago|fecha|hora|tarjeta|cuenta|total|mxn|pesos)$/i;
+const RUIDO_COMERCIO = /^(el|la|los|las|un|una|tu|su|de|del|en|por|con|monto|importe|cargo|compra|pago|fecha|hora|tarjeta|cuenta|total|mxn|pesos|(?:tu|mi|la|su) (?:cuenta|tarjeta)|la operaci[óo]n|operaci[óo]n|transferencia|dep[óo]sito|movimiento)$/i;
 
 /** El comercio donde se gastó. Sale de las frases que todos los bancos comparten. */
 function comercioDelAviso(texto) {
-  const nombrado = texto.match(/(?:comercio|establecimiento|negocio|beneficiario|destinatario|concepto)\s*[:\-]\s*([^\n|]{2,60})/i);
-  if (nombrado) return recortarComercio(nombrado[1]);
+  // Se prueban TODAS las etiquetas, no solo la primera. En el comprobante de Nu, "Concepto:
+  // Transferencia" va antes que "Nombre: Persona": quedarse con la primera devolvía una
+  // palabra vacía y se perdía el destinatario, que es el dato que sirve.
+  //
+  // Y los dos puntos son opcionales: Banamex manda la etiqueta en una celda y el valor en la
+  // siguiente, y al aplanar el HTML quedan en dos renglones sin ningún separador.
+  // Dos clases de etiqueta, y la diferencia importa:
+  //   · las inequívocas ("Establecimiento") pueden venir sin dos puntos, en la celda de al lado;
+  //   · las genéricas ("Nombre", "Entidad") EXIGEN dos puntos — si no, "NOMBRE APELLIDO" del
+  //     titular se leería como si fuera el comercio, y el saludo "Hola, Nombre" también.
+  const etiquetas = new RegExp(
+    "(?:(?:comercio|establecimiento|negocio|beneficiario|destinatario|banco\\s+emisor)\\s*[:\\-]?\\s*\\n?\\s*" +
+    "|(?:concepto(?:\\s+de\\s+pago)?|entidad|nombre)\\s*[:\\-]\\s*)" +
+    "([^\\n|]{2,90})",
+    "gi",
+  );
+  for (const c of texto.matchAll(etiquetas)) {
+    const recortado = recortarComercio(c[1]);
+    if (recortado) return recortado;
+  }
 
   // El monto suele meterse entre "compra" y "en", así que hay que saltárselo. Y el nombre
   // termina donde empieza a hablarse de la tarjeta o de la fecha, no en el primer punto:
@@ -2114,8 +2345,13 @@ function comercioDelAviso(texto) {
 function recortarComercio(crudo) {
   const limpio = String(crudo)
     .replace(/\s+/g, " ")
+    // El nombre termina donde empieza a hablarse de la tarjeta, aunque no lo haya dicho antes.
+    .replace(/\s*(?:terminaci[óo]n|terminada|\*{2,}|x{4,})\b.*$/i, "")
     .replace(/\s+(?:con|el|por|de)\s+(?:tu |su |la |el )?(?:tarjeta|cuenta|monto|importe|fecha|hora|folio|referencia)\b.*$/i, "")
-    .replace(/[\s.,;:-]+$/, "")
+    // La poda de adornos va AL FINAL: quitar la comilla antes deja la de cierre huérfana
+    // cuando después se recorta la raya que venía detrás.
+    .replace(/[\s.,;:\-]+$/, "")
+    .replace(/^["'*\s]+|["'*\s]+$/g, "")
     .trim();
   if (!limpio || RUIDO_COMERCIO.test(limpio)) return null;
   if (!/[a-záéíóúñ]{2}/i.test(limpio)) return null; // referencias y cifras sueltas no son un nombre
@@ -2283,18 +2519,48 @@ function posibleDuplicado(datos, lectura) {
 
   const clave = normalizarComercio(lectura.comercio);
   const { fecha, monto } = lectura.movimiento;
-  const desde = sumarDias(fecha, -1);
-  const hasta = sumarDias(fecha, 1);
 
-  for (const mes of new Set([desde.slice(0, 7), fecha.slice(0, 7), hasta.slice(0, 7)])) {
+  // Se miran los meses que puedan tocar la ventana, no solo el del día.
+  const meses = new Set();
+  for (let d = -DIAS_LIQUIDACION; d <= DIAS_LIQUIDACION; d++) meses.add(sumarDias(fecha, d).slice(0, 7));
+
+  let parecido = null;
+  for (const mes of meses) {
     for (const m of datos.movimientos[mes] || []) {
-      if (m.monto !== monto || Math.abs(diasEntre(m.fecha, fecha)) > 1) continue;
+      const dias = Math.abs(diasEntre(m.fecha, fecha));
+      if (dias > DIAS_LIQUIDACION) continue;
       if (clave && normalizarComercio(m.nota) !== clave) continue;
-      return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
-        "Ya tienes un movimiento igual por estos días. ¿Es el mismo cargo?", { motivo: "parecido", id: m.id });
+
+      // Mismo monto y casi el mismo día: es literalmente el mismo cargo.
+      if (m.monto === monto && dias <= 1) {
+        return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+          "Ya tienes un movimiento igual por estos días. ¿Es el mismo cargo?", { motivo: "parecido", id: m.id });
+      }
+
+      // Mismo comercio, pocos días, MONTO DISTINTO: el patrón de una preautorización que se
+      // liquida. La gasolinera retiene $100 y cobra $43; el restaurante autoriza sin propina y
+      // cobra con ella. Antes esto entraba como un segundo gasto y la app mentía hacia arriba.
+      if (clave && m.monto !== monto && esLiquidacionDe(m.monto, monto)) {
+        parecido = parecido || veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+          `Parece el cargo final de ${formatear(m.monto)} que ya tenías de ${lectura.comercio}. ` +
+          `Si lo es, reemplázalo en vez de sumar otro.`,
+          { motivo: "liquidacion", id: m.id, montoPrevio: m.monto, montoNuevo: monto });
+      }
     }
   }
-  return null;
+  return parecido;
+}
+
+/**
+ * ¿El segundo monto puede ser la liquidación del primero?
+ * Se acepta cualquier ajuste dentro de un margen amplio en cualquier dirección: la
+ * preautorización puede quedar por encima (gasolinera) o por debajo (propina) del cargo real.
+ */
+function esLiquidacionDe(previo, nuevo) {
+  if (!previo || !nuevo) return false;
+  const mayor = Math.max(previo, nuevo);
+  const menor = Math.min(previo, nuevo);
+  return menor / mayor >= 1 - MARGEN_LIQUIDACION;
 }
 
 // ═══ motor/aprendizaje.js ═══
@@ -2737,6 +3003,8 @@ function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, is
     ultimos4: lectura.ultimos4,
     origen,
     posibleTraspaso: lectura.posibleTraspaso,
+    // Un cargo final NO es un gasto nuevo: sustituye a la preautorización que ya está.
+    reemplaza: duplicado && duplicado.datos.motivo === "liquidacion" ? duplicado.datos.id : null,
     aviso: [duplicado ? duplicado.motivo : "", ...razones].filter(Boolean).join(" "),
   });
 
@@ -2775,8 +3043,13 @@ function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
     return { datos, movimiento: null, error: "Esa entrada ya estaba resuelta." };
   }
 
-  const propuesto = { ...entrada.movimiento, ...cambios };
-  const { datos: conMovimiento, movimiento, error } = agregarMovimiento(datos, propuesto);
+  const { reemplazar, ...camposCambiados } = cambios;
+  // Aceptar reemplazando quita antes la preautorización: si no, el mismo consumo quedaría
+  // contado dos veces y la app mentiría hacia arriba, que es la peor dirección.
+  const partida = reemplazar && entrada.reemplaza ? eliminarMovimiento(datos, entrada.reemplaza) : datos;
+
+  const propuesto = { ...entrada.movimiento, ...camposCambiados };
+  const { datos: conMovimiento, movimiento, error } = agregarMovimiento(partida, propuesto);
   if (error) return { datos, movimiento: null, error };
 
   // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó.
@@ -2789,6 +3062,8 @@ function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
       ...aprendido,
       bandeja: aprendido.bandeja.map((e) =>
         e.id === id ? { ...e, estado: ESTADOS_BANDEJA.ACEPTADO, movimientoId: movimiento.id } : e),
+      // La lápida del reemplazado viaja en `partida`; conservarla evita que el otro
+      // dispositivo lo resucite en la siguiente sincronización.
     },
     movimiento,
     error: null,
@@ -3710,7 +3985,11 @@ function tarjetaEntrada(entrada) {
     ${alerta}
     ${fichas}
     <div class="acciones-fila">
-      <button class="boton chico" data-accion="aceptar-entrada" data-id="${esc(entrada.id)}">Aceptar</button>
+      ${entrada.reemplaza
+        ? `<button class="boton chico" data-accion="reemplazar-entrada" data-id="${esc(entrada.id)}">Reemplazar</button>`
+        : ""}
+      <button class="boton chico${entrada.reemplaza ? " tenue" : ""}" data-accion="aceptar-entrada" data-id="${esc(entrada.id)}">
+        ${entrada.reemplaza ? "Sumar aparte" : "Aceptar"}</button>
       <button class="boton chico tenue" data-accion="editar-entrada" data-id="${esc(entrada.id)}">Editar</button>
       <button class="boton chico tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">Descartar</button>
     </div>
@@ -4135,13 +4414,11 @@ function vistaAjustes() {
          </div>
          <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
          ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
-         <div class="rotulo" style="margin-top:10px"><b>Llegan por correo:</b>
+         <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
-         <div class="rotulo aviso-linea"><b>No llegan:</b>
-           ${esc(BANCOS.filter((b) => !b.avisaCadaMovimiento).map((b) => b.nombre).join(", "))} —
-           ${esc(BANCOS.find((b) => b.id === "nu").nombre)} solo notifica dentro de su app, y
-           ${esc(BANCOS.find((b) => b.id === "hsbc").nombre)} solo avisa arriba de $1,500.
-           Para esos, compártele el aviso a Grip desde el celular.</div>
+         ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
+           <b>${esc(b.nombre)}:</b> ${esc(b.nota)}. Para lo que no llegue, compártele el aviso a
+           Grip desde el celular.</div>`).join("")}
        </div>`
     : "";
 
@@ -4338,6 +4615,10 @@ function opcionesCategorias() {
 /** Días que se conserva un aviso ya resuelto antes de tirarlo. */
 const DIAS_DE_BANDEJA = 60;
 
+/** Días que se conserva una lápida. Más que un aviso, a propósito: tiene que sobrevivir a que
+ *  el otro dispositivo pase meses sin abrirse, o resucitaría lo que se borró aquí. */
+const DIAS_DE_LAPIDA = 180;
+
 /**
  * Vacía de la bandeja lo ya resuelto y viejo, cada vez que se abre la app.
  *
@@ -4351,8 +4632,12 @@ const DIAS_DE_BANDEJA = 60;
 async function tirarLoViejo() {
   if (!app.almacen || app.bloqueado) return;
   const antes = (app.datos.bandeja || []).length;
-  const limpio = purgarBandeja(app.datos, sumarDias(app.hoy, -DIAS_DE_BANDEJA));
-  if (limpio.bandeja.length === antes) return;
+  const limpio = purgarBorrados(
+    purgarBandeja(app.datos, sumarDias(app.hoy, -DIAS_DE_BANDEJA)),
+    sumarDias(app.hoy, -DIAS_DE_LAPIDA),
+  );
+  const lapidasAntes = (app.datos.borrados || []).length;
+  if (limpio.bandeja.length === antes && limpio.borrados.length === lapidasAntes) return;
   try {
     app.datos = await app.almacen.guardar(limpio);
   } catch (e) {
@@ -4545,9 +4830,14 @@ const acciones = {
     render();
   },
 
-  async "aceptar-entrada"(el) {
+  async "reemplazar-entrada"(el) {
+    return acciones["aceptar-entrada"](el, true);
+  },
+
+  async "aceptar-entrada"(el, reemplazar = false) {
     const id = el.dataset.id;
     const cambios = app.eleccion[id] !== undefined ? { categoria: app.eleccion[id] } : {};
+    if (reemplazar) cambios.reemplazar = true;
     const { datos, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
     if (error) {
       app.aviso = error;
@@ -4769,7 +5059,10 @@ const acciones = {
       mensaje: "Lo que ya apartaste no se borra: sigue contando como ahorro.",
       textoBoton: "Sí, borrar la meta",
       alConfirmar: async () => {
-        await guardar({ ...app.datos, metas: app.datos.metas.filter((m) => m.id !== el.dataset.id) });
+        await guardar(marcarBorrado(
+          { ...app.datos, metas: app.datos.metas.filter((m) => m.id !== el.dataset.id) },
+          el.dataset.id,
+        ));
       },
     });
   },
@@ -4805,7 +5098,10 @@ const acciones = {
       mensaje: "Deja de contar en lo comprometido del mes. Los pagos que ya registraste no se borran.",
       textoBoton: "Sí, borrar el fijo",
       alConfirmar: async () => {
-        await guardar({ ...app.datos, fijos: app.datos.fijos.filter((f) => f.id !== el.dataset.id) });
+        await guardar(marcarBorrado(
+          { ...app.datos, fijos: app.datos.fijos.filter((f) => f.id !== el.dataset.id) },
+          el.dataset.id,
+        ));
       },
     });
   },
@@ -4817,7 +5113,10 @@ const acciones = {
       mensaje: "Los pagos que le registraste siguen en tu historial como gastos.",
       textoBoton: "Sí, borrar la deuda",
       alConfirmar: async () => {
-        await guardar({ ...app.datos, deudas: app.datos.deudas.filter((d) => d.id !== el.dataset.id) });
+        await guardar(marcarBorrado(
+          { ...app.datos, deudas: app.datos.deudas.filter((d) => d.id !== el.dataset.id) },
+          el.dataset.id,
+        ));
       },
     });
   },

@@ -11,7 +11,7 @@ import { formatear, aCentavos } from "../motor/dinero.js";
 import { hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
-  ORIGENES,
+  ORIGENES, marcarBorrado, purgarBorrados,
 } from "../motor/modelo.js";
 import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presupuesto.js";
 import { panelHoy, capacidadPorCiclo, estadoColchon, ahorroLibre } from "../motor/ahorro.js";
@@ -25,7 +25,7 @@ import {
 import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
-import { nombreDeBanco, BANCOS, bancosQueAvisan } from "../motor/reglas-banco.js";
+import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
 import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
 import { exportar, importar, nombreDeRespaldo } from "../almacen/archivo.js";
 
@@ -343,7 +343,11 @@ function tarjetaEntrada(entrada) {
     ${alerta}
     ${fichas}
     <div class="acciones-fila">
-      <button class="boton chico" data-accion="aceptar-entrada" data-id="${esc(entrada.id)}">Aceptar</button>
+      ${entrada.reemplaza
+        ? `<button class="boton chico" data-accion="reemplazar-entrada" data-id="${esc(entrada.id)}">Reemplazar</button>`
+        : ""}
+      <button class="boton chico${entrada.reemplaza ? " tenue" : ""}" data-accion="aceptar-entrada" data-id="${esc(entrada.id)}">
+        ${entrada.reemplaza ? "Sumar aparte" : "Aceptar"}</button>
       <button class="boton chico tenue" data-accion="editar-entrada" data-id="${esc(entrada.id)}">Editar</button>
       <button class="boton chico tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">Descartar</button>
     </div>
@@ -768,13 +772,11 @@ function vistaAjustes() {
          </div>
          <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
          ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
-         <div class="rotulo" style="margin-top:10px"><b>Llegan por correo:</b>
+         <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
-         <div class="rotulo aviso-linea"><b>No llegan:</b>
-           ${esc(BANCOS.filter((b) => !b.avisaCadaMovimiento).map((b) => b.nombre).join(", "))} —
-           ${esc(BANCOS.find((b) => b.id === "nu").nombre)} solo notifica dentro de su app, y
-           ${esc(BANCOS.find((b) => b.id === "hsbc").nombre)} solo avisa arriba de $1,500.
-           Para esos, compártele el aviso a Grip desde el celular.</div>
+         ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
+           <b>${esc(b.nombre)}:</b> ${esc(b.nota)}. Para lo que no llegue, compártele el aviso a
+           Grip desde el celular.</div>`).join("")}
        </div>`
     : "";
 
@@ -971,6 +973,10 @@ function opcionesCategorias() {
 /** Días que se conserva un aviso ya resuelto antes de tirarlo. */
 const DIAS_DE_BANDEJA = 60;
 
+/** Días que se conserva una lápida. Más que un aviso, a propósito: tiene que sobrevivir a que
+ *  el otro dispositivo pase meses sin abrirse, o resucitaría lo que se borró aquí. */
+const DIAS_DE_LAPIDA = 180;
+
 /**
  * Vacía de la bandeja lo ya resuelto y viejo, cada vez que se abre la app.
  *
@@ -984,8 +990,12 @@ const DIAS_DE_BANDEJA = 60;
 async function tirarLoViejo() {
   if (!app.almacen || app.bloqueado) return;
   const antes = (app.datos.bandeja || []).length;
-  const limpio = purgarBandeja(app.datos, sumarDias(app.hoy, -DIAS_DE_BANDEJA));
-  if (limpio.bandeja.length === antes) return;
+  const limpio = purgarBorrados(
+    purgarBandeja(app.datos, sumarDias(app.hoy, -DIAS_DE_BANDEJA)),
+    sumarDias(app.hoy, -DIAS_DE_LAPIDA),
+  );
+  const lapidasAntes = (app.datos.borrados || []).length;
+  if (limpio.bandeja.length === antes && limpio.borrados.length === lapidasAntes) return;
   try {
     app.datos = await app.almacen.guardar(limpio);
   } catch (e) {
@@ -1178,9 +1188,14 @@ const acciones = {
     render();
   },
 
-  async "aceptar-entrada"(el) {
+  async "reemplazar-entrada"(el) {
+    return acciones["aceptar-entrada"](el, true);
+  },
+
+  async "aceptar-entrada"(el, reemplazar = false) {
     const id = el.dataset.id;
     const cambios = app.eleccion[id] !== undefined ? { categoria: app.eleccion[id] } : {};
+    if (reemplazar) cambios.reemplazar = true;
     const { datos, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
     if (error) {
       app.aviso = error;
@@ -1402,7 +1417,10 @@ const acciones = {
       mensaje: "Lo que ya apartaste no se borra: sigue contando como ahorro.",
       textoBoton: "Sí, borrar la meta",
       alConfirmar: async () => {
-        await guardar({ ...app.datos, metas: app.datos.metas.filter((m) => m.id !== el.dataset.id) });
+        await guardar(marcarBorrado(
+          { ...app.datos, metas: app.datos.metas.filter((m) => m.id !== el.dataset.id) },
+          el.dataset.id,
+        ));
       },
     });
   },
@@ -1438,7 +1456,10 @@ const acciones = {
       mensaje: "Deja de contar en lo comprometido del mes. Los pagos que ya registraste no se borran.",
       textoBoton: "Sí, borrar el fijo",
       alConfirmar: async () => {
-        await guardar({ ...app.datos, fijos: app.datos.fijos.filter((f) => f.id !== el.dataset.id) });
+        await guardar(marcarBorrado(
+          { ...app.datos, fijos: app.datos.fijos.filter((f) => f.id !== el.dataset.id) },
+          el.dataset.id,
+        ));
       },
     });
   },
@@ -1450,7 +1471,10 @@ const acciones = {
       mensaje: "Los pagos que le registraste siguen en tu historial como gastos.",
       textoBoton: "Sí, borrar la deuda",
       alConfirmar: async () => {
-        await guardar({ ...app.datos, deudas: app.datos.deudas.filter((d) => d.id !== el.dataset.id) });
+        await guardar(marcarBorrado(
+          { ...app.datos, deudas: app.datos.deudas.filter((d) => d.id !== el.dataset.id) },
+          el.dataset.id,
+        ));
       },
     });
   },

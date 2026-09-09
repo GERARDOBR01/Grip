@@ -13,7 +13,7 @@
 // Funciona con cualquier banco, reconocido o no. La tabla de reglas-banco.js sube la
 // confianza; su ausencia no impide leer.
 
-import { aCentavos } from "./dinero.js";
+import { aCentavos, formatear } from "./dinero.js";
 import { hoyISO, armarISO, diasEnMes, sumarDias, diasEntre } from "./ciclo.js";
 import { TIPOS } from "./modelo.js";
 import { veredicto, sinDatos, ESTADOS, SEVERIDADES } from "./veredicto.js";
@@ -23,6 +23,12 @@ export const CONFIANZAS = { ALTA: "alta", MEDIA: "media", BAJA: "baja" };
 
 /** A cuántos días de hoy deja de ser creíble la fecha de un aviso. */
 const DIAS_RAZONABLES = 60;
+
+/** Días que puede tardar una preautorización en liquidarse. Los bancos documentan hasta 5. */
+const DIAS_LIQUIDACION = 5;
+
+/** Cuánto puede moverse el monto entre la preautorización y el cargo final. */
+const MARGEN_LIQUIDACION = 0.6;
 
 const MESES_ES = {
   ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6,
@@ -47,13 +53,44 @@ const PATRON_MONTO = new RegExp(
 const CONTEXTO_AJENO = /(saldo|disponible|l[íi]mite|l[íi]nea de cr[ée]dito|puntos|cashback|pago m[íi]nimo|para no generar intereses|meses sin intereses|promoci[óo]n|aprovecha|participantes|felicidades)/i;
 const CONTEXTO_PROPIO = /(monto|importe|cargo|compra|total|pago|retiro|abono|dep[óo]sito|transferencia|env[íi]o|cobro|consumo)/i;
 
-const PISTAS_INGRESO = /(recibiste|recibida|recibido|te depositaron|te enviaron|abono|dep[óo]sito|devoluci[óo]n|reembolso|bonificaci[óo]n|cancelaci[óo]n de cargo|nómina|n[óo]mina)/i;
-const PISTAS_GASTO = /(compra|cargo|retiro|disposici[óo]n|pagaste|enviaste|realizaste un pago|transferencia enviada|spei enviado|domiciliaci[óo]n)/i;
+const PISTAS_INGRESO = /(recibiste|recibida|recibido|te depositaron|te enviaron|abono(?: v[íi]a spei)?|dep[óo]sito|devoluci[óo]n|reembolso|bonificaci[óo]n|cancelaci[óo]n de cargo|n[óo]mina)/i;
+const PISTAS_GASTO = /(compra|cargo|retiro|disposici[óo]n|pagaste|enviaste|se envi[óo]|transferencia (?:enviada|para)|spei enviado|realizaste un pago|domiciliaci[óo]n)/i;
 const PISTAS_TRASPASO = /(entre tus cuentas|entre cuentas propias|a tu cuenta|traspaso|cuenta propia)/i;
+
+/**
+ * Canoniza el texto ANTES de intentar leerlo.
+ *
+ * Es el paso que separa un lector frágil de uno robusto, y no es teórico: medido contra
+ * formatos reales, sin esto la tarjeta `••••4574` no se extrae Y ADEMÁS se cuela dentro del
+ * nombre del comercio; un salto suave de quoted-printable parte el nombre en `"OX="`; y las
+ * comillas tipográficas se arrastran hasta el historial. Con una sola pasada, todo lo que
+ * viene después lee texto predecible.
+ *
+ * Es idempotente a propósito: canonizar dos veces da lo mismo que canonizar una.
+ */
+export function canonizar(entrada) {
+  return String(entrada || "")
+    // Quoted-printable: el salto suave parte palabras a los 76 caracteres.
+    .replace(/=\r?\n/g, "")
+    .replace(/=([0-9A-F]{2})/gi, (crudo, hex) => {
+      const codigo = parseInt(hex, 16);
+      return codigo >= 32 && codigo < 127 ? String.fromCharCode(codigo) : crudo;
+    })
+    // Caracteres invisibles que algunos correos meten entre letras.
+    .replace(/[\u200B-\u200D\uFEFF\u00AD]/g, "")
+    // Espacios que no son el espacio normal.
+    .replace(/[\u00A0\u2007\u202F\u2009\u2002-\u2006]/g, " ")
+    // Comillas y rayas tipográficas: se van al historial si no se normalizan.
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/[\u2010-\u2015\u2212]/g, "-")
+    // Enmascarado de tarjetas: cada banco usa su propia viñeta.
+    .replace(/[\u2022\u00B7\u25CF\u2219\u2043\u2027]/g, "*");
+}
 
 /** Quita el HTML y deja texto plano. Los avisos de banco llegan casi siempre en HTML. */
 export function limpiarAviso(entrada) {
-  return String(entrada || "")
+  return canonizar(entrada)
     .replace(/<(style|script|head)[\s\S]*?<\/\1>/gi, " ")
     .replace(/<br\s*\/?>|<\/(p|div|tr|td|li|h\d)>/gi, "\n")
     .replace(/<[^>]+>/g, " ")
@@ -141,20 +178,20 @@ export function fechaDelAviso(texto, hoy = hoyISO()) {
     if (f) return { iso: f, explicita: true };
   }
 
-  const conLetra = texto.match(/\b(\d{1,2})\s*(?:de\s+)?[\/\- ]?\s*([a-záéíóú]{3,10})\.?\s*(?:de\s+)?[\/\- ]?\s*(\d{2,4})?\b/i);
-  if (conLetra) {
-    const mes = MESES_ES[conLetra[2].slice(0, 3).toLowerCase()];
-    if (mes) {
-      const anio = conLetra[3] ? anioCompleto(conLetra[3], hoy) : Number(hoy.slice(0, 4));
-      const f = fechaValida(anio, mes, Number(conLetra[1]));
-      if (f) return { iso: f, explicita: true };
-    }
+  // Se recorren TODOS los candidatos, no solo el primero. Medido contra correos reales, el
+  // primer candidato suele ser la propia etiqueta —"07... Fecha"— y la fecha buena es la
+  // siguiente. Rendirse con el primero mandaba el gasto a la quincena equivocada.
+  for (const c of texto.matchAll(/\b(\d{1,2})\s*(?:de\s+)?[\/\- ]?\s*([a-záéíóúñ]{3,10})\.?\s*(?:de\s+)?[\/\- ]?\s*(\d{2,4})?\b/gi)) {
+    const mes = MESES_ES[c[2].slice(0, 3).toLowerCase()];
+    if (!mes) continue;
+    const anio = c[3] ? anioCompleto(c[3], hoy) : Number(hoy.slice(0, 4));
+    const f = fechaValida(anio, mes, Number(c[1]));
+    if (f) return { iso: f, explicita: true };
   }
 
   // En México el orden es día/mes/año. Asumir el orden gringo movería gastos de mes.
-  const numerica = texto.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/);
-  if (numerica) {
-    const f = fechaValida(anioCompleto(numerica[3], hoy), Number(numerica[2]), Number(numerica[1]));
+  for (const c of texto.matchAll(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/g)) {
+    const f = fechaValida(anioCompleto(c[3], hoy), Number(c[2]), Number(c[1]));
     if (f) return { iso: f, explicita: true };
   }
 
@@ -163,16 +200,34 @@ export function fechaDelAviso(texto, hoy = hoyISO()) {
 
 /** Los últimos 4 de la tarjeta. Es lo único de la tarjeta que se guarda, nunca más. */
 export function tarjetaDelAviso(texto) {
-  const m = texto.match(/(?:\*{2,}|x{2,}|terminaci[óo]n(?:\s+en)?|terminada en|final)\s*[:\-]?\s*(\d{4})\b/i);
-  return m ? m[1] : null;
+  const m = texto.match(/(?:\*{2,}|x{2,}|terminaci[óo]n(?:\s+en)?|terminada en|final)\s*[:\-]?\s*(\d{3,4})\b/i);
+  return m ? m[1] : null; // si el banco enseñó 3 dígitos, se guardan 3: rellenar sería inventar
 }
 
-const RUIDO_COMERCIO = /^(el|la|los|las|un|una|tu|su|de|del|en|por|con|monto|importe|cargo|compra|pago|fecha|hora|tarjeta|cuenta|total|mxn|pesos)$/i;
+const RUIDO_COMERCIO = /^(el|la|los|las|un|una|tu|su|de|del|en|por|con|monto|importe|cargo|compra|pago|fecha|hora|tarjeta|cuenta|total|mxn|pesos|(?:tu|mi|la|su) (?:cuenta|tarjeta)|la operaci[óo]n|operaci[óo]n|transferencia|dep[óo]sito|movimiento)$/i;
 
 /** El comercio donde se gastó. Sale de las frases que todos los bancos comparten. */
 export function comercioDelAviso(texto) {
-  const nombrado = texto.match(/(?:comercio|establecimiento|negocio|beneficiario|destinatario|concepto)\s*[:\-]\s*([^\n|]{2,60})/i);
-  if (nombrado) return recortarComercio(nombrado[1]);
+  // Se prueban TODAS las etiquetas, no solo la primera. En el comprobante de Nu, "Concepto:
+  // Transferencia" va antes que "Nombre: Persona": quedarse con la primera devolvía una
+  // palabra vacía y se perdía el destinatario, que es el dato que sirve.
+  //
+  // Y los dos puntos son opcionales: Banamex manda la etiqueta en una celda y el valor en la
+  // siguiente, y al aplanar el HTML quedan en dos renglones sin ningún separador.
+  // Dos clases de etiqueta, y la diferencia importa:
+  //   · las inequívocas ("Establecimiento") pueden venir sin dos puntos, en la celda de al lado;
+  //   · las genéricas ("Nombre", "Entidad") EXIGEN dos puntos — si no, "NOMBRE APELLIDO" del
+  //     titular se leería como si fuera el comercio, y el saludo "Hola, Nombre" también.
+  const etiquetas = new RegExp(
+    "(?:(?:comercio|establecimiento|negocio|beneficiario|destinatario|banco\\s+emisor)\\s*[:\\-]?\\s*\\n?\\s*" +
+    "|(?:concepto(?:\\s+de\\s+pago)?|entidad|nombre)\\s*[:\\-]\\s*)" +
+    "([^\\n|]{2,90})",
+    "gi",
+  );
+  for (const c of texto.matchAll(etiquetas)) {
+    const recortado = recortarComercio(c[1]);
+    if (recortado) return recortado;
+  }
 
   // El monto suele meterse entre "compra" y "en", así que hay que saltárselo. Y el nombre
   // termina donde empieza a hablarse de la tarjeta o de la fecha, no en el primer punto:
@@ -191,8 +246,13 @@ export function comercioDelAviso(texto) {
 function recortarComercio(crudo) {
   const limpio = String(crudo)
     .replace(/\s+/g, " ")
+    // El nombre termina donde empieza a hablarse de la tarjeta, aunque no lo haya dicho antes.
+    .replace(/\s*(?:terminaci[óo]n|terminada|\*{2,}|x{4,})\b.*$/i, "")
     .replace(/\s+(?:con|el|por|de)\s+(?:tu |su |la |el )?(?:tarjeta|cuenta|monto|importe|fecha|hora|folio|referencia)\b.*$/i, "")
-    .replace(/[\s.,;:-]+$/, "")
+    // La poda de adornos va AL FINAL: quitar la comilla antes deja la de cierre huérfana
+    // cuando después se recorta la raya que venía detrás.
+    .replace(/[\s.,;:\-]+$/, "")
+    .replace(/^["'*\s]+|["'*\s]+$/g, "")
     .trim();
   if (!limpio || RUIDO_COMERCIO.test(limpio)) return null;
   if (!/[a-záéíóúñ]{2}/i.test(limpio)) return null; // referencias y cifras sueltas no son un nombre
@@ -360,16 +420,46 @@ export function posibleDuplicado(datos, lectura) {
 
   const clave = normalizarComercio(lectura.comercio);
   const { fecha, monto } = lectura.movimiento;
-  const desde = sumarDias(fecha, -1);
-  const hasta = sumarDias(fecha, 1);
 
-  for (const mes of new Set([desde.slice(0, 7), fecha.slice(0, 7), hasta.slice(0, 7)])) {
+  // Se miran los meses que puedan tocar la ventana, no solo el del día.
+  const meses = new Set();
+  for (let d = -DIAS_LIQUIDACION; d <= DIAS_LIQUIDACION; d++) meses.add(sumarDias(fecha, d).slice(0, 7));
+
+  let parecido = null;
+  for (const mes of meses) {
     for (const m of datos.movimientos[mes] || []) {
-      if (m.monto !== monto || Math.abs(diasEntre(m.fecha, fecha)) > 1) continue;
+      const dias = Math.abs(diasEntre(m.fecha, fecha));
+      if (dias > DIAS_LIQUIDACION) continue;
       if (clave && normalizarComercio(m.nota) !== clave) continue;
-      return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
-        "Ya tienes un movimiento igual por estos días. ¿Es el mismo cargo?", { motivo: "parecido", id: m.id });
+
+      // Mismo monto y casi el mismo día: es literalmente el mismo cargo.
+      if (m.monto === monto && dias <= 1) {
+        return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+          "Ya tienes un movimiento igual por estos días. ¿Es el mismo cargo?", { motivo: "parecido", id: m.id });
+      }
+
+      // Mismo comercio, pocos días, MONTO DISTINTO: el patrón de una preautorización que se
+      // liquida. La gasolinera retiene $100 y cobra $43; el restaurante autoriza sin propina y
+      // cobra con ella. Antes esto entraba como un segundo gasto y la app mentía hacia arriba.
+      if (clave && m.monto !== monto && esLiquidacionDe(m.monto, monto)) {
+        parecido = parecido || veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+          `Parece el cargo final de ${formatear(m.monto)} que ya tenías de ${lectura.comercio}. ` +
+          `Si lo es, reemplázalo en vez de sumar otro.`,
+          { motivo: "liquidacion", id: m.id, montoPrevio: m.monto, montoNuevo: monto });
+      }
     }
   }
-  return null;
+  return parecido;
+}
+
+/**
+ * ¿El segundo monto puede ser la liquidación del primero?
+ * Se acepta cualquier ajuste dentro de un margen amplio en cualquier dirección: la
+ * preautorización puede quedar por encima (gasolinera) o por debajo (propina) del cargo real.
+ */
+function esLiquidacionDe(previo, nuevo) {
+  if (!previo || !nuevo) return false;
+  const mayor = Math.max(previo, nuevo);
+  const menor = Math.min(previo, nuevo);
+  return menor / mayor >= 1 - MARGEN_LIQUIDACION;
 }

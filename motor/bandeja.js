@@ -43,6 +43,8 @@ export function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEG
     ultimos4: lectura.ultimos4,
     origen,
     posibleTraspaso: lectura.posibleTraspaso,
+    // Un cargo final NO es un gasto nuevo: sustituye a la preautorización que ya está.
+    reemplaza: duplicado && duplicado.datos.motivo === "liquidacion" ? duplicado.datos.id : null,
     aviso: [duplicado ? duplicado.motivo : "", ...razones].filter(Boolean).join(" "),
   });
 
@@ -81,8 +83,13 @@ export function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
     return { datos, movimiento: null, error: "Esa entrada ya estaba resuelta." };
   }
 
-  const propuesto = { ...entrada.movimiento, ...cambios };
-  const { datos: conMovimiento, movimiento, error } = agregarMovimiento(datos, propuesto);
+  const { reemplazar, ...camposCambiados } = cambios;
+  // Aceptar reemplazando quita antes la preautorización: si no, el mismo consumo quedaría
+  // contado dos veces y la app mentiría hacia arriba, que es la peor dirección.
+  const partida = reemplazar && entrada.reemplaza ? eliminarMovimiento(datos, entrada.reemplaza) : datos;
+
+  const propuesto = { ...entrada.movimiento, ...camposCambiados };
+  const { datos: conMovimiento, movimiento, error } = agregarMovimiento(partida, propuesto);
   if (error) return { datos, movimiento: null, error };
 
   // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó.
@@ -95,6 +102,8 @@ export function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
       ...aprendido,
       bandeja: aprendido.bandeja.map((e) =>
         e.id === id ? { ...e, estado: ESTADOS_BANDEJA.ACEPTADO, movimientoId: movimiento.id } : e),
+      // La lápida del reemplazado viaja en `partida`; conservarla evita que el otro
+      // dispositivo lo resucite en la siguiente sincronización.
     },
     movimiento,
     error: null,

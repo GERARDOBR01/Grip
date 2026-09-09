@@ -21,6 +21,14 @@ export const MIGRACIONES = {
     bandeja: Array.isArray(datos.bandeja) ? datos.bandeja : [],
     reglas: Array.isArray(datos.reglas) ? datos.reglas : [],
   }),
+
+  // v2 → v3: aparecen las lápidas, que son lo que permite fusionar dos dispositivos sin
+  // resucitar lo borrado. Un documento de v2 no tenía ninguna y esa lista nace vacía: no
+  // sabemos qué se borró antes, y suponerlo sería peor que no saberlo.
+  2: (datos) => ({
+    ...datos,
+    borrados: Array.isArray(datos.borrados) ? datos.borrados : [],
+  }),
 };
 
 export function migrar(entrada) {

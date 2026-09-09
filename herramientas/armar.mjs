@@ -27,6 +27,7 @@ const MODULOS = [
   "motor/ciclo.js",
   "motor/modelo.js",
   "motor/migraciones.js",
+  "motor/fusion.js",
   "motor/presupuesto.js",
   "motor/ahorro.js",
   "motor/metas.js",

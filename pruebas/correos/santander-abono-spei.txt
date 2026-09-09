@@ -1,0 +1,15 @@
+De: alertas@santander.com.mx
+ABONO VÍA SPEI
+
+estimado cliente, recibiste vía SPEI un abono por $150.00 MXN a tu cuenta terminación 1234
+
+Datos de la operación
+
+Fecha: 07/09/2026
+Hora: 13:45 hrs
+Banco emisor: NUBANK
+Cuenta origen:5678
+Clave de rastreo: AB1CDEF23GHI456J7KL8M9N0PQ1R
+Concepto de pago:Transferencia
+
+El depósito ya se encuentra disponible en tu cuenta.

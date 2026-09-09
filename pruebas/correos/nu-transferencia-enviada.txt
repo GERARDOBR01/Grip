@@ -1,0 +1,18 @@
+De: no-reply@nu.com.mx
+Hola, Nombre
+
+Nos da gusto confirmarte que tu transferencia para Persona se envió correctamente.
+
+Detalles de la transferencia:
+
+Monto: $80.00
+Fecha: 08/SEP/2026
+Hora: 10:27
+Concepto: Transferencia
+Número de referencia: 12345
+Folio: ABCDEFGH1
+Nombre: Persona
+Entidad: BBVA MEXICO
+Tarjeta de débito: ••••9876
+Estatus: Completada
+Clave de rastreo: ZY9XW8VU7TS6RQ5PO4NM3LK2JI1H

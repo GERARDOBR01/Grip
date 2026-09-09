@@ -11,7 +11,7 @@ import { aCentavos } from "./dinero.js";
 import { hoyISO, mesDe, esISO } from "./ciclo.js";
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-export const VERSION_DATOS = 2;
+export const VERSION_DATOS = 3;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -56,6 +56,9 @@ export function datosVacios(iso = hoyISO()) {
     bandeja: [],
     // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría".
     reglas: [],
+    // Lápidas. Sin ellas, borrar algo en un dispositivo lo resucitaría al sincronizar con otro
+    // que todavía lo tiene: la unión no sabría distinguir "esto es nuevo" de "esto se borró".
+    borrados: [],
   };
 }
 
@@ -134,7 +137,14 @@ export function normalizar(entrada) {
     metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
+    borrados: (Array.isArray(datos.borrados) ? datos.borrados : []).map(normalizarLapida).filter(Boolean),
   };
+}
+
+/** Una lápida: qué se borró y cuándo. Es lo que hace que borrar gane sobre resucitar. */
+export function normalizarLapida(t) {
+  if (!t || !t.id) return null;
+  return { id: String(t.id).slice(0, 60), cuando: t.cuando ? String(t.cuando).slice(0, 40) : "" };
 }
 
 export const ESTADOS_BANDEJA = { PENDIENTE: "pendiente", ACEPTADO: "aceptado", DESCARTADO: "descartado" };
@@ -158,11 +168,14 @@ export function normalizarEntrada(e) {
     confianza: ["alta", "media", "baja"].includes(e.confianza) ? e.confianza : "baja",
     banco: e.banco ? String(e.banco).slice(0, 40) : null,
     comercio: e.comercio ? String(e.comercio).slice(0, 60) : null,
-    ultimos4: /^\d{4}$/.test(e.ultimos4 || "") ? e.ultimos4 : null,
+    // 3 o 4: hay bancos que enmascaran dejando solo tres. Se guarda lo que enseñaron.
+    ultimos4: /^\d{3,4}$/.test(e.ultimos4 || "") ? e.ultimos4 : null,
     origen: Object.values(ORIGENES).includes(e.origen) ? e.origen : ORIGENES.PEGADO,
     aviso: e.aviso ? String(e.aviso).slice(0, 280) : "",
     posibleTraspaso: Boolean(e.posibleTraspaso),
     movimientoId: e.movimientoId || null, // el que se creó al aceptarla, para poder deshacer
+    // Si esto parece el cargo final de una preautorización ya registrada, aquí va cuál.
+    reemplaza: e.reemplaza || null,
   };
 }
 
@@ -287,11 +300,33 @@ export function agregarMovimiento(datos, entrada) {
   };
 }
 
-export function eliminarMovimiento(datos, id) {
+/**
+ * Borra un movimiento Y deja su lápida.
+ * La lápida no es burocracia: sin ella, el otro dispositivo —que todavía lo tiene— lo
+ * devolvería a la vida en la siguiente sincronización.
+ */
+export function eliminarMovimiento(datos, id, cuando = new Date().toISOString()) {
   const movimientos = {};
+  let existia = false;
   for (const [mes, lista] of Object.entries(datos.movimientos)) {
     const filtrada = lista.filter((m) => m.id !== id);
+    if (filtrada.length !== lista.length) existia = true;
     if (filtrada.length) movimientos[mes] = filtrada;
   }
-  return { ...datos, movimientos };
+  const borrados = existia && !(datos.borrados || []).some((t) => t.id === id)
+    ? [{ id, cuando }, ...(datos.borrados || [])]
+    : datos.borrados || [];
+
+  return { ...datos, movimientos, borrados };
+}
+
+/** Entierra cualquier registro con id (un fijo, una meta, una deuda) dejando su lápida. */
+export function marcarBorrado(datos, id, cuando = new Date().toISOString()) {
+  if (!id || (datos.borrados || []).some((t) => t.id === id)) return datos;
+  return { ...datos, borrados: [{ id, cuando }, ...(datos.borrados || [])] };
+}
+
+/** Las lápidas viejas se tiran: ya nadie tiene una copia tan antigua que pueda resucitar nada. */
+export function purgarBorrados(datos, antesDe) {
+  return { ...datos, borrados: (datos.borrados || []).filter((t) => !t.cuando || t.cuando >= antesDe) };
 }

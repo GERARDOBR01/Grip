@@ -8,10 +8,12 @@
 // propósito: escribir una expresión regular para un correo que nunca vi es inventar. Cada
 // banco se afina cuando llega un correo real suyo, tapado, y con su prueba al lado.
 //
-// IMPORTANTE, y no es un detalle técnico: hay bancos que NUNCA van a estar aquí porque no
-// mandan correo por cada movimiento. Nu es el caso claro: sus avisos viven solo dentro de su
-// app. Para esos, la vía es compartir o pegar el texto a mano. Prometer lo contrario sería
-// venderle a alguien una automatización que no existe.
+// IMPORTANTE, y no es un detalle técnico: no todos los bancos avisan de todo por correo, y
+// decir de más aquí es venderle a alguien una automatización que no existe. Cada banco declara
+// QUÉ avisa, no solo si avisa — porque "manda correos" y "manda correo por cada compra" son
+// cosas distintas, y confundirlas ya me costó afirmar algo falso sobre Nu.
+//
+// `avisa` es una de tres: "todo", "parcial" o "nada"; `nota` dice exactamente qué esperar.
 
 export const BANCOS = [
   {
@@ -19,71 +21,75 @@ export const BANCOS = [
     nombre: "Banorte",
     remitentes: [/@banorte\.com$/i, /banorte/i],
     // Manda alerta por cada operación, pero solo si el titular la activa en su banca en línea.
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "santander",
     nombre: "Santander",
     remitentes: [/@santander\.com\.mx$/i, /santander/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "banamex",
     nombre: "Banamex",
     remitentes: [/@banamex\.com$/i, /@banamex\.com\.mx$/i, /banamex|citibanamex/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "hsbc",
     nombre: "HSBC",
     remitentes: [/@hsbc\.com\.mx$/i, /hsbc/i],
-    // Solo avisa por operaciones grandes. Los gastos chicos NO llegan por correo.
-    avisaCadaMovimiento: false,
-    limiteConocido: 150000, // $1,500.00 — debajo de esto no manda nada
+    // Solo avisa por operaciones grandes: los gastos chicos NO llegan por correo.
+    avisa: "parcial",
+    nota: "solo avisa de operaciones arriba de $1,500 — los gastos chicos no llegan",
+    limiteConocido: 150000,
   },
   {
     id: "mercadopago",
     nombre: "Mercado Pago",
     remitentes: [/@mercadopago\.com(\.mx)?$/i, /mercadopago|mercadolibre/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "didi",
     nombre: "DiDi",
     remitentes: [/@didiglobal\.com$/i, /didi/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "spin",
     nombre: "Spin by OXXO",
     remitentes: [/@spin(byoxxo)?\.com(\.mx)?$/i, /spin.?by.?oxxo|oxxo/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "klar",
     nombre: "Klar",
     remitentes: [/@klar\.mx$/i, /klar/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "stori",
     nombre: "Stori",
     remitentes: [/@storicard\.com$/i, /stori/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "hey",
     nombre: "Hey Banco",
     remitentes: [/@hey\.inc$/i, /hey ?banco/i],
-    avisaCadaMovimiento: true,
+    avisa: "todo",
   },
   {
     id: "nu",
     nombre: "Nu",
     remitentes: [/@nu\.com\.mx$/i, /\bnu\b|nubank/i],
-    // Nu lo dice en su propia documentación: sus notificaciones nunca llegan por correo ni
-    // SMS, solo dentro de su app. Lo que llegue por aquí serán estados de cuenta, no compras.
-    avisaCadaMovimiento: false,
+    // Corregido con un comprobante real en la mano: Nu SÍ manda correo de las transferencias
+    // que envías, con monto, fecha, destinatario y entidad. Lo que no manda es aviso de cada
+    // compra con tarjeta: eso vive solo en su app. Antes aquí decía que no mandaba nada, y era
+    // falso — la app llegó a afirmarlo en pantalla.
+    avisa: "parcial",
+    nota: "manda correo de las transferencias que envías, pero no de las compras con tarjeta",
   },
 ];
 
@@ -97,9 +103,14 @@ export function bancoDeRemitente(remitente) {
   return null;
 }
 
-/** Los que sí sirven para automatizar. Se usa para no prometer de más en la pantalla. */
+/** Los que avisan de todo por correo: con esos el puente cubre solo. */
 export function bancosQueAvisan() {
-  return BANCOS.filter((b) => b.avisaCadaMovimiento);
+  return BANCOS.filter((b) => b.avisa === "todo");
+}
+
+/** Los que avisan a medias. Son los que hay que explicar, no esconder. */
+export function bancosParciales() {
+  return BANCOS.filter((b) => b.avisa === "parcial");
 }
 
 /** El nombre como se escribe, a partir del id que se guardó. */

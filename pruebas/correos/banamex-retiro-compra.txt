@@ -1,0 +1,19 @@
+De: no-reply@banamex.com
+Sep 07, 2026 01:54:00 PM
+
+Se realizó la siguiente operación: Retiro/Compra
+NOMBRE APELLIDO APELLIDO
+
+MICUENTA M.N. **789
+
+Detalle de la operación
+Monto
+$ 100.00 M.N.
+Establecimiento
+LA GRAN PLAZA 2
+Fecha y hora
+07 Septiembre 2026 / 13:54:00
+Estatus
+Exitoso
+No. Autorización
+123456
