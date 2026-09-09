@@ -11,7 +11,7 @@ import { formatear, aCentavos } from "../motor/dinero.js";
 import { hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
-  ORIGENES, marcarBorrado, purgarBorrados,
+  ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
 } from "../motor/modelo.js";
 import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presupuesto.js";
 import { panelHoy, capacidadPorCiclo, estadoColchon, ahorroLibre } from "../motor/ahorro.js";
@@ -19,17 +19,20 @@ import { resumenMetas, exigenciaTotal } from "../motor/metas.js";
 import { proximosVencimientos, totalFijosMensual, movimientoDeFijo, venceEnMes, montoMensualizado } from "../motor/fijos.js";
 import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
 import {
-  recibirAviso, pendientes, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja, impactoPendiente,
-  purgarBandeja,
+  recibirAviso, pendientes, ilegibles, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja,
+  impactoPendiente, purgarBandeja, aceptarTanda, deshacerTanda, deConfianzaAlta,
 } from "../motor/bandeja.js";
+import { montosFrecuentes } from "../motor/rapido.js";
 import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
 import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
-import { exportar, importar, nombreDeRespaldo } from "../almacen/archivo.js";
+import { exportar, importar, nombreDeRespaldo, respaldoPendiente } from "../almacen/archivo.js";
 
 const app = {
+  // Los ids de lo último aceptado en lote, para poder revertirlo entero.
+  ultimaTanda: null,
   datos: datosVacios(),
   almacen: null,
   vista: "hoy",
@@ -109,7 +112,10 @@ function render() {
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
   const sincronizado = estado.modo === MODOS.SINCRONIZADO;
-  const esperando = resumenBandeja(app.datos).pendientes;
+  // El globo cuenta TODO lo que espera respuesta, ilegibles incluidas: si no aparecen aquí,
+  // no existen para nadie y volvemos al punto de partida, solo que con la entrada guardada.
+  const resumen = resumenBandeja(app.datos);
+  const esperando = resumen.pendientes + resumen.ilegibles;
 
   const etiquetaEstado = sincronizado
     ? "Sincronizado"
@@ -161,6 +167,34 @@ function vistaActual() {
 
 function nombreCiclo(ciclo) {
   return ciclo.total > 1 ? "quincena" : "mensualidad";
+}
+
+/**
+ * Qué se le dice a la persona sobre dónde viven sus datos.
+ *
+ * Son DOS preguntas y antes se contestaban con una sola frase optimista: si sobrevive a cerrar
+ * la pestaña, y si el navegador se comprometió a no borrarlo cuando ande corto de espacio. Lo
+ * segundo hay que pedirlo y puede negarse — Safari borra el almacenamiento de scripts a los 7
+ * días sin interacción, y ahí se va un historial entero. Cuando no está concedido, se dice, y
+ * se dice también qué hacer: instalarla en la pantalla de inicio y bajar un respaldo.
+ */
+function textoDelAlmacenamiento(estado) {
+  if (estado.modo === MODOS.EFIMERO) {
+    return "Este navegador no deja guardar nada: al cerrar la pestaña se pierde lo capturado. Descarga un respaldo antes de cerrar.";
+  }
+
+  const donde =
+    estado.modo === MODOS.SINCRONIZADO
+      ? "Lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda en éste."
+      : `Todo se guarda en este dispositivo (${estado.tipoLocal}). Para pasarlo a otro lado, usa el respaldo en Ajustes.`;
+
+  const permanencia = estado.persistente
+    ? "El navegador se comprometió a no borrarlo aunque ande corto de espacio."
+    : "Ojo: el navegador NO concedió almacenamiento permanente, así que el sistema puede borrarlo si se " +
+      "queda sin espacio o si pasan semanas sin abrir la app. Instálala en tu pantalla de inicio para que " +
+      "sea mucho menos probable, y baja un respaldo de vez en cuando.";
+
+  return [donde, permanencia, estado.motivo].filter(Boolean).join(" ");
 }
 
 function vistaHoy() {
@@ -238,6 +272,39 @@ function vistaHoy() {
     : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
         ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
 
+  // Lo que nunca va a llegar por correo: los tacos, el OXXO, el camión, las propinas. Si eso
+  // no entra, los números mienten hacia abajo. Los montos salen de SU historial —la gente
+  // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
+  // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
+  const frecuentes = montosFrecuentes(datos, hoy);
+  const rapido = frecuentes.length
+    ? `<div class="tarjeta">
+        <div class="rotulo">Lo de siempre, en efectivo</div>
+        <div class="acciones">
+          ${frecuentes.map((f) => {
+            const categoria = categoriaPorId(datos, f.categoriaId);
+            return `<button class="boton tenue" data-accion="gasto-rapido"
+              data-monto="${f.monto}" data-categoria="${esc(f.categoriaId || "otros")}"
+              title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
+          }).join("")}
+          <button class="boton tenue" data-accion="capturar">Otro</button>
+        </div>
+      </div>`
+    : "";
+
+  // La lección de Mint: tener exportador no salva a nadie; haberlo usado, sí. No bloquea,
+  // no regaña, y no aparece si no hay nada nuevo que perder.
+  const pendienteRespaldo = respaldoPendiente(datos, hoy);
+  const respaldoBanner = pendienteRespaldo
+    ? `<div class="aviso">
+        <b>${pendienteRespaldo.nunca
+            ? `Llevas ${pendienteRespaldo.movimientos} movimientos y ningún respaldo.`
+            : `Hace ${pendienteRespaldo.dias} días del último respaldo.`}</b>
+        Vive todo en este dispositivo: si el navegador hace limpieza, se va. Es un toque.
+        <div class="acciones"><button class="boton chico" data-accion="exportar">Bajar respaldo</button></div>
+      </div>`
+    : "";
+
   const espera = pendientes(datos);
   const bandejaBanner = espera.length
     ? `<div class="aviso">
@@ -277,7 +344,7 @@ function vistaHoy() {
              ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
          </div>`;
 
-  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${rapido}${tarjetaColchon}${respaldoBanner}${listaMovimientos}`;
 }
 
 // --- Vista: Bandeja ---
@@ -356,6 +423,7 @@ function tarjetaEntrada(entrada) {
 
 function vistaBandeja() {
   const espera = pendientes(app.datos);
+  const sinLeer = ilegibles(app.datos);
   const impacto = impactoPendiente(app.datos);
 
   const pegar = `<div class="tarjeta">
@@ -367,8 +435,26 @@ function vistaBandeja() {
     <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
   </div>`;
 
+  // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
+  // nada, se pierde un gasto de verdad. Cada uno pide dos datos y ya.
+  const seccionSinLeer = sinLeer.length
+    ? `<div class="titulo-seccion">No supe leer ${sinLeer.length === 1 ? "este" : `estos ${sinLeer.length}`}</div>
+       <div class="rotulo" style="margin:0 0 8px">Llegaron de tus bancos y no entendí el formato. Dime cuánto
+         y dónde, y además aprendo: el siguiente de ese lugar ya entra solo.</div>
+       ${sinLeer.slice(0, app.verBandeja).map(tarjetaIlegible).join("")}`
+    : "";
+
+  const deshacerLote = app.ultimaTanda && app.ultimaTanda.length
+    ? `<div class="aviso">
+        <b>Acepté ${app.ultimaTanda.length}.</b> Si alguno no era, se revierte entero.
+        <div class="acciones">
+          <button class="boton chico tenue" data-accion="deshacer-tanda">Deshacer</button>
+        </div>
+      </div>`
+    : "";
+
   if (!espera.length) {
-    return `${pegar}<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`;
+    return `${seccionSinLeer}${deshacerLote}${pegar}${sinLeer.length ? "" : `<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`}`;
   }
 
   const resumen = `<div class="tarjeta">
@@ -378,6 +464,22 @@ function vistaBandeja() {
     <div class="rotulo">es lo que cambiaría si aceptas todo</div>
   </div>`;
 
+  // Aceptar en lote. La regla no cambia —sigue aceptando él, viendo antes qué acepta—; lo que
+  // cambia es que decir que sí a doce cosas cueste un toque en vez de doce. Con el puente
+  // trayendo ~40 avisos por quincena, ésta es la diferencia entre una app que se usa y una que
+  // se abandona a los 30 días, que es lo que le pasa a dos de cada tres.
+  const claras = deConfianzaAlta(app.datos);
+  const totalClaras = claras.reduce((t, e) => t + (e.movimiento.tipo === TIPOS.GASTO ? e.movimiento.monto : 0), 0);
+  const lote = claras.length >= 2
+    ? `<div class="aviso">
+        <b>${claras.length} los leí completos, sin nada que revisar.</b>
+        Suman ${monto(totalClaras)} en gastos. Están abajo, uno por uno, por si quieres mirarlos.
+        <div class="acciones">
+          <button class="boton chico" data-accion="aceptar-tanda">Aceptar los ${claras.length}</button>
+        </div>
+      </div>`
+    : "";
+
   const visibles = espera.slice(0, app.verBandeja);
   const faltan = espera.length - visibles.length;
   const masBoton = faltan
@@ -385,7 +487,34 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  return `${seccionSinLeer}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+}
+
+/**
+ * Un aviso que llegó y no se pudo leer. Pide lo mínimo: cuánto y dónde.
+ *
+ * Antes esto ni existía — el correo se contaba como "ilegible" y se tiraba, así que con ocho
+ * de once bancos cuyo formato nadie ha visto, ahí se iba dinero real sin dejar rastro. Se
+ * enseña la primera línea del aviso para poder reconocerlo; el cuerpo no se guarda.
+ */
+function tarjetaIlegible(entrada) {
+  const banco = entrada.banco ? nombreDeBanco(entrada.banco) : "un banco";
+  return `<div class="tarjeta">
+    <div class="fila apilada">
+      <div class="linea"><div class="nombre">${esc(entrada.resumen || `Aviso de ${banco}`)}</div></div>
+      <div class="sub">llegó el ${fechaCorta(entrada.recibido)}${entrada.banco ? ` · ${esc(banco)}` : ""}</div>
+    </div>
+    <div class="duo">
+      <div class="campo"><label for="ileg-monto-${esc(entrada.id)}">Cuánto</label>
+        <input id="ileg-monto-${esc(entrada.id)}" inputmode="decimal" class="monto" placeholder="0.00"></div>
+      <div class="campo"><label for="ileg-nota-${esc(entrada.id)}">Dónde</label>
+        <input id="ileg-nota-${esc(entrada.id)}" type="text" placeholder="OXXO, Uber, la tienda…"></div>
+    </div>
+    <div class="acciones">
+      <button class="boton" data-accion="guardar-ilegible" data-id="${esc(entrada.id)}">Guardar</button>
+      <button class="boton tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">No era un gasto</button>
+    </div>
+  </div>`;
 }
 
 function filaMovimiento(m) {
@@ -771,7 +900,25 @@ function vistaAjustes() {
            <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
          </div>
          <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
-         ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
+         ${puente.url ? `<div class="acciones">
+             <button class="boton" data-accion="traer-del-puente">Traer ahora</button>
+             <button class="boton tenue" data-accion="probar-puente">Probar puente</button>
+           </div>` : ""}
+         <details style="margin-top:10px">
+           <summary class="rotulo" style="cursor:pointer">Cómo encenderlo, paso a paso</summary>
+           <ol class="rotulo" style="padding-left:18px;line-height:1.7">
+             <li>Entra a <b>script.google.com</b> → Nuevo proyecto.</li>
+             <li>Pega el archivo <code>puente/Codigo.gs</code> del repositorio, completo.</li>
+             <li>Cambia <code>TOKEN</code> por una frase larga que inventes tú, y pon tus bancos en <code>REMITENTES</code>.</li>
+             <li>Implementar → Nueva implementación → <b>Aplicación web</b>.
+               Ejecutar como <b>Yo</b>, acceso <b>Cualquier usuario</b>.</li>
+             <li>Copia la dirección que termina en <code>/exec</code> y pégala aquí arriba con tu token.</li>
+             <li>Dale a <b>Probar puente</b>: si algo falla, te digo exactamente qué mover.</li>
+           </ol>
+           <div class="rotulo">Para el correo diario, en el editor: elige la función
+             <code>enviarResumenDiario</code>, ejecútala una vez para dar permiso, y en
+             <b>Activadores</b> ponle un temporizador diario. Para apagarlo, borra el activador.</div>
+         </details>
          <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
          ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
@@ -1025,14 +1172,17 @@ async function atenderCompartido() {
 
   app.vista = "bandeja";
   const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.COMPARTIDO, app.hoy);
-  if (error) {
-    app.aviso = `No pude leer lo que compartiste: ${error.motivo}`;
-    return render();
-  }
+
+  // El orden importa: lo primero es si hubo ENTRADA, no si hubo error. Un aviso que no se
+  // supo leer deja entrada igual —esperando que digas cuánto y dónde— y preguntar por el
+  // error antes salía de aquí sin guardarla, o sea tirando lo que se acababa de rescatar.
   if (!entrada) {
-    app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+    app.aviso = error
+      ? `No pude leer lo que compartiste: ${error.motivo}`
+      : duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
     return render();
   }
+  if (error) app.aviso = "No supe leer ese aviso, pero lo guardé: dime cuánto y dónde.";
   try {
     await guardar(datos);
   } catch (e) {
@@ -1061,6 +1211,38 @@ async function guardar(datos) {
     throw e;
   }
   render();
+  dejarResumenEnElPuente();
+}
+
+/**
+ * Le deja al puente las cuatro cifras del correo diario. Sin esperar y sin molestar.
+ *
+ * El script de Google no conoce tus números —viven aquí— así que la única forma de que el
+ * correo diario diga algo cierto es que la app se los deje al guardar. Va sellado con su
+ * fecha del lado del script: si se queda viejo, el correo lo dice en vez de presentarlo como
+ * si fuera de hoy.
+ */
+function dejarResumenEnElPuente() {
+  if (typeof depositarResumen !== "function" || typeof configuracionDelPuente !== "function") return;
+  const puente = configuracionDelPuente();
+  if (!puente || !puente.url || !puente.token) return;
+
+  try {
+    const panel = panelHoy(app.datos, app.hoy);
+    depositarResumen({
+      url: puente.url,
+      token: puente.token,
+      resumen: {
+        disponible: panel.disponible,
+        porDia: panel.porDia,
+        cierre: panel.capacidad ? panel.capacidad.monto : null,
+        finDeCiclo: panel.ciclo.fin,
+        pendientes: resumenBandeja(app.datos).pendientes,
+      },
+    });
+  } catch (e) {
+    // Que el correo diario no se actualice no puede interrumpir a nadie.
+  }
 }
 
 const acciones = {
@@ -1076,14 +1258,7 @@ const acciones = {
   },
 
   "ver-estado"() {
-    const estado = app.almacen.estado();
-    const texto =
-      estado.modo === MODOS.SINCRONIZADO
-        ? "Sincronizado: lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda guardada en éste."
-        : estado.modo === MODOS.EFIMERO
-          ? "Este navegador no deja guardar nada. Descarga un respaldo antes de cerrar la pestaña."
-          : `Todo se guarda en este dispositivo (${estado.tipoLocal}). No hay sincronización, así que para pasarlo a otro lado usa el respaldo en Ajustes.`;
-    app.aviso = estado.motivo ? `${texto} ${estado.motivo}` : texto;
+    app.aviso = textoDelAlmacenamiento(app.almacen.estado());
     render();
   },
 
@@ -1147,23 +1322,34 @@ const acciones = {
     // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
     // parpadeando y multiplicaría las escrituras por nada.
     let datos = app.datos;
-    let nuevos = 0, repetidos = 0, ilegibles = 0;
+    let nuevos = 0, repetidos = 0, sinLeer = 0;
     for (const aviso of avisos) {
       const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
       const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
-      if (paso.error) ilegibles++;
-      else if (!paso.entrada) repetidos++;
-      else { nuevos++; datos = paso.datos; }
+
+      // Lo que importa es si hubo ENTRADA, no si hubo error. Un aviso que no se pudo leer
+      // ahora deja entrada igual, esperando que digas cuánto y dónde; antes se contaba como
+      // "ilegible" y el correo se tiraba aquí mismo, con el gasto adentro.
+      if (!paso.entrada) {
+        repetidos++;
+        continue;
+      }
+      datos = paso.datos;
+      if (paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE) sinLeer++;
+      else nuevos++;
     }
 
+    const total = nuevos + sinLeer;
     app.vista = "bandeja";
-    app.aviso = nuevos
-      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.${repetidos ? ` ${repetidos} ya los tenías.` : ""}`
+    app.aviso = total
+      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.` +
+        (sinLeer ? ` ${sinLeer} que no supe leer y ${sinLeer === 1 ? "espera" : "esperan"} tus datos.` : "") +
+        (repetidos ? ` ${repetidos} ya los tenías.` : "")
       : avisos.length
         ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
         : "No encontré avisos de tus bancos en los últimos días.";
 
-    if (nuevos) await guardar(datos);
+    if (total) await guardar(datos);
     else render();
   },
 
@@ -1222,12 +1408,102 @@ const acciones = {
     });
   },
 
+  async "probar-puente"() {
+    if (typeof probarPuente !== "function" || typeof configuracionDelPuente !== "function") return;
+    const puente = configuracionDelPuente();
+
+    app.aviso = "Probando el puente…";
+    render();
+
+    const { ok, motivo } = await probarPuente({ url: puente.url, token: puente.token });
+    app.aviso = ok ? `✓ ${motivo}` : motivo;
+    render();
+  },
+
+  async "aceptar-tanda"() {
+    const claras = deConfianzaAlta(app.datos);
+    if (!claras.length) return;
+
+    const { datos, aceptados, fallaron } = aceptarTanda(app.datos, claras.map((e) => e.id), app.hoy);
+    if (!aceptados.length) {
+      app.aviso = "No pude aceptar ninguno. Míralos uno por uno.";
+      return render();
+    }
+
+    app.ultimaTanda = aceptados;
+    app.aviso = `Listo: ${aceptados.length} ${aceptados.length === 1 ? "movimiento" : "movimientos"} registrados.` +
+      (fallaron.length ? ` ${fallaron.length} no se pudieron y siguen esperando.` : "");
+    await guardar(datos);
+  },
+
+  async "deshacer-tanda"() {
+    if (!app.ultimaTanda || !app.ultimaTanda.length) return;
+    const datos = deshacerTanda(app.datos, app.ultimaTanda);
+    app.aviso = `Revertidos ${app.ultimaTanda.length}. Vuelven a estar esperando.`;
+    app.ultimaTanda = null;
+    await guardar(datos);
+  },
+
+  async "gasto-rapido"(el) {
+    const centavos = Number(el.dataset.monto);
+    if (!Number.isFinite(centavos) || centavos <= 0) return;
+
+    const { datos, error } = agregarMovimiento(app.datos, {
+      fecha: app.hoy,
+      monto: centavos,
+      tipo: TIPOS.GASTO,
+      categoria: el.dataset.categoria || "otros",
+      nota: "",
+    });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    app.aviso = `${monto(centavos)} anotado. Toca deshacer en el historial si no era.`;
+    await guardar(datos);
+  },
+
+  async "guardar-ilegible"(el) {
+    const id = el.dataset.id;
+    const entrada = app.datos.bandeja.find((e) => e.id === id);
+    if (!entrada) return;
+
+    const centavos = aCentavos((document.getElementById(`ileg-monto-${id}`) || {}).value || "");
+    const nota = ((document.getElementById(`ileg-nota-${id}`) || {}).value || "").trim();
+
+    // Sin monto no hay movimiento que registrar. Se dice y se deja la entrada donde está, en
+    // vez de aceptar un cero disfrazado de dato.
+    if (!Number.isFinite(centavos) || centavos <= 0) {
+      app.aviso = "Falta el monto: es lo único que no puedo adivinar.";
+      return render();
+    }
+
+    const { datos, error } = aceptarEntrada(app.datos, id, {
+      monto: centavos,
+      nota: nota || (entrada.banco ? nombreDeBanco(entrada.banco) : "Sin nombre"),
+      categoria: "otros",
+    }, app.hoy);
+
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    app.aviso = nota
+      ? `Guardado. Y ya aprendí: el siguiente aviso de ${nota} entra con su categoría.`
+      : "Guardado.";
+    await guardar(datos);
+  },
+
   "descartar-entrada"(el) {
     const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
     if (!entrada) return;
+    // Una entrada ilegible no trae movimiento: pedirle el monto aquí tumbaba la pantalla.
+    const que = entrada.movimiento
+      ? `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)}`
+      : `${entrada.resumen || "Este aviso"}`;
     confirmar({
       titulo: "Descartar",
-      mensaje: `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)} no se registrará, y no vuelvo a preguntar por él.`,
+      mensaje: `${que} no se registrará, y no vuelvo a preguntar por él.`,
       textoBoton: "Descartar",
       alConfirmar: async () => {
         await guardar(descartarEntrada(app.datos, entrada.id));
@@ -1528,6 +1804,8 @@ const acciones = {
       enlace.remove();
     }
 
+    // Queda anotado: es lo que apaga el recordatorio y lo que hace que vuelva en 30 días.
+    await guardar({ ...app.datos, ultimoRespaldo: new Date().toISOString() });
     app.aviso = `Respaldo listo: ${nombre}. Es un JSON con todo dentro; guárdalo donde tú quieras.`;
     render();
   },

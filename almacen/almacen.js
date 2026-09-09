@@ -11,6 +11,7 @@
 
 import { abrirLocal, enMemoria } from "./local.js";
 import { migrar } from "../motor/migraciones.js";
+import { fusionar, difieren, relojDesfasado } from "../motor/fusion.js";
 import { datosVacios, normalizar } from "../motor/modelo.js";
 import { hoyISO, mesDe } from "../motor/ciclo.js";
 
@@ -45,6 +46,9 @@ export async function abrirAlmacen(opciones = {}) {
   const estado = {
     modo: espejo ? MODOS.SINCRONIZADO : local.duradero ? MODOS.LOCAL : MODOS.EFIMERO,
     tipoLocal: local.tipo,
+    // ¿El navegador se comprometió a no borrar esto si anda corto de espacio? Es distinto de
+    // `duradero` (sobrevivir a cerrar la pestaña) y la interfaz tiene que poder decirlo.
+    persistente: local.persistente === true,
     motivo: local.motivo || null,
     // Se enciende cuando se leyeron datos que este código no sabe abrir (versión más
     // nueva). Mientras esté encendido NO se escribe: escribir sería borrarlos.
@@ -72,22 +76,54 @@ export async function abrirAlmacen(opciones = {}) {
         }
       }
 
-      const elegido = masReciente(crudoLocal, crudoEspejo);
-      if (!elegido) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
+      if (!crudoLocal && !crudoEspejo) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
 
-      const resultado = migrar(elegido);
-      if (!resultado.ok) {
-        // Ni se abre a medias ni se borra: se conserva, se explica y se traba la escritura.
+      // Cada lado se sube a la versión de hoy ANTES de unirlos. Fusionar un documento v2 con
+      // uno v3 mezclaría dos formas distintas de los mismos datos, que es peor que no unir.
+      const ladoLocal = crudoLocal ? migrar(crudoLocal) : null;
+      const ladoEspejo = crudoEspejo ? migrar(crudoEspejo) : null;
+
+      // Si CUALQUIERA de los dos no se sabe abrir, no se toca nada: ni se abre a medias ni se
+      // borra. Se conserva, se explica y se traba la escritura.
+      const fallo = [ladoLocal, ladoEspejo].find((lado) => lado && !lado.ok);
+      if (fallo) {
         estado.bloqueado = true;
-        estado.motivo = resultado.motivo;
-        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: resultado.motivo, bloqueado: true };
+        estado.motivo = fallo.motivo;
+        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: fallo.motivo, bloqueado: true };
       }
       estado.bloqueado = false;
 
-      // El que iba atrás se pone al día con el que ganó.
-      if (elegido === crudoEspejo && crudoEspejo) await local.guardar(resultado.datos);
+      const datosLocal = ladoLocal ? ladoLocal.datos : null;
+      const datosEspejo = ladoEspejo ? ladoEspejo.datos : null;
 
-      return { datos: resultado.datos, nuevo: false, aviso: resultado.motivo || null };
+      // Y aquí lo importante: se UNEN. Antes ganaba un documento entero por su fecha y el otro
+      // se descartaba completo — lo capturado en el aparato que sincronizó primero desaparecía
+      // sin avisar. Ahora no se pierde nada que alguien no haya borrado a propósito.
+      const unido = normalizar(fusionar(datosLocal, datosEspejo));
+
+      // El que iba atrás se pone al día. `difieren` evita reescribir cuando ya decían lo mismo.
+      if (difieren(unido, datosLocal)) await local.guardar(unido);
+      if (espejo && difieren(unido, datosEspejo)) {
+        try {
+          await espejo.guardar(unido);
+        } catch (e) {
+          degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+        }
+      }
+
+      // Un reloj adelantado hace que gane el aparato equivocado en todo lo escalar. No se
+      // bloquea nada por eso —los movimientos ya se unen por id—, pero sí se dice.
+      const desfase = relojDesfasado([datosLocal, datosEspejo], new Date().toISOString());
+      estado.aviso = desfase
+        ? `El reloj de alguno de tus dispositivos va ${desfase} minutos adelantado. ` +
+          "Tus movimientos están completos, pero ajústalo para que los cambios de ajustes no se pisen."
+        : null;
+
+      const avisos = [ladoLocal, ladoEspejo]
+        .filter((lado) => lado && lado.motivo)
+        .map((lado) => lado.motivo)
+        .concat(estado.aviso || []);
+      return { datos: unido, nuevo: false, aviso: avisos.length ? avisos.join(" ") : null };
     },
 
     async guardar(datos) {
@@ -124,13 +160,4 @@ export async function abrirAlmacen(opciones = {}) {
       estado.motivo = local.motivo || null;
     },
   };
-}
-
-/** Gana el documento con el `actualizado` más reciente. Un solo usuario: no hay que fusionar. */
-export function masReciente(a, b) {
-  if (!a) return b || null;
-  if (!b) return a;
-  const fechaA = a.actualizado || a.creado || "";
-  const fechaB = b.actualizado || b.creado || "";
-  return fechaB > fechaA ? b : a;
 }

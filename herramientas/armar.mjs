@@ -34,6 +34,8 @@ const MODULOS = [
   "motor/fijos.js",
   "motor/deudas.js",
   "motor/reglas-banco.js",
+  "motor/campos.js",
+  "motor/rapido.js",
   "motor/lectura.js",
   "motor/aprendizaje.js",
   "motor/recurrentes.js",

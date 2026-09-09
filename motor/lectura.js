@@ -18,6 +18,7 @@ import { hoyISO, armarISO, diasEnMes, sumarDias, diasEntre } from "./ciclo.js";
 import { TIPOS } from "./modelo.js";
 import { veredicto, sinDatos, ESTADOS, SEVERIDADES } from "./veredicto.js";
 import { bancoDeRemitente } from "./reglas-banco.js";
+import { valorEtiquetado, patronContraparte } from "./campos.js";
 
 export const CONFIANZAS = { ALTA: "alta", MEDIA: "media", BAJA: "baja" };
 
@@ -218,13 +219,9 @@ export function comercioDelAviso(texto) {
   //   · las inequívocas ("Establecimiento") pueden venir sin dos puntos, en la celda de al lado;
   //   · las genéricas ("Nombre", "Entidad") EXIGEN dos puntos — si no, "NOMBRE APELLIDO" del
   //     titular se leería como si fuera el comercio, y el saludo "Hola, Nombre" también.
-  const etiquetas = new RegExp(
-    "(?:(?:comercio|establecimiento|negocio|beneficiario|destinatario|banco\\s+emisor)\\s*[:\\-]?\\s*\\n?\\s*" +
-    "|(?:concepto(?:\\s+de\\s+pago)?|entidad|nombre)\\s*[:\\-]\\s*)" +
-    "([^\\n|]{2,90})",
-    "gi",
-  );
-  for (const c of texto.matchAll(etiquetas)) {
+  // Las etiquetas viven en motor/campos.js, no aquí: sumar un banco es sumar sinónimos a una
+  // tabla de datos, que es lo que evita una rama de código por banco.
+  for (const c of texto.matchAll(patronContraparte())) {
     const recortado = recortarComercio(c[1]);
     if (recortado) return recortado;
   }
@@ -310,10 +307,27 @@ export function tipoDelAviso(texto) {
 
 /**
  * La huella: qué hace que dos avisos sean el MISMO movimiento.
- * Los bancos mandan dos correos por una compra (la autorización y el cargo). Sin esto, cada
- * compra se contaría dos veces y la app mentiría hacia arriba, que es la peor dirección.
+ *
+ * Los bancos mandan dos correos por una compra —la autorización y el cargo— y dos por una
+ * transferencia entre tus propias cuentas, uno de cada lado. Sin esto, todo eso se contaría
+ * dos veces y la app mentiría hacia arriba, que es la peor dirección para mentir.
+ *
+ * Va en tres niveles, del identificador más fuerte al más débil, porque los avisos TRAEN
+ * identificadores y hasta ahora se estaban tirando:
+ *
+ *   1. La clave de rastreo CON el tipo. Identifica una operación SPEI de forma única y es la
+ *      misma desde los dos bancos — por eso hay que llevar el tipo pegado: una transferencia
+ *      entre tus propias cuentas manda un aviso de salida y otro de entrada con la MISMA
+ *      clave, y colapsarlos dejaría un solo gasto donde en realidad tu dinero no se movió.
+ *   2. El folio de autorización con los últimos cuatro. Suele conservarse entre la
+ *      preautorización y el cargo final, que es justo el par que cambia de monto: la
+ *      gasolinera retiene $100 y cobra $43.
+ *   3. Banco, fecha, monto, tarjeta y comercio. Lo de siempre, como red para el aviso que no
+ *      trae ningún identificador. Se queda: quitarlo dejaría sin defensa a esos.
  */
-export function huellaDe({ banco, fecha, monto, ultimos4, comercio }) {
+export function huellaDe({ banco, fecha, monto, ultimos4, comercio, claveRastreo, folio, tipo }) {
+  if (claveRastreo) return `rastreo|${String(claveRastreo).toLowerCase()}|${tipo || "?"}`;
+  if (folio && ultimos4) return `folio|${folio}|${ultimos4}`;
   return [banco || "?", fecha || "?", monto == null ? "?" : monto, ultimos4 || "?", normalizarComercio(comercio)]
     .join("|");
 }
@@ -346,6 +360,11 @@ export function interpretar(entrada, remitente = "", hoy = hoyISO()) {
   const { tipo, explicito } = tipoDelAviso(texto);
   const traspaso = PISTAS_TRASPASO.test(texto);
 
+  // Los identificadores que el aviso ya traía y que hasta ahora se tiraban. No se guardan
+  // para enseñarlos: se guardan porque son lo que permite saber que dos avisos son uno.
+  const claveRastreo = valorEtiquetado(texto, "claveRastreo");
+  const folio = valorEtiquetado(texto, "folio");
+
   const razones = [];
   const lejos = Math.abs(diasEntre(hoy, iso));
   if (lejos > DIAS_RAZONABLES) {
@@ -375,13 +394,19 @@ export function interpretar(entrada, remitente = "", hoy = hoyISO()) {
       categoria: tipo === TIPOS.GASTO ? "otros" : null,
       nota: comercio || (banco ? banco.nombre : ""),
       metodo: ultimos4 ? `••${ultimos4}` : null,
+      ref: claveRastreo || folio || null,
     },
     banco: banco ? banco.id : null,
     comercio,
     ultimos4,
+    claveRastreo,
+    folio,
     confianza,
     posibleTraspaso: traspaso,
-    huella: huellaDe({ banco: banco ? banco.id : null, fecha: iso, monto: Math.abs(centavos), ultimos4, comercio }),
+    huella: huellaDe({
+      banco: banco ? banco.id : null, fecha: iso, monto: Math.abs(centavos),
+      ultimos4, comercio, claveRastreo, folio, tipo,
+    }),
     veredicto: veredicto(
       confianza === CONFIANZAS.ALTA ? ESTADOS.VA_BIEN : ESTADOS.AJUSTADO,
       confianza === CONFIANZAS.ALTA ? SEVERIDADES.OK : SEVERIDADES.INFO,
@@ -397,6 +422,8 @@ function sinLectura(v, banco) {
     banco: banco ? banco.id : null,
     comercio: null,
     ultimos4: null,
+    claveRastreo: null,
+    folio: null,
     confianza: CONFIANZAS.BAJA,
     posibleTraspaso: false,
     huella: null,
@@ -420,6 +447,38 @@ export function posibleDuplicado(datos, lectura) {
 
   const clave = normalizarComercio(lectura.comercio);
   const { fecha, monto } = lectura.movimiento;
+  const ref = lectura.movimiento.ref;
+
+  // Si el aviso trae identificador, no hay nada que adivinar: se busca por él y punto. Esta
+  // rama existe porque los avisos SIEMPRE traían estos datos y el lector los estaba tirando,
+  // dejando que un parecido de monto y fecha decidiera cosas que un folio decide sin dudar.
+  if (ref) {
+    for (const lista of Object.values(datos.movimientos || {})) {
+      for (const m of lista) {
+        if (m.ref !== ref) continue;
+
+        // Misma operación y sentido contrario: es una transferencia entre tus propias
+        // cuentas vista desde el otro lado. Tu dinero no se movió, solo cambió de bolsillo.
+        if (m.tipo !== lectura.movimiento.tipo) {
+          return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.INFO,
+            "Es el otro lado de una transferencia entre tus cuentas: tu dinero no cambia de total.",
+            { motivo: "traspaso", id: m.id });
+        }
+
+        // Mismo folio, mismo sentido, OTRO monto: la preautorización que se liquidó. Con el
+        // folio en la mano esto deja de ser una heurística de monto y fecha.
+        if (m.monto !== monto) {
+          return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+            `Es el cargo final de ${formatear(m.monto)} que ya tenías${lectura.comercio ? ` de ${lectura.comercio}` : ""}. ` +
+            "Reemplázalo en vez de sumar otro.",
+            { motivo: "liquidacion", id: m.id, montoPrevio: m.monto, montoNuevo: monto });
+        }
+
+        return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+          "Este movimiento ya está registrado — mismo folio del banco.", { motivo: "huella", id: m.id });
+      }
+    }
+  }
 
   // Se miran los meses que puedan tocar la ventana, no solo el del día.
   const meses = new Set();

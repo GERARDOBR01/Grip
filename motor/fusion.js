@@ -15,7 +15,7 @@
 // propósito" y gana sobre cualquier copia que siga teniéndolo.
 
 import { mesDe, comparar } from "./ciclo.js";
-import { ESTADOS_BANDEJA } from "./modelo.js";
+import { esperaRespuesta } from "./modelo.js";
 
 /** Cuál de los dos documentos se escribió al último. */
 export function selloDe(documento) {
@@ -44,8 +44,11 @@ export function unirBandeja(viejas, nuevas) {
       porId.set(entrada.id, entrada);
       continue;
     }
-    const previaResuelta = previa.estado !== ESTADOS_BANDEJA.PENDIENTE;
-    const actualResuelta = entrada.estado !== ESTADOS_BANDEJA.PENDIENTE;
+    // Ojo con el matiz: "resuelta" es aceptada o descartada. Una entrada ILEGIBLE tampoco está
+    // pendiente, pero sigue siendo trabajo sin hacer, y dejarla ganar sobre una que el otro
+    // aparato ya resolvió resucitaría un aviso ya atendido.
+    const previaResuelta = !esperaRespuesta(previa);
+    const actualResuelta = !esperaRespuesta(entrada);
     porId.set(entrada.id, previaResuelta && !actualResuelta ? previa : entrada);
   }
   return [...porId.values()];
@@ -118,4 +121,32 @@ export function unirReglas(viejas, nuevas) {
 export function difieren(a, b) {
   if (!a || !b) return true;
   return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+/** Cuánto se le tolera a un reloj antes de considerarlo desfasado. */
+export const TOLERANCIA_RELOJ_MIN = 5;
+
+/**
+ * ¿Alguna de las dos copias viene sellada en el futuro?
+ *
+ * Al unir, lo escalar —el perfil, los topes— se toma de la copia con el sello más reciente.
+ * Eso da por hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la
+ * suposición que rompe cualquier sistema repartido: un celular diez minutos adelantado gana
+ * SIEMPRE, aunque haya escrito antes.
+ *
+ * Los movimientos ya no corren peligro —se unen por id y borrar exige lápida—, así que esto
+ * no bloquea nada: avisa, que es lo que se puede hacer con honestidad. Devuelve los minutos
+ * de desfase, o `null` si los relojes van bien.
+ */
+export function relojDesfasado(documentos, ahoraISO, tolerancia = TOLERANCIA_RELOJ_MIN) {
+  const ahora = Date.parse(ahoraISO);
+  if (!Number.isFinite(ahora)) return null;
+
+  let peor = 0;
+  for (const documento of documentos) {
+    const sello = Date.parse(selloDe(documento));
+    if (!Number.isFinite(sello)) continue;
+    peor = Math.max(peor, Math.round((sello - ahora) / 60000));
+  }
+  return peor > tolerancia ? peor : null;
 }

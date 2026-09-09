@@ -10,9 +10,9 @@
 import { hoyISO, comparar } from "./ciclo.js";
 import {
   agregarMovimiento, eliminarMovimiento, normalizarEntrada,
-  ESTADOS_BANDEJA, ORIGENES, TIPOS,
+  ESTADOS_BANDEJA, ORIGENES, TIPOS, esperaRespuesta,
 } from "./modelo.js";
-import { interpretar, posibleDuplicado } from "./lectura.js";
+import { interpretar, posibleDuplicado, limpiarAviso } from "./lectura.js";
 import { sugerirCategoria, recordar } from "./aprendizaje.js";
 import { veredicto, ESTADOS, SEVERIDADES } from "./veredicto.js";
 
@@ -23,7 +23,34 @@ import { veredicto, ESTADOS, SEVERIDADES } from "./veredicto.js";
  */
 export function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, iso = hoyISO()) {
   const lectura = interpretar(texto, remitente, iso);
-  if (!lectura.movimiento) return { datos, entrada: null, duplicado: null, error: lectura.veredicto };
+  if (!lectura.movimiento) {
+    // Pegado a mano, la persona está viendo la pantalla: el error se le enseña al instante y
+    // meterlo a la bandeja sería ruido. Lo que llega SOLO es otra cosa. Hasta hoy se contaba
+    // como "ilegible" y se tiraba, y con ocho de once bancos cuyo formato nadie ha visto —y
+    // plantillas que cambian sin avisar—, ahí desaparecía dinero real sin dejar rastro.
+    if (origen === ORIGENES.PEGADO) {
+      return { datos, entrada: null, duplicado: null, error: lectura.veredicto };
+    }
+
+    const entrada = normalizarEntrada({
+      recibido: iso,
+      estado: ESTADOS_BANDEJA.ILEGIBLE,
+      movimiento: null,
+      banco: lectura.banco,
+      origen,
+      aviso: lectura.veredicto.motivo,
+      falta: lectura.veredicto.datos && lectura.veredicto.datos.falta
+        ? [lectura.veredicto.datos.falta]
+        : ["cuánto"],
+      resumen: primeraLinea(texto),
+    });
+    return {
+      datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] },
+      entrada,
+      duplicado: null,
+      error: lectura.veredicto,
+    };
+  }
 
   const duplicado = posibleDuplicado(datos, lectura);
   if (duplicado && duplicado.datos.motivo === "huella") {
@@ -51,6 +78,25 @@ export function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEG
   return { datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] }, entrada, duplicado, error: null };
 }
 
+/**
+ * La primera línea con algo escrito, para poder reconocer el aviso en la lista.
+ *
+ * La primera línea Y NADA MÁS. Cuando el aviso viene del puente, esa línea es el asunto del
+ * correo — "Notificación de compra" y el nombre del banco—, que alcanza para saber cuál es sin
+ * guardar el cuerpo. La promesa de este motor no cambia: el correo se lee y se tira.
+ */
+function primeraLinea(texto) {
+  const linea = limpiarAviso(texto).split("\n").map((l) => l.trim()).find(Boolean) || "";
+  return linea.slice(0, 120);
+}
+
+/** Las que llegaron y no se pudieron leer: esperan que digas cuánto y dónde. */
+export function ilegibles(datos) {
+  return (datos.bandeja || [])
+    .filter((e) => e.estado === ESTADOS_BANDEJA.ILEGIBLE)
+    .sort((a, b) => comparar(b.recibido, a.recibido) || (a.id < b.id ? 1 : -1));
+}
+
 export function entradaPorId(datos, id) {
   return (datos.bandeja || []).find((e) => e.id === id) || null;
 }
@@ -68,6 +114,7 @@ export function resumenBandeja(datos) {
   return {
     pendientes: espera.length,
     dudosos: espera.filter((e) => e.confianza !== "alta").length,
+    ilegibles: ilegibles(datos).length,
     total: (datos.bandeja || []).length,
   };
 }
@@ -79,7 +126,7 @@ export function resumenBandeja(datos) {
 export function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
   const entrada = entradaPorId(datos, id);
   if (!entrada) return { datos, movimiento: null, error: "Esa entrada ya no está en la bandeja." };
-  if (entrada.estado !== ESTADOS_BANDEJA.PENDIENTE) {
+  if (!esperaRespuesta(entrada)) {
     return { datos, movimiento: null, error: "Esa entrada ya estaba resuelta." };
   }
 
@@ -88,13 +135,20 @@ export function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
   // contado dos veces y la app mentiría hacia arriba, que es la peor dirección.
   const partida = reemplazar && entrada.reemplaza ? eliminarMovimiento(datos, entrada.reemplaza) : datos;
 
-  const propuesto = { ...entrada.movimiento, ...camposCambiados };
+  // Una entrada ILEGIBLE no trae movimiento: lo pone la persona. Se le da la fecha en que
+  // llegó el aviso como punto de partida, que es lo más cercano a la verdad que se sabe.
+  const base = entrada.movimiento || { fecha: entrada.recibido, tipo: TIPOS.GASTO, categoria: "otros" };
+  const propuesto = { ...base, ...camposCambiados };
   const { datos: conMovimiento, movimiento, error } = agregarMovimiento(partida, propuesto);
   if (error) return { datos, movimiento: null, error };
 
-  // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó.
-  const aprendido = entrada.comercio && movimiento.tipo === TIPOS.GASTO && movimiento.categoria
-    ? recordar(conMovimiento, entrada.comercio, movimiento.categoria, iso)
+  // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó. En una
+  // entrada ilegible el comercio no salió del correo: lo escribió la persona, y ése es
+  // justamente el que hay que aprender — así el siguiente aviso del mismo lugar ya llega con
+  // su categoría aunque el formato del banco siga sin entenderse.
+  const paraAprender = entrada.comercio || movimiento.nota;
+  const aprendido = paraAprender && movimiento.tipo === TIPOS.GASTO && movimiento.categoria
+    ? recordar(conMovimiento, paraAprender, movimiento.categoria, iso)
     : conMovimiento;
 
   return {
@@ -115,7 +169,7 @@ export function descartarEntrada(datos, id) {
   return {
     ...datos,
     bandeja: (datos.bandeja || []).map((e) =>
-      e.id === id && e.estado === ESTADOS_BANDEJA.PENDIENTE
+      e.id === id && esperaRespuesta(e)
         ? { ...e, estado: ESTADOS_BANDEJA.DESCARTADO }
         : e),
   };
@@ -143,7 +197,7 @@ export function purgarBandeja(datos, antesDe) {
   return {
     ...datos,
     bandeja: (datos.bandeja || []).filter(
-      (e) => e.estado === ESTADOS_BANDEJA.PENDIENTE || comparar(e.recibido, antesDe) >= 0),
+      (e) => esperaRespuesta(e) || comparar(e.recibido, antesDe) >= 0),
   };
 }
 
@@ -164,4 +218,46 @@ export function impactoPendiente(datos) {
         { pendientes: espera.length, gasto, ingreso })
       : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "No hay nada esperando.", { pendientes: 0 }),
   };
+}
+
+/**
+ * Acepta varias entradas de un jalón, con UN solo guardado.
+ *
+ * Ésta es la pieza que decide si la app sirve para alguien sin tiempo. Con el puente trayendo
+ * correos, son ~40 avisos por quincena, y a un toque cada uno eso es exactamente el mecanismo
+ * que la investigación señala como la causa número uno de que la gente abandone estas apps
+ * antes de los 30 días. En lote son tres.
+ *
+ * La regla de la casa NO cambia: sigue aceptando la persona, viendo antes lo que acepta. Lo
+ * que cambia es que decir que sí a doce cosas cueste un toque en vez de doce.
+ *
+ * Si alguna no se puede aceptar, se queda esperando y las demás pasan: un fallo suelto no
+ * puede tumbar la tanda ni dejarla a medias sin decirlo.
+ */
+export function aceptarTanda(datos, ids, iso = hoyISO()) {
+  let actual = datos;
+  const aceptados = [];
+  const fallaron = [];
+
+  for (const id of ids || []) {
+    const paso = aceptarEntrada(actual, id, {}, iso);
+    if (paso.error || !paso.movimiento) {
+      fallaron.push(id);
+      continue;
+    }
+    actual = paso.datos;
+    aceptados.push(id);
+  }
+
+  return { datos: actual, aceptados, fallaron };
+}
+
+/** Deshace una tanda entera. Es lo que hace que aceptar de golpe no dé miedo. */
+export function deshacerTanda(datos, ids) {
+  return (ids || []).reduce((acumulado, id) => deshacerEntrada(acumulado, id), datos);
+}
+
+/** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */
+export function deConfianzaAlta(datos) {
+  return pendientes(datos).filter((e) => e.confianza === "alta" && !e.reemplaza);
 }

@@ -626,7 +626,7 @@ function vencimientoEnMes(mes, diaCorte) {
 
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-const VERSION_DATOS = 3;
+const VERSION_DATOS = 4;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -674,6 +674,9 @@ function datosVacios(iso = hoyISO()) {
     // Lápidas. Sin ellas, borrar algo en un dispositivo lo resucitaría al sincronizar con otro
     // que todavía lo tiene: la unión no sabría distinguir "esto es nuevo" de "esto se borró".
     borrados: [],
+    // Cuándo bajó el último respaldo. `null` = nunca. Lo que salva tu historia el día que el
+    // navegador hace limpieza no es tener exportador: es haberlo usado.
+    ultimoRespaldo: null,
   };
 }
 
@@ -753,6 +756,8 @@ function normalizar(entrada) {
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
     borrados: (Array.isArray(datos.borrados) ? datos.borrados : []).map(normalizarLapida).filter(Boolean),
+    // Escalar y opcional: un documento viejo que no lo traiga se lee igual, sin migración.
+    ultimoRespaldo: datos.ultimoRespaldo ? String(datos.ultimoRespaldo).slice(0, 40) : null,
   };
 }
 
@@ -762,7 +767,15 @@ function normalizarLapida(t) {
   return { id: String(t.id).slice(0, 60), cuando: t.cuando ? String(t.cuando).slice(0, 40) : "" };
 }
 
-const ESTADOS_BANDEJA = { PENDIENTE: "pendiente", ACEPTADO: "aceptado", DESCARTADO: "descartado" };
+const ESTADOS_BANDEJA = {
+  PENDIENTE: "pendiente",
+  ACEPTADO: "aceptado",
+  DESCARTADO: "descartado",
+  // Llegó un aviso y no se pudo leer. NO se tira: espera a que la persona diga cuánto y dónde.
+  // Una entrada así no tiene movimiento todavía, y por eso el documento subió de versión: una
+  // copia vieja de la app la descartaría al normalizar, en silencio.
+  ILEGIBLE: "ilegible",
+};
 const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" };
 
 /**
@@ -771,12 +784,18 @@ const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" 
  */
 function normalizarEntrada(e) {
   if (!e || typeof e !== "object") return null;
-  const movimiento = normalizarMovimiento(e.movimiento);
-  if (!movimiento) return null;
   const estado = Object.values(ESTADOS_BANDEJA).includes(e.estado) ? e.estado : ESTADOS_BANDEJA.PENDIENTE;
+  const movimiento = normalizarMovimiento(e.movimiento);
+
+  // Un aviso que no se pudo leer entra SIN movimiento y es un estado válido, no un error: el
+  // correo llegó, el dinero se movió, y lo único que falta es que la persona complete el
+  // hueco. Tirarlo por no traer monto es justo lo que hacía desaparecer gastos.
+  const ilegible = estado === ESTADOS_BANDEJA.ILEGIBLE;
+  if (!movimiento && !ilegible) return null;
+
   return {
     id: e.id || idNuevo("ent"),
-    recibido: esISO(e.recibido) ? e.recibido : movimiento.fecha,
+    recibido: esISO(e.recibido) ? e.recibido : movimiento ? movimiento.fecha : hoyISO(),
     estado,
     movimiento,
     huella: e.huella ? String(e.huella).slice(0, 200) : null,
@@ -791,7 +810,26 @@ function normalizarEntrada(e) {
     movimientoId: e.movimientoId || null, // el que se creó al aceptarla, para poder deshacer
     // Si esto parece el cargo final de una preautorización ya registrada, aquí va cuál.
     reemplaza: e.reemplaza || null,
+    // Solo en las ilegibles: qué campos faltaron, y la PRIMERA LÍNEA del aviso para poder
+    // reconocerlo. La primera línea, no el cuerpo: sigue sin guardarse el correo.
+    falta: Array.isArray(e.falta) ? e.falta.map((f) => String(f).slice(0, 30)).slice(0, 6) : [],
+    resumen: e.resumen ? String(e.resumen).slice(0, 120) : "",
   };
+}
+
+/**
+ * ¿Esta entrada sigue esperando algo de la persona?
+ *
+ * Vale la pena que sea UNA función y no una comparación suelta repartida por el código: al
+ * aparecer el estado ILEGIBLE, cada `estado !== PENDIENTE` que había por ahí pasó a querer
+ * decir lo contrario de lo que dice. Con esto, "resuelta" significa aceptada o descartada, que
+ * es lo único que de verdad cierra un aviso.
+ */
+function esperaRespuesta(entrada) {
+  return (
+    entrada &&
+    (entrada.estado === ESTADOS_BANDEJA.PENDIENTE || entrada.estado === ESTADOS_BANDEJA.ILEGIBLE)
+  );
 }
 
 /** Una regla aprendida: "cuando veas este comercio, es esta categoría". */
@@ -822,6 +860,10 @@ function normalizarMovimiento(m) {
     fijoId: m.fijoId || null,
     deudaId: m.deudaId || null,
     metaId: m.metaId || null,
+    // El identificador que traía el aviso: clave de rastreo SPEI o folio de autorización.
+    // No se guarda para enseñarlo, se guarda porque es lo que permite saber, sin adivinar,
+    // que un aviso que llega hoy es el mismo movimiento que ya está registrado.
+    ref: m.ref ? String(m.ref).slice(0, 40) : null,
   };
 }
 
@@ -977,6 +1019,13 @@ const MIGRACIONES = {
     ...datos,
     borrados: Array.isArray(datos.borrados) ? datos.borrados : [],
   }),
+
+  // v3 → v4: la bandeja admite entradas ILEGIBLES, que son las que llegaron y no se pudieron
+  // leer. No agregan ningún campo al documento, así que aquí no hay nada que rellenar — y aun
+  // así la versión sube, que es de lo que se trata: una entrada ilegible no lleva movimiento,
+  // y una copia v3 de la app la descartaría al normalizar, en silencio. Con el número arriba,
+  // esa copia se NIEGA a abrir el documento en vez de comerse lo que no entiende.
+  3: (datos) => ({ ...datos }),
 };
 
 function migrar(entrada) {
@@ -1058,8 +1107,11 @@ function unirBandeja(viejas, nuevas) {
       porId.set(entrada.id, entrada);
       continue;
     }
-    const previaResuelta = previa.estado !== ESTADOS_BANDEJA.PENDIENTE;
-    const actualResuelta = entrada.estado !== ESTADOS_BANDEJA.PENDIENTE;
+    // Ojo con el matiz: "resuelta" es aceptada o descartada. Una entrada ILEGIBLE tampoco está
+    // pendiente, pero sigue siendo trabajo sin hacer, y dejarla ganar sobre una que el otro
+    // aparato ya resolvió resucitaría un aviso ya atendido.
+    const previaResuelta = !esperaRespuesta(previa);
+    const actualResuelta = !esperaRespuesta(entrada);
     porId.set(entrada.id, previaResuelta && !actualResuelta ? previa : entrada);
   }
   return [...porId.values()];
@@ -1132,6 +1184,34 @@ function unirReglas(viejas, nuevas) {
 function difieren(a, b) {
   if (!a || !b) return true;
   return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+/** Cuánto se le tolera a un reloj antes de considerarlo desfasado. */
+const TOLERANCIA_RELOJ_MIN = 5;
+
+/**
+ * ¿Alguna de las dos copias viene sellada en el futuro?
+ *
+ * Al unir, lo escalar —el perfil, los topes— se toma de la copia con el sello más reciente.
+ * Eso da por hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la
+ * suposición que rompe cualquier sistema repartido: un celular diez minutos adelantado gana
+ * SIEMPRE, aunque haya escrito antes.
+ *
+ * Los movimientos ya no corren peligro —se unen por id y borrar exige lápida—, así que esto
+ * no bloquea nada: avisa, que es lo que se puede hacer con honestidad. Devuelve los minutos
+ * de desfase, o `null` si los relojes van bien.
+ */
+function relojDesfasado(documentos, ahoraISO, tolerancia = TOLERANCIA_RELOJ_MIN) {
+  const ahora = Date.parse(ahoraISO);
+  if (!Number.isFinite(ahora)) return null;
+
+  let peor = 0;
+  for (const documento of documentos) {
+    const sello = Date.parse(selloDe(documento));
+    if (!Number.isFinite(sello)) continue;
+    peor = Math.max(peor, Math.round((sello - ahora) / 60000));
+  }
+  return peor > tolerancia ? peor : null;
 }
 
 // ═══ motor/presupuesto.js ═══
@@ -2096,6 +2176,209 @@ function nombreDeBanco(id) {
   return banco ? banco.nombre : null;
 }
 
+// ═══ motor/campos.js ═══
+// Campos — la estructura que comparten todos los avisos, en una tabla en vez de en código.
+//
+// Investigando por qué se rompen los lectores de avisos bancarios sale siempre la misma
+// respuesta: se escriben POR BANCO. Cada banco su rama, cada rama su mantenimiento, y el día
+// que uno cambia la plantilla —sin avisar, porque nadie avisa— esa rama deja de servir.
+//
+// Pero sí hay estructura general, y son dos capas distintas:
+//
+//   1. Las TRANSFERENCIAS tienen norma formal. El CEP del Banco de México fija los campos de
+//      toda operación SPEI: fecha y hora, monto, clave de rastreo, banco emisor, banco
+//      receptor, ordenante, beneficiario, concepto y referencia numérica. Por eso Santander
+//      escribe "ABONO VÍA SPEI" y Nu manda destinatario, entidad y clave: los dos están
+//      contando lo mismo con otras palabras.
+//
+//   2. Las COMPRAS con tarjeta no tienen norma, pero convergen. Las redes de autorización
+//      empujan siempre lo mismo: monto y moneda, comercio, fecha y hora, últimos cuatro,
+//      tipo de operación y folio de autorización.
+//
+// En las dos capas, lo que cambia de un banco a otro son las ETIQUETAS, no los campos. Así
+// que esto es una tabla de campo × sinónimos, y los bancos dejan de ser un requisito para ser
+// una pista. Agregar un banco es agregar renglones aquí, no escribir código — que es lo que
+// convierte cada comprobante que llegue en cobertura permanente.
+
+/** Escapa un sinónimo para meterlo en una expresión regular sin sorpresas. */
+function literal(texto) {
+  return texto.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Los campos, con sus sinónimos reales y qué forma tiene su valor.
+ *
+ * `exigeDosPuntos` separa dos clases de etiqueta, y la diferencia ya costó un error medido:
+ * las inequívocas ("Establecimiento") pueden venir sin dos puntos porque el banco las manda en
+ * una celda y el valor en la de al lado; las genéricas ("Nombre") los EXIGEN, porque si no, el
+ * nombre del titular de la cuenta se lee como si fuera el comercio.
+ */
+const CAMPOS = {
+  // La llave de oro. Identifica una operación SPEI de forma única y es LA MISMA vista desde
+  // el banco que manda y el que recibe. Con esto, dos avisos de una transferencia dejan de
+  // ser dos movimientos sin tener que adivinar por monto y fecha.
+  claveRastreo: {
+    etiquetas: ["clave de rastreo", "clave rastreo", "clave de seguimiento", "clave de referencia", "tracking key"],
+    valor: /[A-Za-z0-9]{6,30}/,
+    exigeDigito: true,
+    exigeDosPuntos: false,
+  },
+
+  // El folio de autorización. Suele viajar igual entre la preautorización y el cargo final,
+  // que es justo el par que hoy se cuenta dos veces cuando el monto cambia.
+  folio: {
+    etiquetas: [
+      "folio de autorizaci", "n[úu]mero de autorizaci", "clave de autorizaci", "c[óo]digo de autorizaci",
+      "autorizaci[óo]n", "folio",
+    ],
+    valor: /\d{4,12}/,
+    exigeDosPuntos: false,
+  },
+
+  // La referencia numérica NO sirve para identificar: dos operaciones distintas pueden
+  // llevar la misma. Se lee para poder enseñarla, nunca para decidir si algo está repetido.
+  referencia: {
+    etiquetas: ["referencia num", "n[úu]mero de referencia", "referencia"],
+    valor: /\d{1,20}/,
+    exigeDosPuntos: true,
+  },
+
+  hora: {
+    etiquetas: ["hora", "hora de operaci", "hora de la operaci"],
+    valor: /\d{1,2}:\d{2}(?::\d{2})?/,
+    exigeDosPuntos: false,
+  },
+
+  // Con quién fue la operación. Es el comercio en una compra y la persona o el banco en una
+  // transferencia — el mismo hueco del CEP, con distintos nombres según quién lo llene.
+  contraparte: {
+    // Inequívocas: pueden venir sin dos puntos, en la celda de al lado.
+    etiquetas: ["comercio", "establecimiento", "negocio", "beneficiario", "destinatario", "banco\\s+emisor"],
+    // Genéricas: exigen dos puntos o se comen el nombre del titular.
+    etiquetasDebiles: ["concepto(?:\\s+de\\s+pago)?", "entidad", "nombre", "ordenante"],
+    exigeDosPuntos: false,
+  },
+};
+
+/**
+ * Busca un campo por sus etiquetas. Devuelve el valor crudo o `null`.
+ *
+ * Todos los cuantificadores van con tope. Sin RE2 —y este proyecto no tiene dependencias— la
+ * defensa contra una entrada patológica es disciplina más medición, y hay una prueba que
+ * falla si leer un texto adversario tarda de más.
+ */
+function valorEtiquetado(texto, nombreCampo) {
+  const campo = CAMPOS[nombreCampo];
+  if (!campo || !campo.valor) return null;
+
+  const separador = campo.exigeDosPuntos ? "\\s*[:\\-]\\s*" : "\\s*[:\\-]?\\s*\\n?\\s*";
+  const etiquetas = campo.etiquetas.map((e) => (/[\\[\]().*+?]/.test(e) ? e : literal(e))).join("|");
+  const patron = new RegExp(`(?:${etiquetas})${separador}(${campo.valor.source})`, "i");
+
+  const encontrado = texto.match(patron);
+  if (!encontrado) return null;
+
+  const valor = encontrado[1];
+  // Una clave de rastreo sin un solo dígito es una palabra que quedó pegada a la etiqueta.
+  if (campo.exigeDigito && !/\d/.test(valor)) return null;
+  return valor;
+}
+
+/**
+ * Todas las etiquetas de contraparte, como las arma el lector.
+ *
+ * Vive aquí, con las demás, para que sumar un banco sea sumar sinónimos a la tabla. La lógica
+ * de qué se hace con lo encontrado se queda en lectura.js, donde está medida.
+ */
+function patronContraparte() {
+  const fuertes = CAMPOS.contraparte.etiquetas.join("|");
+  const debiles = CAMPOS.contraparte.etiquetasDebiles.join("|");
+  return new RegExp(
+    `(?:(?:${fuertes})\\s*[:\\-]?\\s*\\n?\\s*|(?:${debiles})\\s*[:\\-]\\s*)([^\\n|]{2,90})`,
+    "gi",
+  );
+}
+
+// ═══ motor/rapido.js ═══
+// Captura rápida — lo que nunca va a llegar por correo.
+//
+// En México la mitad del gasto no deja rastro digital: los tacos, el OXXO de la esquina, el
+// camión, las propinas, la señora de la fruta. El puente no lo va a ver nunca, y si eso no
+// entra, los números mienten hacia abajo y la app pierde la autoridad que la hace útil —que
+// es la otra forma de morirse, más lenta que perder datos pero igual de definitiva.
+//
+// La respuesta no es un catálogo de montos inventado por mí. Es SU historial: la gente que
+// gasta en efectivo repite cantidades, y esas cantidades son distintas para cada quien. Si
+// todavía no hay historial, aquí no se propone nada y aparece el botón de siempre: inventarle
+// un "$50 · comida" a alguien que nunca ha gastado eso es la misma clase de mentira que un
+// cero disfrazado de dato.
+
+
+
+/** Cuánto hacia atrás se mira. Lo de hace medio año ya no dice cómo gastas hoy. */
+const DIAS_DE_HISTORIA = 90;
+
+/** Cuántas veces tiene que repetirse un monto para que valga la pena ofrecerlo. */
+const REPETICIONES_MINIMAS = 2;
+
+/**
+ * Los montos que más repite, con la categoría que más les pone.
+ *
+ * Devuelve `[]` cuando no hay de dónde sacarlos, que es una respuesta válida y no un vacío
+ * que haya que rellenar.
+ */
+function montosFrecuentes(datos, iso = hoyISO(), cuantos = 3) {
+  const desde = sumarDias(iso, -DIAS_DE_HISTORIA);
+
+  const cuenta = new Map();
+  for (const lista of Object.values(datos.movimientos || {})) {
+    for (const m of lista) {
+      if (m.tipo !== TIPOS.GASTO) continue;
+      if (comparar(m.fecha, desde) < 0) continue;
+      // Los movimientos que nacieron de un fijo no son captura rápida: ya se pagan solos.
+      if (m.fijoId) continue;
+
+      const previo = cuenta.get(m.monto) || { monto: m.monto, veces: 0, categorias: new Map(), ultima: "" };
+      previo.veces++;
+      previo.categorias.set(m.categoria, (previo.categorias.get(m.categoria) || 0) + 1);
+      if (comparar(m.fecha, previo.ultima) > 0) previo.ultima = m.fecha;
+      cuenta.set(m.monto, previo);
+    }
+  }
+
+  return [...cuenta.values()]
+    .filter((c) => c.veces >= REPETICIONES_MINIMAS)
+    // Más repetido primero; a igual repetición, lo más reciente, que es lo que sigue vigente.
+    .sort((a, b) => b.veces - a.veces || comparar(b.ultima, a.ultima))
+    .slice(0, cuantos)
+    .map((c) => ({
+      monto: c.monto,
+      veces: c.veces,
+      categoriaId: categoriaDominante(c.categorias),
+    }));
+}
+
+function categoriaDominante(categorias) {
+  let mejor = null;
+  let masVeces = 0;
+  for (const [categoriaId, veces] of categorias) {
+    if (categoriaId && veces > masVeces) {
+      mejor = categoriaId;
+      masVeces = veces;
+    }
+  }
+  return mejor;
+}
+
+/**
+ * La categoría que le tocaría a un gasto de este monto, según lo que ha hecho antes.
+ * `null` cuando no hay con qué decidirlo — y entonces se pregunta, no se adivina.
+ */
+function categoriaProbable(datos, centavos, iso = hoyISO()) {
+  const encontrado = montosFrecuentes(datos, iso, 20).find((f) => f.monto === centavos);
+  return encontrado ? encontrado.categoriaId : null;
+}
+
 // ═══ motor/lectura.js ═══
 // Lectura de avisos — convertir el texto de un banco en un movimiento.
 //
@@ -2111,6 +2394,7 @@ function nombreDeBanco(id) {
 //
 // Funciona con cualquier banco, reconocido o no. La tabla de reglas-banco.js sube la
 // confianza; su ausencia no impide leer.
+
 
 
 
@@ -2316,13 +2600,9 @@ function comercioDelAviso(texto) {
   //   · las inequívocas ("Establecimiento") pueden venir sin dos puntos, en la celda de al lado;
   //   · las genéricas ("Nombre", "Entidad") EXIGEN dos puntos — si no, "NOMBRE APELLIDO" del
   //     titular se leería como si fuera el comercio, y el saludo "Hola, Nombre" también.
-  const etiquetas = new RegExp(
-    "(?:(?:comercio|establecimiento|negocio|beneficiario|destinatario|banco\\s+emisor)\\s*[:\\-]?\\s*\\n?\\s*" +
-    "|(?:concepto(?:\\s+de\\s+pago)?|entidad|nombre)\\s*[:\\-]\\s*)" +
-    "([^\\n|]{2,90})",
-    "gi",
-  );
-  for (const c of texto.matchAll(etiquetas)) {
+  // Las etiquetas viven en motor/campos.js, no aquí: sumar un banco es sumar sinónimos a una
+  // tabla de datos, que es lo que evita una rama de código por banco.
+  for (const c of texto.matchAll(patronContraparte())) {
     const recortado = recortarComercio(c[1]);
     if (recortado) return recortado;
   }
@@ -2408,10 +2688,27 @@ function tipoDelAviso(texto) {
 
 /**
  * La huella: qué hace que dos avisos sean el MISMO movimiento.
- * Los bancos mandan dos correos por una compra (la autorización y el cargo). Sin esto, cada
- * compra se contaría dos veces y la app mentiría hacia arriba, que es la peor dirección.
+ *
+ * Los bancos mandan dos correos por una compra —la autorización y el cargo— y dos por una
+ * transferencia entre tus propias cuentas, uno de cada lado. Sin esto, todo eso se contaría
+ * dos veces y la app mentiría hacia arriba, que es la peor dirección para mentir.
+ *
+ * Va en tres niveles, del identificador más fuerte al más débil, porque los avisos TRAEN
+ * identificadores y hasta ahora se estaban tirando:
+ *
+ *   1. La clave de rastreo CON el tipo. Identifica una operación SPEI de forma única y es la
+ *      misma desde los dos bancos — por eso hay que llevar el tipo pegado: una transferencia
+ *      entre tus propias cuentas manda un aviso de salida y otro de entrada con la MISMA
+ *      clave, y colapsarlos dejaría un solo gasto donde en realidad tu dinero no se movió.
+ *   2. El folio de autorización con los últimos cuatro. Suele conservarse entre la
+ *      preautorización y el cargo final, que es justo el par que cambia de monto: la
+ *      gasolinera retiene $100 y cobra $43.
+ *   3. Banco, fecha, monto, tarjeta y comercio. Lo de siempre, como red para el aviso que no
+ *      trae ningún identificador. Se queda: quitarlo dejaría sin defensa a esos.
  */
-function huellaDe({ banco, fecha, monto, ultimos4, comercio }) {
+function huellaDe({ banco, fecha, monto, ultimos4, comercio, claveRastreo, folio, tipo }) {
+  if (claveRastreo) return `rastreo|${String(claveRastreo).toLowerCase()}|${tipo || "?"}`;
+  if (folio && ultimos4) return `folio|${folio}|${ultimos4}`;
   return [banco || "?", fecha || "?", monto == null ? "?" : monto, ultimos4 || "?", normalizarComercio(comercio)]
     .join("|");
 }
@@ -2444,6 +2741,11 @@ function interpretar(entrada, remitente = "", hoy = hoyISO()) {
   const { tipo, explicito } = tipoDelAviso(texto);
   const traspaso = PISTAS_TRASPASO.test(texto);
 
+  // Los identificadores que el aviso ya traía y que hasta ahora se tiraban. No se guardan
+  // para enseñarlos: se guardan porque son lo que permite saber que dos avisos son uno.
+  const claveRastreo = valorEtiquetado(texto, "claveRastreo");
+  const folio = valorEtiquetado(texto, "folio");
+
   const razones = [];
   const lejos = Math.abs(diasEntre(hoy, iso));
   if (lejos > DIAS_RAZONABLES) {
@@ -2473,13 +2775,19 @@ function interpretar(entrada, remitente = "", hoy = hoyISO()) {
       categoria: tipo === TIPOS.GASTO ? "otros" : null,
       nota: comercio || (banco ? banco.nombre : ""),
       metodo: ultimos4 ? `••${ultimos4}` : null,
+      ref: claveRastreo || folio || null,
     },
     banco: banco ? banco.id : null,
     comercio,
     ultimos4,
+    claveRastreo,
+    folio,
     confianza,
     posibleTraspaso: traspaso,
-    huella: huellaDe({ banco: banco ? banco.id : null, fecha: iso, monto: Math.abs(centavos), ultimos4, comercio }),
+    huella: huellaDe({
+      banco: banco ? banco.id : null, fecha: iso, monto: Math.abs(centavos),
+      ultimos4, comercio, claveRastreo, folio, tipo,
+    }),
     veredicto: veredicto(
       confianza === CONFIANZAS.ALTA ? ESTADOS.VA_BIEN : ESTADOS.AJUSTADO,
       confianza === CONFIANZAS.ALTA ? SEVERIDADES.OK : SEVERIDADES.INFO,
@@ -2495,6 +2803,8 @@ function sinLectura(v, banco) {
     banco: banco ? banco.id : null,
     comercio: null,
     ultimos4: null,
+    claveRastreo: null,
+    folio: null,
     confianza: CONFIANZAS.BAJA,
     posibleTraspaso: false,
     huella: null,
@@ -2518,6 +2828,38 @@ function posibleDuplicado(datos, lectura) {
 
   const clave = normalizarComercio(lectura.comercio);
   const { fecha, monto } = lectura.movimiento;
+  const ref = lectura.movimiento.ref;
+
+  // Si el aviso trae identificador, no hay nada que adivinar: se busca por él y punto. Esta
+  // rama existe porque los avisos SIEMPRE traían estos datos y el lector los estaba tirando,
+  // dejando que un parecido de monto y fecha decidiera cosas que un folio decide sin dudar.
+  if (ref) {
+    for (const lista of Object.values(datos.movimientos || {})) {
+      for (const m of lista) {
+        if (m.ref !== ref) continue;
+
+        // Misma operación y sentido contrario: es una transferencia entre tus propias
+        // cuentas vista desde el otro lado. Tu dinero no se movió, solo cambió de bolsillo.
+        if (m.tipo !== lectura.movimiento.tipo) {
+          return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.INFO,
+            "Es el otro lado de una transferencia entre tus cuentas: tu dinero no cambia de total.",
+            { motivo: "traspaso", id: m.id });
+        }
+
+        // Mismo folio, mismo sentido, OTRO monto: la preautorización que se liquidó. Con el
+        // folio en la mano esto deja de ser una heurística de monto y fecha.
+        if (m.monto !== monto) {
+          return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+            `Es el cargo final de ${formatear(m.monto)} que ya tenías${lectura.comercio ? ` de ${lectura.comercio}` : ""}. ` +
+            "Reemplázalo en vez de sumar otro.",
+            { motivo: "liquidacion", id: m.id, montoPrevio: m.monto, montoNuevo: monto });
+        }
+
+        return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+          "Este movimiento ya está registrado — mismo folio del banco.", { motivo: "huella", id: m.id });
+      }
+    }
+  }
 
   // Se miran los meses que puedan tocar la ventana, no solo el del día.
   const meses = new Set();
@@ -2982,7 +3324,34 @@ function quincenasDeColchon(datos, iso = hoyISO(), n = 6) {
  */
 function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, iso = hoyISO()) {
   const lectura = interpretar(texto, remitente, iso);
-  if (!lectura.movimiento) return { datos, entrada: null, duplicado: null, error: lectura.veredicto };
+  if (!lectura.movimiento) {
+    // Pegado a mano, la persona está viendo la pantalla: el error se le enseña al instante y
+    // meterlo a la bandeja sería ruido. Lo que llega SOLO es otra cosa. Hasta hoy se contaba
+    // como "ilegible" y se tiraba, y con ocho de once bancos cuyo formato nadie ha visto —y
+    // plantillas que cambian sin avisar—, ahí desaparecía dinero real sin dejar rastro.
+    if (origen === ORIGENES.PEGADO) {
+      return { datos, entrada: null, duplicado: null, error: lectura.veredicto };
+    }
+
+    const entrada = normalizarEntrada({
+      recibido: iso,
+      estado: ESTADOS_BANDEJA.ILEGIBLE,
+      movimiento: null,
+      banco: lectura.banco,
+      origen,
+      aviso: lectura.veredicto.motivo,
+      falta: lectura.veredicto.datos && lectura.veredicto.datos.falta
+        ? [lectura.veredicto.datos.falta]
+        : ["cuánto"],
+      resumen: primeraLinea(texto),
+    });
+    return {
+      datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] },
+      entrada,
+      duplicado: null,
+      error: lectura.veredicto,
+    };
+  }
 
   const duplicado = posibleDuplicado(datos, lectura);
   if (duplicado && duplicado.datos.motivo === "huella") {
@@ -3010,6 +3379,25 @@ function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, is
   return { datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] }, entrada, duplicado, error: null };
 }
 
+/**
+ * La primera línea con algo escrito, para poder reconocer el aviso en la lista.
+ *
+ * La primera línea Y NADA MÁS. Cuando el aviso viene del puente, esa línea es el asunto del
+ * correo — "Notificación de compra" y el nombre del banco—, que alcanza para saber cuál es sin
+ * guardar el cuerpo. La promesa de este motor no cambia: el correo se lee y se tira.
+ */
+function primeraLinea(texto) {
+  const linea = limpiarAviso(texto).split("\n").map((l) => l.trim()).find(Boolean) || "";
+  return linea.slice(0, 120);
+}
+
+/** Las que llegaron y no se pudieron leer: esperan que digas cuánto y dónde. */
+function ilegibles(datos) {
+  return (datos.bandeja || [])
+    .filter((e) => e.estado === ESTADOS_BANDEJA.ILEGIBLE)
+    .sort((a, b) => comparar(b.recibido, a.recibido) || (a.id < b.id ? 1 : -1));
+}
+
 function entradaPorId(datos, id) {
   return (datos.bandeja || []).find((e) => e.id === id) || null;
 }
@@ -3027,6 +3415,7 @@ function resumenBandeja(datos) {
   return {
     pendientes: espera.length,
     dudosos: espera.filter((e) => e.confianza !== "alta").length,
+    ilegibles: ilegibles(datos).length,
     total: (datos.bandeja || []).length,
   };
 }
@@ -3038,7 +3427,7 @@ function resumenBandeja(datos) {
 function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
   const entrada = entradaPorId(datos, id);
   if (!entrada) return { datos, movimiento: null, error: "Esa entrada ya no está en la bandeja." };
-  if (entrada.estado !== ESTADOS_BANDEJA.PENDIENTE) {
+  if (!esperaRespuesta(entrada)) {
     return { datos, movimiento: null, error: "Esa entrada ya estaba resuelta." };
   }
 
@@ -3047,13 +3436,20 @@ function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
   // contado dos veces y la app mentiría hacia arriba, que es la peor dirección.
   const partida = reemplazar && entrada.reemplaza ? eliminarMovimiento(datos, entrada.reemplaza) : datos;
 
-  const propuesto = { ...entrada.movimiento, ...camposCambiados };
+  // Una entrada ILEGIBLE no trae movimiento: lo pone la persona. Se le da la fecha en que
+  // llegó el aviso como punto de partida, que es lo más cercano a la verdad que se sabe.
+  const base = entrada.movimiento || { fecha: entrada.recibido, tipo: TIPOS.GASTO, categoria: "otros" };
+  const propuesto = { ...base, ...camposCambiados };
   const { datos: conMovimiento, movimiento, error } = agregarMovimiento(partida, propuesto);
   if (error) return { datos, movimiento: null, error };
 
-  // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó.
-  const aprendido = entrada.comercio && movimiento.tipo === TIPOS.GASTO && movimiento.categoria
-    ? recordar(conMovimiento, entrada.comercio, movimiento.categoria, iso)
+  // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó. En una
+  // entrada ilegible el comercio no salió del correo: lo escribió la persona, y ése es
+  // justamente el que hay que aprender — así el siguiente aviso del mismo lugar ya llega con
+  // su categoría aunque el formato del banco siga sin entenderse.
+  const paraAprender = entrada.comercio || movimiento.nota;
+  const aprendido = paraAprender && movimiento.tipo === TIPOS.GASTO && movimiento.categoria
+    ? recordar(conMovimiento, paraAprender, movimiento.categoria, iso)
     : conMovimiento;
 
   return {
@@ -3074,7 +3470,7 @@ function descartarEntrada(datos, id) {
   return {
     ...datos,
     bandeja: (datos.bandeja || []).map((e) =>
-      e.id === id && e.estado === ESTADOS_BANDEJA.PENDIENTE
+      e.id === id && esperaRespuesta(e)
         ? { ...e, estado: ESTADOS_BANDEJA.DESCARTADO }
         : e),
   };
@@ -3102,7 +3498,7 @@ function purgarBandeja(datos, antesDe) {
   return {
     ...datos,
     bandeja: (datos.bandeja || []).filter(
-      (e) => e.estado === ESTADOS_BANDEJA.PENDIENTE || comparar(e.recibido, antesDe) >= 0),
+      (e) => esperaRespuesta(e) || comparar(e.recibido, antesDe) >= 0),
   };
 }
 
@@ -3123,6 +3519,48 @@ function impactoPendiente(datos) {
         { pendientes: espera.length, gasto, ingreso })
       : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "No hay nada esperando.", { pendientes: 0 }),
   };
+}
+
+/**
+ * Acepta varias entradas de un jalón, con UN solo guardado.
+ *
+ * Ésta es la pieza que decide si la app sirve para alguien sin tiempo. Con el puente trayendo
+ * correos, son ~40 avisos por quincena, y a un toque cada uno eso es exactamente el mecanismo
+ * que la investigación señala como la causa número uno de que la gente abandone estas apps
+ * antes de los 30 días. En lote son tres.
+ *
+ * La regla de la casa NO cambia: sigue aceptando la persona, viendo antes lo que acepta. Lo
+ * que cambia es que decir que sí a doce cosas cueste un toque en vez de doce.
+ *
+ * Si alguna no se puede aceptar, se queda esperando y las demás pasan: un fallo suelto no
+ * puede tumbar la tanda ni dejarla a medias sin decirlo.
+ */
+function aceptarTanda(datos, ids, iso = hoyISO()) {
+  let actual = datos;
+  const aceptados = [];
+  const fallaron = [];
+
+  for (const id of ids || []) {
+    const paso = aceptarEntrada(actual, id, {}, iso);
+    if (paso.error || !paso.movimiento) {
+      fallaron.push(id);
+      continue;
+    }
+    actual = paso.datos;
+    aceptados.push(id);
+  }
+
+  return { datos: actual, aceptados, fallaron };
+}
+
+/** Deshace una tanda entera. Es lo que hace que aceptar de golpe no dé miedo. */
+function deshacerTanda(datos, ids) {
+  return (ids || []).reduce((acumulado, id) => deshacerEntrada(acumulado, id), datos);
+}
+
+/** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */
+function deConfianzaAlta(datos) {
+  return pendientes(datos).filter((e) => e.confianza === "alta" && !e.reemplaza);
 }
 
 // ═══ almacen/archivo.js ═══
@@ -3156,12 +3594,57 @@ function importar(texto) {
   return migrar(crudo);
 }
 
+/**
+ * Cada cuántos días tiene sentido volver a bajar un respaldo. Ni tan seguido que se vuelva
+ * ruido que se aprende a ignorar, ni tan lejos que una limpieza del navegador duela.
+ */
+const DIAS_ENTRE_RESPALDOS = 30;
+
+/** Debajo de esto no se molesta a nadie: todavía no hay gran cosa que perder. */
+const MINIMO_PARA_INSISTIR = 10;
+
+/**
+ * ¿Toca recordarle bajar un respaldo? Devuelve `null` cuando no, y si sí, con qué números.
+ *
+ * Es la lección de Mint, que cerró con 25 millones de usuarios encima: lo que salva tu
+ * historia no es que la app tenga exportador, es haberlo USADO. Grip lo tiene desde el
+ * principio y nunca lo mencionaba, así que servía de nada.
+ *
+ * No bloquea, no regaña y no aparece si no hay nada nuevo que perder.
+ */
+function respaldoPendiente(datos, iso = hoyISO()) {
+  const movimientos = Object.values((datos && datos.movimientos) || {}).flat();
+  if (!movimientos.length) return null; // sin nada capturado, no hay nada que salvar
+
+  const ultimo = datos.ultimoRespaldo || null;
+
+  if (!ultimo) {
+    // Nunca ha bajado uno. Se espera a que haya algo que de verdad duela perder.
+    return movimientos.length >= MINIMO_PARA_INSISTIR
+      ? { nunca: true, dias: null, movimientos: movimientos.length }
+      : null;
+  }
+
+  const dias = diasEntre(ultimo.slice(0, 10), iso);
+  if (dias < DIAS_ENTRE_RESPALDOS) return null;
+
+  // Y si desde el último respaldo no capturó nada, tampoco hay por qué molestarlo.
+  const nuevos = movimientos.filter((m) => comparar(m.fecha, ultimo.slice(0, 10)) > 0).length;
+  return nuevos > 0 ? { nunca: false, dias, movimientos: nuevos } : null;
+}
+
 // ═══ almacen/local.js ═══
 // Almacén local — la base sobre la que corre todo, en el propio navegador.
 //
 // IndexedDB primero (aguanta años de movimientos y sobrevive a recargas), localStorage si
 // no está disponible, y memoria como último recurso. El nivel que se logró se DECLARA:
 // una app que guarda en memoria y no lo dice es una app que te va a perder los datos.
+//
+// Y hay DOS preguntas distintas que antes se respondían con un solo `true`:
+//   `duradero`   — ¿sobrevive a cerrar la pestaña?  (sí en IndexedDB y localStorage)
+//   `persistente`— ¿el navegador se comprometió a no borrarlo si anda corto de espacio?
+// La segunda hay que PEDIRLA y puede negarse. Decir que sí sin haberla pedido —que es lo que
+// hacía este archivo— es la clase de mentira que se cobra el día que el sistema hace limpieza.
 //
 // Cuidado con las guardas: en un origen aislado (un iframe sin `allow-same-origin`, o un
 // navegador con los datos de sitio bloqueados) **hasta leer** `window.localStorage` lanza
@@ -3178,6 +3661,32 @@ function leerGlobal(nombre) {
     return globalThis[nombre] || null;
   } catch (e) {
     return null;
+  }
+}
+
+/**
+ * Le pide al navegador que NO borre estos datos cuando ande corto de espacio.
+ *
+ * Sin esto, lo guardado es "mejor esfuerzo": Safari borra todo el almacenamiento de scripts a
+ * los 7 días sin interacción, y Chrome desaloja primero los orígenes que no lo pidieron. Una
+ * app de finanzas que pierde el historial no es una app de finanzas.
+ *
+ * Devuelve lo que el navegador CONCEDIÓ, no lo que se pidió: si dice que no, hay que decirlo
+ * en pantalla en vez de suponer que sí. Nunca lanza y nunca se queda colgada.
+ */
+async function pedirPersistencia() {
+  const almacenamiento = leerGlobal("navigator") && leerGlobal("navigator").storage;
+  if (!almacenamiento || typeof almacenamiento.persist !== "function") return false;
+  try {
+    // Si ya estaba concedida, no se vuelve a pedir: en Firefox eso le sale al usuario como
+    // una pregunta, y preguntar dos veces por lo mismo es una forma de gastarle el permiso.
+    if (typeof almacenamiento.persisted === "function" && (await almacenamiento.persisted())) return true;
+    return (await Promise.race([
+      almacenamiento.persist(),
+      new Promise((r) => setTimeout(() => r(false), 3000)),
+    ])) === true;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -3242,6 +3751,7 @@ function enMemoria(motivo) {
   return {
     tipo: "memoria",
     duradero: false,
+    persistente: false,
     motivo,
     async cargar() {
       return memoria;
@@ -3265,9 +3775,13 @@ async function abrirLocal() {
   }
 
   if (bd) {
+    const persistente = await pedirPersistencia();
     return {
       tipo: "indexeddb",
       duradero: true,
+      persistente,
+      // `motivo` es para cuando algo se degradó. Que no haya persistencia no degrada nada
+      // aquí: es un hecho que la interfaz tiene que contar con sus palabras, no un fallo.
       motivo: null,
       async cargar() {
         try {
@@ -3290,6 +3804,8 @@ async function abrirLocal() {
     return {
       tipo: "localstorage",
       duradero: true,
+      // localStorage es el nivel de abajo: nunca tuvo garantía de permanencia y no se le pide.
+      persistente: false,
       motivo: null,
       async cargar() {
         try {
@@ -3328,6 +3844,7 @@ async function abrirLocal() {
 
 
 
+
 const MODOS = {
   SINCRONIZADO: "sincronizado",
   LOCAL: "local",
@@ -3359,6 +3876,9 @@ async function abrirAlmacen(opciones = {}) {
   const estado = {
     modo: espejo ? MODOS.SINCRONIZADO : local.duradero ? MODOS.LOCAL : MODOS.EFIMERO,
     tipoLocal: local.tipo,
+    // ¿El navegador se comprometió a no borrar esto si anda corto de espacio? Es distinto de
+    // `duradero` (sobrevivir a cerrar la pestaña) y la interfaz tiene que poder decirlo.
+    persistente: local.persistente === true,
     motivo: local.motivo || null,
     // Se enciende cuando se leyeron datos que este código no sabe abrir (versión más
     // nueva). Mientras esté encendido NO se escribe: escribir sería borrarlos.
@@ -3386,22 +3906,54 @@ async function abrirAlmacen(opciones = {}) {
         }
       }
 
-      const elegido = masReciente(crudoLocal, crudoEspejo);
-      if (!elegido) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
+      if (!crudoLocal && !crudoEspejo) return { datos: datosVacios(hoyISO()), nuevo: true, aviso: null };
 
-      const resultado = migrar(elegido);
-      if (!resultado.ok) {
-        // Ni se abre a medias ni se borra: se conserva, se explica y se traba la escritura.
+      // Cada lado se sube a la versión de hoy ANTES de unirlos. Fusionar un documento v2 con
+      // uno v3 mezclaría dos formas distintas de los mismos datos, que es peor que no unir.
+      const ladoLocal = crudoLocal ? migrar(crudoLocal) : null;
+      const ladoEspejo = crudoEspejo ? migrar(crudoEspejo) : null;
+
+      // Si CUALQUIERA de los dos no se sabe abrir, no se toca nada: ni se abre a medias ni se
+      // borra. Se conserva, se explica y se traba la escritura.
+      const fallo = [ladoLocal, ladoEspejo].find((lado) => lado && !lado.ok);
+      if (fallo) {
         estado.bloqueado = true;
-        estado.motivo = resultado.motivo;
-        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: resultado.motivo, bloqueado: true };
+        estado.motivo = fallo.motivo;
+        return { datos: datosVacios(hoyISO()), nuevo: true, aviso: fallo.motivo, bloqueado: true };
       }
       estado.bloqueado = false;
 
-      // El que iba atrás se pone al día con el que ganó.
-      if (elegido === crudoEspejo && crudoEspejo) await local.guardar(resultado.datos);
+      const datosLocal = ladoLocal ? ladoLocal.datos : null;
+      const datosEspejo = ladoEspejo ? ladoEspejo.datos : null;
 
-      return { datos: resultado.datos, nuevo: false, aviso: resultado.motivo || null };
+      // Y aquí lo importante: se UNEN. Antes ganaba un documento entero por su fecha y el otro
+      // se descartaba completo — lo capturado en el aparato que sincronizó primero desaparecía
+      // sin avisar. Ahora no se pierde nada que alguien no haya borrado a propósito.
+      const unido = normalizar(fusionar(datosLocal, datosEspejo));
+
+      // El que iba atrás se pone al día. `difieren` evita reescribir cuando ya decían lo mismo.
+      if (difieren(unido, datosLocal)) await local.guardar(unido);
+      if (espejo && difieren(unido, datosEspejo)) {
+        try {
+          await espejo.guardar(unido);
+        } catch (e) {
+          degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+        }
+      }
+
+      // Un reloj adelantado hace que gane el aparato equivocado en todo lo escalar. No se
+      // bloquea nada por eso —los movimientos ya se unen por id—, pero sí se dice.
+      const desfase = relojDesfasado([datosLocal, datosEspejo], new Date().toISOString());
+      estado.aviso = desfase
+        ? `El reloj de alguno de tus dispositivos va ${desfase} minutos adelantado. ` +
+          "Tus movimientos están completos, pero ajústalo para que los cambios de ajustes no se pisen."
+        : null;
+
+      const avisos = [ladoLocal, ladoEspejo]
+        .filter((lado) => lado && lado.motivo)
+        .map((lado) => lado.motivo)
+        .concat(estado.aviso || []);
+      return { datos: unido, nuevo: false, aviso: avisos.length ? avisos.join(" ") : null };
     },
 
     async guardar(datos) {
@@ -3438,15 +3990,6 @@ async function abrirAlmacen(opciones = {}) {
       estado.motivo = local.motivo || null;
     },
   };
-}
-
-/** Gana el documento con el `actualizado` más reciente. Un solo usuario: no hay que fusionar. */
-function masReciente(a, b) {
-  if (!a) return b || null;
-  if (!b) return a;
-  const fechaA = a.actualizado || a.creado || "";
-  const fechaB = b.actualizado || b.creado || "";
-  return fechaB > fechaA ? b : a;
 }
 
 // ═══ almacen/anfitrion-claude.js ═══
@@ -3645,6 +4188,78 @@ async function traerAvisos({ url, token, dias = 3 } = {}) {
   }
 }
 
+/**
+ * Habla con el puente y traduce el fallo a algo accionable.
+ *
+ * Existe porque el puente vive en la cuenta de Google de la persona, no aquí, y cuando algo
+ * falla el error de red no dice nada útil. Sin esto, "no se pudo hablar con el puente" deja a
+ * cualquiera sin saber si le falta pegar la URL, si el token está mal, o si a Google se le
+ * acabó el permiso. Un diagnóstico que no dice qué mover no sirve de nada.
+ */
+async function probarPuente({ url, token } = {}) {
+  if (!url) return { ok: false, motivo: "Falta la dirección. Es la que termina en /exec." };
+  if (!/\/exec\s*$/.test(url)) {
+    return {
+      ok: false,
+      motivo: "Esa dirección no termina en /exec. La que sirve es la de la IMPLEMENTACIÓN, " +
+        "no la del editor del script.",
+    };
+  }
+  if (!token) return { ok: false, motivo: "Falta el token: la frase que inventaste en el script." };
+
+  const { avisos, error } = await traerAvisos({ url, token, dias: 1 });
+
+  if (error) {
+    if (/token/i.test(error)) {
+      return { ok: false, motivo: "El puente contesta, pero rechaza el token. Tiene que ser IDÉNTICO al del script." };
+    }
+    if (/\b(401|403)\b/.test(error)) {
+      return {
+        ok: false,
+        motivo: "Google no deja entrar. En la implementación, 'Quién tiene acceso' debe decir " +
+          "Cualquier usuario, y 'Ejecutar como' debe decir Yo.",
+      };
+    }
+    if (/\b404\b/.test(error)) {
+      return { ok: false, motivo: "En esa dirección no hay nada. Si editaste el script, haz una implementación NUEVA: la URL cambia." };
+    }
+    if (/no entiendo/i.test(error)) {
+      return { ok: false, motivo: "Contesta algo que no es JSON. Suele ser que Apps Script está pidiendo permisos: ábrela en el navegador y acéptalos." };
+    }
+    return { ok: false, motivo: error };
+  }
+
+  return {
+    ok: true,
+    motivo: avisos.length
+      ? `El puente funciona: encontró ${avisos.length} ${avisos.length === 1 ? "aviso" : "avisos"} del último día.`
+      : "El puente funciona. No encontró avisos del último día, que puede ser normal — revisa que REMITENTES tenga tus bancos.",
+    avisos: avisos.length,
+  };
+}
+
+/**
+ * Le deja al puente el resumen para el correo diario. Son cuatro cifras, no los movimientos.
+ *
+ * Silencioso a propósito: esto ocurre al guardar, y que el correo diario no se actualice no
+ * puede interrumpir a nadie ni ensuciar la pantalla. Si falla, el correo lo dirá por su cuenta
+ * —va sellado con su fecha— y eso es mejor que una alerta que nadie pidió.
+ */
+async function depositarResumen({ url, token, resumen } = {}) {
+  if (!url || !token || !resumen) return false;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ token, accion: "resumen", resumen }),
+      redirect: "follow",
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ═══ interfaz/ui.js ═══
 // Interfaz — render directo, sin framework y sin dependencias.
 //
@@ -3670,7 +4285,10 @@ async function traerAvisos({ url, token, dias = 3 } = {}) {
 
 
 
+
 const app = {
+  // Los ids de lo último aceptado en lote, para poder revertirlo entero.
+  ultimaTanda: null,
   datos: datosVacios(),
   almacen: null,
   vista: "hoy",
@@ -3750,7 +4368,10 @@ function render() {
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
   const sincronizado = estado.modo === MODOS.SINCRONIZADO;
-  const esperando = resumenBandeja(app.datos).pendientes;
+  // El globo cuenta TODO lo que espera respuesta, ilegibles incluidas: si no aparecen aquí,
+  // no existen para nadie y volvemos al punto de partida, solo que con la entrada guardada.
+  const resumen = resumenBandeja(app.datos);
+  const esperando = resumen.pendientes + resumen.ilegibles;
 
   const etiquetaEstado = sincronizado
     ? "Sincronizado"
@@ -3802,6 +4423,34 @@ function vistaActual() {
 
 function nombreCiclo(ciclo) {
   return ciclo.total > 1 ? "quincena" : "mensualidad";
+}
+
+/**
+ * Qué se le dice a la persona sobre dónde viven sus datos.
+ *
+ * Son DOS preguntas y antes se contestaban con una sola frase optimista: si sobrevive a cerrar
+ * la pestaña, y si el navegador se comprometió a no borrarlo cuando ande corto de espacio. Lo
+ * segundo hay que pedirlo y puede negarse — Safari borra el almacenamiento de scripts a los 7
+ * días sin interacción, y ahí se va un historial entero. Cuando no está concedido, se dice, y
+ * se dice también qué hacer: instalarla en la pantalla de inicio y bajar un respaldo.
+ */
+function textoDelAlmacenamiento(estado) {
+  if (estado.modo === MODOS.EFIMERO) {
+    return "Este navegador no deja guardar nada: al cerrar la pestaña se pierde lo capturado. Descarga un respaldo antes de cerrar.";
+  }
+
+  const donde =
+    estado.modo === MODOS.SINCRONIZADO
+      ? "Lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda en éste."
+      : `Todo se guarda en este dispositivo (${estado.tipoLocal}). Para pasarlo a otro lado, usa el respaldo en Ajustes.`;
+
+  const permanencia = estado.persistente
+    ? "El navegador se comprometió a no borrarlo aunque ande corto de espacio."
+    : "Ojo: el navegador NO concedió almacenamiento permanente, así que el sistema puede borrarlo si se " +
+      "queda sin espacio o si pasan semanas sin abrir la app. Instálala en tu pantalla de inicio para que " +
+      "sea mucho menos probable, y baja un respaldo de vez en cuando.";
+
+  return [donde, permanencia, estado.motivo].filter(Boolean).join(" ");
 }
 
 function vistaHoy() {
@@ -3879,6 +4528,39 @@ function vistaHoy() {
     : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
         ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
 
+  // Lo que nunca va a llegar por correo: los tacos, el OXXO, el camión, las propinas. Si eso
+  // no entra, los números mienten hacia abajo. Los montos salen de SU historial —la gente
+  // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
+  // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
+  const frecuentes = montosFrecuentes(datos, hoy);
+  const rapido = frecuentes.length
+    ? `<div class="tarjeta">
+        <div class="rotulo">Lo de siempre, en efectivo</div>
+        <div class="acciones">
+          ${frecuentes.map((f) => {
+            const categoria = categoriaPorId(datos, f.categoriaId);
+            return `<button class="boton tenue" data-accion="gasto-rapido"
+              data-monto="${f.monto}" data-categoria="${esc(f.categoriaId || "otros")}"
+              title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
+          }).join("")}
+          <button class="boton tenue" data-accion="capturar">Otro</button>
+        </div>
+      </div>`
+    : "";
+
+  // La lección de Mint: tener exportador no salva a nadie; haberlo usado, sí. No bloquea,
+  // no regaña, y no aparece si no hay nada nuevo que perder.
+  const pendienteRespaldo = respaldoPendiente(datos, hoy);
+  const respaldoBanner = pendienteRespaldo
+    ? `<div class="aviso">
+        <b>${pendienteRespaldo.nunca
+            ? `Llevas ${pendienteRespaldo.movimientos} movimientos y ningún respaldo.`
+            : `Hace ${pendienteRespaldo.dias} días del último respaldo.`}</b>
+        Vive todo en este dispositivo: si el navegador hace limpieza, se va. Es un toque.
+        <div class="acciones"><button class="boton chico" data-accion="exportar">Bajar respaldo</button></div>
+      </div>`
+    : "";
+
   const espera = pendientes(datos);
   const bandejaBanner = espera.length
     ? `<div class="aviso">
@@ -3918,7 +4600,7 @@ function vistaHoy() {
              ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
          </div>`;
 
-  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${rapido}${tarjetaColchon}${respaldoBanner}${listaMovimientos}`;
 }
 
 // --- Vista: Bandeja ---
@@ -3997,6 +4679,7 @@ function tarjetaEntrada(entrada) {
 
 function vistaBandeja() {
   const espera = pendientes(app.datos);
+  const sinLeer = ilegibles(app.datos);
   const impacto = impactoPendiente(app.datos);
 
   const pegar = `<div class="tarjeta">
@@ -4008,8 +4691,26 @@ function vistaBandeja() {
     <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
   </div>`;
 
+  // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
+  // nada, se pierde un gasto de verdad. Cada uno pide dos datos y ya.
+  const seccionSinLeer = sinLeer.length
+    ? `<div class="titulo-seccion">No supe leer ${sinLeer.length === 1 ? "este" : `estos ${sinLeer.length}`}</div>
+       <div class="rotulo" style="margin:0 0 8px">Llegaron de tus bancos y no entendí el formato. Dime cuánto
+         y dónde, y además aprendo: el siguiente de ese lugar ya entra solo.</div>
+       ${sinLeer.slice(0, app.verBandeja).map(tarjetaIlegible).join("")}`
+    : "";
+
+  const deshacerLote = app.ultimaTanda && app.ultimaTanda.length
+    ? `<div class="aviso">
+        <b>Acepté ${app.ultimaTanda.length}.</b> Si alguno no era, se revierte entero.
+        <div class="acciones">
+          <button class="boton chico tenue" data-accion="deshacer-tanda">Deshacer</button>
+        </div>
+      </div>`
+    : "";
+
   if (!espera.length) {
-    return `${pegar}<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`;
+    return `${seccionSinLeer}${deshacerLote}${pegar}${sinLeer.length ? "" : `<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`}`;
   }
 
   const resumen = `<div class="tarjeta">
@@ -4019,6 +4720,22 @@ function vistaBandeja() {
     <div class="rotulo">es lo que cambiaría si aceptas todo</div>
   </div>`;
 
+  // Aceptar en lote. La regla no cambia —sigue aceptando él, viendo antes qué acepta—; lo que
+  // cambia es que decir que sí a doce cosas cueste un toque en vez de doce. Con el puente
+  // trayendo ~40 avisos por quincena, ésta es la diferencia entre una app que se usa y una que
+  // se abandona a los 30 días, que es lo que le pasa a dos de cada tres.
+  const claras = deConfianzaAlta(app.datos);
+  const totalClaras = claras.reduce((t, e) => t + (e.movimiento.tipo === TIPOS.GASTO ? e.movimiento.monto : 0), 0);
+  const lote = claras.length >= 2
+    ? `<div class="aviso">
+        <b>${claras.length} los leí completos, sin nada que revisar.</b>
+        Suman ${monto(totalClaras)} en gastos. Están abajo, uno por uno, por si quieres mirarlos.
+        <div class="acciones">
+          <button class="boton chico" data-accion="aceptar-tanda">Aceptar los ${claras.length}</button>
+        </div>
+      </div>`
+    : "";
+
   const visibles = espera.slice(0, app.verBandeja);
   const faltan = espera.length - visibles.length;
   const masBoton = faltan
@@ -4026,7 +4743,34 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  return `${seccionSinLeer}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+}
+
+/**
+ * Un aviso que llegó y no se pudo leer. Pide lo mínimo: cuánto y dónde.
+ *
+ * Antes esto ni existía — el correo se contaba como "ilegible" y se tiraba, así que con ocho
+ * de once bancos cuyo formato nadie ha visto, ahí se iba dinero real sin dejar rastro. Se
+ * enseña la primera línea del aviso para poder reconocerlo; el cuerpo no se guarda.
+ */
+function tarjetaIlegible(entrada) {
+  const banco = entrada.banco ? nombreDeBanco(entrada.banco) : "un banco";
+  return `<div class="tarjeta">
+    <div class="fila apilada">
+      <div class="linea"><div class="nombre">${esc(entrada.resumen || `Aviso de ${banco}`)}</div></div>
+      <div class="sub">llegó el ${fechaCorta(entrada.recibido)}${entrada.banco ? ` · ${esc(banco)}` : ""}</div>
+    </div>
+    <div class="duo">
+      <div class="campo"><label for="ileg-monto-${esc(entrada.id)}">Cuánto</label>
+        <input id="ileg-monto-${esc(entrada.id)}" inputmode="decimal" class="monto" placeholder="0.00"></div>
+      <div class="campo"><label for="ileg-nota-${esc(entrada.id)}">Dónde</label>
+        <input id="ileg-nota-${esc(entrada.id)}" type="text" placeholder="OXXO, Uber, la tienda…"></div>
+    </div>
+    <div class="acciones">
+      <button class="boton" data-accion="guardar-ilegible" data-id="${esc(entrada.id)}">Guardar</button>
+      <button class="boton tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">No era un gasto</button>
+    </div>
+  </div>`;
 }
 
 function filaMovimiento(m) {
@@ -4412,7 +5156,25 @@ function vistaAjustes() {
            <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
          </div>
          <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
-         ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
+         ${puente.url ? `<div class="acciones">
+             <button class="boton" data-accion="traer-del-puente">Traer ahora</button>
+             <button class="boton tenue" data-accion="probar-puente">Probar puente</button>
+           </div>` : ""}
+         <details style="margin-top:10px">
+           <summary class="rotulo" style="cursor:pointer">Cómo encenderlo, paso a paso</summary>
+           <ol class="rotulo" style="padding-left:18px;line-height:1.7">
+             <li>Entra a <b>script.google.com</b> → Nuevo proyecto.</li>
+             <li>Pega el archivo <code>puente/Codigo.gs</code> del repositorio, completo.</li>
+             <li>Cambia <code>TOKEN</code> por una frase larga que inventes tú, y pon tus bancos en <code>REMITENTES</code>.</li>
+             <li>Implementar → Nueva implementación → <b>Aplicación web</b>.
+               Ejecutar como <b>Yo</b>, acceso <b>Cualquier usuario</b>.</li>
+             <li>Copia la dirección que termina en <code>/exec</code> y pégala aquí arriba con tu token.</li>
+             <li>Dale a <b>Probar puente</b>: si algo falla, te digo exactamente qué mover.</li>
+           </ol>
+           <div class="rotulo">Para el correo diario, en el editor: elige la función
+             <code>enviarResumenDiario</code>, ejecútala una vez para dar permiso, y en
+             <b>Activadores</b> ponle un temporizador diario. Para apagarlo, borra el activador.</div>
+         </details>
          <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
          ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
@@ -4666,14 +5428,17 @@ async function atenderCompartido() {
 
   app.vista = "bandeja";
   const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.COMPARTIDO, app.hoy);
-  if (error) {
-    app.aviso = `No pude leer lo que compartiste: ${error.motivo}`;
-    return render();
-  }
+
+  // El orden importa: lo primero es si hubo ENTRADA, no si hubo error. Un aviso que no se
+  // supo leer deja entrada igual —esperando que digas cuánto y dónde— y preguntar por el
+  // error antes salía de aquí sin guardarla, o sea tirando lo que se acababa de rescatar.
   if (!entrada) {
-    app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+    app.aviso = error
+      ? `No pude leer lo que compartiste: ${error.motivo}`
+      : duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
     return render();
   }
+  if (error) app.aviso = "No supe leer ese aviso, pero lo guardé: dime cuánto y dónde.";
   try {
     await guardar(datos);
   } catch (e) {
@@ -4702,6 +5467,38 @@ async function guardar(datos) {
     throw e;
   }
   render();
+  dejarResumenEnElPuente();
+}
+
+/**
+ * Le deja al puente las cuatro cifras del correo diario. Sin esperar y sin molestar.
+ *
+ * El script de Google no conoce tus números —viven aquí— así que la única forma de que el
+ * correo diario diga algo cierto es que la app se los deje al guardar. Va sellado con su
+ * fecha del lado del script: si se queda viejo, el correo lo dice en vez de presentarlo como
+ * si fuera de hoy.
+ */
+function dejarResumenEnElPuente() {
+  if (typeof depositarResumen !== "function" || typeof configuracionDelPuente !== "function") return;
+  const puente = configuracionDelPuente();
+  if (!puente || !puente.url || !puente.token) return;
+
+  try {
+    const panel = panelHoy(app.datos, app.hoy);
+    depositarResumen({
+      url: puente.url,
+      token: puente.token,
+      resumen: {
+        disponible: panel.disponible,
+        porDia: panel.porDia,
+        cierre: panel.capacidad ? panel.capacidad.monto : null,
+        finDeCiclo: panel.ciclo.fin,
+        pendientes: resumenBandeja(app.datos).pendientes,
+      },
+    });
+  } catch (e) {
+    // Que el correo diario no se actualice no puede interrumpir a nadie.
+  }
 }
 
 const acciones = {
@@ -4717,14 +5514,7 @@ const acciones = {
   },
 
   "ver-estado"() {
-    const estado = app.almacen.estado();
-    const texto =
-      estado.modo === MODOS.SINCRONIZADO
-        ? "Sincronizado: lo que capturas aquí aparece también en tus otros dispositivos, y una copia queda guardada en éste."
-        : estado.modo === MODOS.EFIMERO
-          ? "Este navegador no deja guardar nada. Descarga un respaldo antes de cerrar la pestaña."
-          : `Todo se guarda en este dispositivo (${estado.tipoLocal}). No hay sincronización, así que para pasarlo a otro lado usa el respaldo en Ajustes.`;
-    app.aviso = estado.motivo ? `${texto} ${estado.motivo}` : texto;
+    app.aviso = textoDelAlmacenamiento(app.almacen.estado());
     render();
   },
 
@@ -4788,23 +5578,34 @@ const acciones = {
     // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
     // parpadeando y multiplicaría las escrituras por nada.
     let datos = app.datos;
-    let nuevos = 0, repetidos = 0, ilegibles = 0;
+    let nuevos = 0, repetidos = 0, sinLeer = 0;
     for (const aviso of avisos) {
       const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
       const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
-      if (paso.error) ilegibles++;
-      else if (!paso.entrada) repetidos++;
-      else { nuevos++; datos = paso.datos; }
+
+      // Lo que importa es si hubo ENTRADA, no si hubo error. Un aviso que no se pudo leer
+      // ahora deja entrada igual, esperando que digas cuánto y dónde; antes se contaba como
+      // "ilegible" y el correo se tiraba aquí mismo, con el gasto adentro.
+      if (!paso.entrada) {
+        repetidos++;
+        continue;
+      }
+      datos = paso.datos;
+      if (paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE) sinLeer++;
+      else nuevos++;
     }
 
+    const total = nuevos + sinLeer;
     app.vista = "bandeja";
-    app.aviso = nuevos
-      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.${repetidos ? ` ${repetidos} ya los tenías.` : ""}`
+    app.aviso = total
+      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.` +
+        (sinLeer ? ` ${sinLeer} que no supe leer y ${sinLeer === 1 ? "espera" : "esperan"} tus datos.` : "") +
+        (repetidos ? ` ${repetidos} ya los tenías.` : "")
       : avisos.length
         ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
         : "No encontré avisos de tus bancos en los últimos días.";
 
-    if (nuevos) await guardar(datos);
+    if (total) await guardar(datos);
     else render();
   },
 
@@ -4863,12 +5664,102 @@ const acciones = {
     });
   },
 
+  async "probar-puente"() {
+    if (typeof probarPuente !== "function" || typeof configuracionDelPuente !== "function") return;
+    const puente = configuracionDelPuente();
+
+    app.aviso = "Probando el puente…";
+    render();
+
+    const { ok, motivo } = await probarPuente({ url: puente.url, token: puente.token });
+    app.aviso = ok ? `✓ ${motivo}` : motivo;
+    render();
+  },
+
+  async "aceptar-tanda"() {
+    const claras = deConfianzaAlta(app.datos);
+    if (!claras.length) return;
+
+    const { datos, aceptados, fallaron } = aceptarTanda(app.datos, claras.map((e) => e.id), app.hoy);
+    if (!aceptados.length) {
+      app.aviso = "No pude aceptar ninguno. Míralos uno por uno.";
+      return render();
+    }
+
+    app.ultimaTanda = aceptados;
+    app.aviso = `Listo: ${aceptados.length} ${aceptados.length === 1 ? "movimiento" : "movimientos"} registrados.` +
+      (fallaron.length ? ` ${fallaron.length} no se pudieron y siguen esperando.` : "");
+    await guardar(datos);
+  },
+
+  async "deshacer-tanda"() {
+    if (!app.ultimaTanda || !app.ultimaTanda.length) return;
+    const datos = deshacerTanda(app.datos, app.ultimaTanda);
+    app.aviso = `Revertidos ${app.ultimaTanda.length}. Vuelven a estar esperando.`;
+    app.ultimaTanda = null;
+    await guardar(datos);
+  },
+
+  async "gasto-rapido"(el) {
+    const centavos = Number(el.dataset.monto);
+    if (!Number.isFinite(centavos) || centavos <= 0) return;
+
+    const { datos, error } = agregarMovimiento(app.datos, {
+      fecha: app.hoy,
+      monto: centavos,
+      tipo: TIPOS.GASTO,
+      categoria: el.dataset.categoria || "otros",
+      nota: "",
+    });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    app.aviso = `${monto(centavos)} anotado. Toca deshacer en el historial si no era.`;
+    await guardar(datos);
+  },
+
+  async "guardar-ilegible"(el) {
+    const id = el.dataset.id;
+    const entrada = app.datos.bandeja.find((e) => e.id === id);
+    if (!entrada) return;
+
+    const centavos = aCentavos((document.getElementById(`ileg-monto-${id}`) || {}).value || "");
+    const nota = ((document.getElementById(`ileg-nota-${id}`) || {}).value || "").trim();
+
+    // Sin monto no hay movimiento que registrar. Se dice y se deja la entrada donde está, en
+    // vez de aceptar un cero disfrazado de dato.
+    if (!Number.isFinite(centavos) || centavos <= 0) {
+      app.aviso = "Falta el monto: es lo único que no puedo adivinar.";
+      return render();
+    }
+
+    const { datos, error } = aceptarEntrada(app.datos, id, {
+      monto: centavos,
+      nota: nota || (entrada.banco ? nombreDeBanco(entrada.banco) : "Sin nombre"),
+      categoria: "otros",
+    }, app.hoy);
+
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    app.aviso = nota
+      ? `Guardado. Y ya aprendí: el siguiente aviso de ${nota} entra con su categoría.`
+      : "Guardado.";
+    await guardar(datos);
+  },
+
   "descartar-entrada"(el) {
     const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
     if (!entrada) return;
+    // Una entrada ilegible no trae movimiento: pedirle el monto aquí tumbaba la pantalla.
+    const que = entrada.movimiento
+      ? `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)}`
+      : `${entrada.resumen || "Este aviso"}`;
     confirmar({
       titulo: "Descartar",
-      mensaje: `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)} no se registrará, y no vuelvo a preguntar por él.`,
+      mensaje: `${que} no se registrará, y no vuelvo a preguntar por él.`,
       textoBoton: "Descartar",
       alConfirmar: async () => {
         await guardar(descartarEntrada(app.datos, entrada.id));
@@ -5169,6 +6060,8 @@ const acciones = {
       enlace.remove();
     }
 
+    // Queda anotado: es lo que apaga el recordatorio y lo que hace que vuelva en 30 días.
+    await guardar({ ...app.datos, ultimoRespaldo: new Date().toISOString() });
     app.aviso = `Respaldo listo: ${nombre}. Es un JSON con todo dentro; guárdalo donde tú quieras.`;
     render();
   },

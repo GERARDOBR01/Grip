@@ -7,14 +7,25 @@ Es opcional y borrable: la app funciona igual sin él.
 
 | | |
 |---|---|
-| **Sí funciona** | Mercado Pago, DiDi, OXXO/Spin, Banorte (activando las alertas por correo en tu banca en línea) |
-| **A medias** | HSBC — solo avisa de operaciones arriba de $1,500, así que los gastos chicos no llegan |
-| **No funciona** | **Nu** — sus avisos nunca llegan por correo, solo dentro de su app. Para Nu: comparte el aviso a Grip desde el celular |
+| **Sí funciona** | Mercado Pago, DiDi, OXXO/Spin, Santander, Banamex, Banorte (activando las alertas por correo en tu banca en línea) |
+| **A medias** | **HSBC** — solo avisa de operaciones arriba de $1,500, así que los gastos chicos no llegan.<br>**Nu** — sí manda correo de las transferencias que envías, con monto, fecha, destinatario y clave de rastreo; **no** de las compras con tarjeta, que viven solo en su app |
+| **Para lo que no llegue** | Comparte el aviso a Grip desde el celular. Y si Grip no entiende el formato, no lo tira: te lo deja esperando y solo te pide cuánto y dónde |
 
 ## Instalarlo
 
 Está escrito paso a paso en el encabezado de `Codigo.gs`. Son ~10 minutos y no hay que
 programar nada: pegar, cambiar dos líneas, y desplegar.
+
+## El correo diario
+
+El mismo script puede mandarte una línea al día: *"Te quedan $2,340 para esta quincena. Son
+$180 por día hasta el 15."* Se enciende con un activador de tiempo y gasta 1 de los 100
+correos diarios que da una cuenta gratis.
+
+Con una salvedad que vale la pena entender: **el script no conoce tus números**, viven en tu
+navegador. Lo que manda es el último resumen que Grip le dejó al guardar. Por eso va sellado
+con su fecha, y si tiene más de tres días el propio correo te lo dice en la primera línea en
+vez de presentarlo como si fuera de hoy.
 
 ## Lo que hay que saber antes
 
@@ -22,6 +33,10 @@ programar nada: pegar, cambiar dos líneas, y desplegar.
   adivinar y el token lo inventas tú, pero es la superficie que esto abre. Si algún día
   quieres cerrarla: Implementaciones → Archivar, y ya.
 - Devuelve **avisos, no correos**: el texto viene cortado y con los números largos tapados.
+  Se salvan del tapado la **clave de rastreo** y el **folio de autorización**, porque son lo
+  que le permite a Grip saber que dos avisos son el mismo movimiento. No son números de
+  tarjeta ni de cuenta: no abren nada. Una tarjeta o una CLABE completas no salen de Gmail, y
+  hay pruebas que lo verifican corriendo el script de verdad.
 - El token y la URL se guardan **solo en tu dispositivo**, nunca en este repositorio.
 
 ## Desinstalarlo
