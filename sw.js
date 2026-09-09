@@ -1,9 +1,9 @@
-// Service worker de Quincena — armado el 2026-09-08.
+// Service worker de Grip — armado el 2026-09-09.
 //
 // Guarda la app para poder abrirla sin conexión. No guarda NINGÚN dato tuyo: los movimientos
 // viven en el almacenamiento del navegador, que esto ni toca.
 
-const CACHE = "quincena-2026-09-08";
+const CACHE = "grip-2026-09-09";
 const ARCHIVOS = ["./", "./index.html", "./manifest.webmanifest", "./icono-192.png", "./icono-512.png", "./icono-180.png"];
 
 self.addEventListener("install", (evento) => {
@@ -21,6 +21,9 @@ self.addEventListener("activate", (evento) => {
 
 self.addEventListener("fetch", (evento) => {
   if (evento.request.method !== "GET") return;
+  // Solo lo de esta app. Si algún día se consulta algo de fuera (el puente de correo, por
+  // ejemplo), guardarlo en caché serviría respuestas viejas como si fueran de ahora.
+  if (new URL(evento.request.url).origin !== self.location.origin) return;
   evento.respondWith(
     fetch(evento.request)
       .then((respuesta) => {

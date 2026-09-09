@@ -32,15 +32,22 @@ const MODULOS = [
   "motor/metas.js",
   "motor/fijos.js",
   "motor/deudas.js",
+  "motor/reglas-banco.js",
+  "motor/lectura.js",
+  "motor/aprendizaje.js",
+  "motor/recurrentes.js",
+  "motor/tendencia.js",
+  "motor/bandeja.js",
   "almacen/archivo.js",
   "almacen/local.js",
   "almacen/almacen.js",
   { ruta: "almacen/anfitrion-claude.js", opcional: true }, // borrarlo no rompe nada
+  { ruta: "almacen/puente-correo.js", opcional: true },    // tampoco
   "interfaz/ui.js",
 ];
 
 // El nombre de la app vive AQUÍ y en ningún otro lado: la pantalla lo lee del <title>.
-const TITULO = "Quincena";
+const TITULO = "Grip";
 const DESCRIPCION = "Ordena tu quincena, controla tus gastos y sabe si tus metas de ahorro de verdad alcanzan.";
 
 function fallar(mensaje) {
@@ -133,7 +140,7 @@ const sello = new Date().toISOString().slice(0, 10);
 
 const DESCRIPCION_CORTA = "Ordena tu quincena y sabe si tus metas de ahorro alcanzan.";
 // Dónde vive publicada. Si cambia el repo, se cambia aquí y en ningún otro lado.
-const URL_PUBLICA = "https://gerardobr01.github.io/Quincena-/";
+const URL_PUBLICA = "https://gerardobr01.github.io/grip/";
 const FONDO = "#14171A";
 const ACENTO = "#1f8a55";
 
@@ -200,6 +207,14 @@ const manifiesto = {
     { src: "./icono-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
     { src: "./icono-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
   ],
+  // Compartir un correo del banco a la app desde Android: llega como ?texto=... y la app lo
+  // lee sola. Es GET a propósito — un POST necesitaría que el service worker lo interceptara,
+  // y una pieza más que puede fallar entre el aviso y la bandeja no vale lo que cuesta.
+  share_target: {
+    action: "./",
+    method: "GET",
+    params: { title: "titulo", text: "texto", url: "enlace" },
+  },
 };
 
 const hospedada = `<!doctype html>
@@ -231,12 +246,12 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 </html>
 `;
 
-const serviceWorker = `// Service worker de Quincena — armado el ${sello}.
+const serviceWorker = `// Service worker de Grip — armado el ${sello}.
 //
 // Guarda la app para poder abrirla sin conexión. No guarda NINGÚN dato tuyo: los movimientos
 // viven en el almacenamiento del navegador, que esto ni toca.
 
-const CACHE = "quincena-${sello}";
+const CACHE = "grip-${sello}";
 const ARCHIVOS = ["./", "./index.html", "./manifest.webmanifest", "./icono-192.png", "./icono-512.png", "./icono-180.png"];
 
 self.addEventListener("install", (evento) => {
@@ -254,6 +269,9 @@ self.addEventListener("activate", (evento) => {
 
 self.addEventListener("fetch", (evento) => {
   if (evento.request.method !== "GET") return;
+  // Solo lo de esta app. Si algún día se consulta algo de fuera (el puente de correo, por
+  // ejemplo), guardarlo en caché serviría respuestas viejas como si fueran de ahora.
+  if (new URL(evento.request.url).origin !== self.location.origin) return;
   evento.respondWith(
     fetch(evento.request)
       .then((respuesta) => {

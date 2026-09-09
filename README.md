@@ -1,9 +1,13 @@
-# Quincena
+# Grip
 
-App de finanzas personales. Ordena la quincena, controla los gastos y dice —con
-números— si una meta de ahorro de verdad alcanza o no.
+App de finanzas personales para quien no tiene tiempo de llevarlas. Le pegas el aviso de tu
+banco y ella saca el monto, la fecha y el comercio; tú confirmas de un toque. Y aprende: si
+corriges una categoría una vez, no vuelve a preguntar.
 
-**[Abrir la app](https://gerardobr01.github.io/Quincena-/)** · desde el celular, *Añadir a
+Contesta lo que importa a diario: a dónde se va el dinero, cuánto puedes gastar hoy sin
+quedarte corto, y si una meta de ahorro de verdad alcanza o no.
+
+**[Abrir la app](https://gerardobr01.github.io/grip/)** · desde el celular, *Añadir a
 pantalla de inicio* y queda instalada con su ícono, funcionando sin conexión.
 
 **Sin servidor, sin cuenta y sin dependencias.** No hay registro ni login. Los datos se
@@ -21,12 +25,13 @@ motor/          el cálculo, en JavaScript puro y sin DOM
 
 | Pantalla | Qué contesta |
 |---|---|
-| **Hoy** | Cuánto queda de la quincena, cuánto por día, con cuánto cierra el ciclo a este ritmo, qué se paga esta semana y cómo va el fondo de emergencia |
-| **Historial** | Mes por mes, con buscador. Cualquier movimiento se corrige tocándolo |
+| **Hoy** | Cuánto queda de la quincena, cuánto por día, con cuánto cierra el ciclo a este ritmo, qué se paga esta semana, cuántas quincenas aguantaría el fondo de emergencia, y qué suscripción te subió de precio |
+| **Bandeja** | Lo que llegó solo y espera confirmación. Pegar, compartir o traer del correo; aceptar es un toque |
+| **Historial** | Mes por mes, con buscador, y la tendencia de las últimas seis quincenas |
 | **Presupuesto** | Cuánto va gastado por categoría contra su tope, con semáforo |
 | **Metas** | Cuánto hay que apartar por quincena — y si eso cabe en la capacidad real de ahorro |
-| **Fijos** | Qué vence, qué ya se pagó y cuánto se debe, con la frecuencia real de cada pago |
-| **Ajustes** | Ingreso, ciclo, fondo de emergencia, respaldo en JSON |
+| **Fijos** | Qué vence, qué ya se pagó y cuánto se debe, más las suscripciones que encontró sola en el historial |
+| **Ajustes** | Ingreso, ciclo, fondo de emergencia, lo que aprendió de ti, respaldo en JSON |
 
 Cuatro cosas mueven dinero y todas se capturan igual, desde el botón `+`: **gasto**,
 **ingreso**, **apartar** y **retirar**. Un retiro no borra el apartado original — los dos
@@ -57,6 +62,12 @@ NO_ALCANZA — requiere $3,750.00 por quincena, capacidad estimada $530.00 — f
 - **Un pago anual no es un gasto mensual.** Cada fijo tiene su frecuencia, y el total sale
   en dos números: el promedio mensualizado (lo que hay que ir apartando) y lo que de verdad
   se paga este mes.
+- **Un aviso leído a medias no entra a las cuentas.** Todo lo que llega solo espera
+  confirmación, y viene con qué tan seguro está el lector y qué tuvo que suponer. Dos
+  cargos iguales del mismo comercio comparten huella, así que la autorización y el cargo
+  de una misma compra no se cuentan dos veces.
+- **Dos cargos no son una suscripción.** Se piden tres, y con un ritmo reconocible; si no,
+  no se propone nada.
 
 **3. Los datos reales nunca entran al repositorio.** Lo que se versiona es el motor.
 
@@ -73,26 +84,45 @@ NO_ALCANZA — requiere $3,750.00 por quincena, capacidad estimada $530.00 — f
   eso no se pregunta con `typeof`, se intenta dentro de un `try`. Si no se puede guardar, la
   app lo dice de entrada y sigue usable; si hay datos que esta versión no sabe abrir, se
   **niega a escribir** en vez de pisarlos.
+- **El correo nunca se guarda.** De un aviso se extraen monto, fecha, comercio y los últimos
+  4 de la tarjeta. El texto se usa y se tira.
 
 ## No depende de nadie para abrirse
 
-La sincronización entre dispositivos es **opcional** y vive detrás de una interfaz de
-almacén de cuatro métodos, en un solo archivo (`almacen/anfitrion-claude.js`). Borrarlo deja
-la app funcionando igual: guarda en el navegador y lo declara en la barra superior.
+Todo lo que toca el mundo exterior vive en **adaptadores opcionales** que nadie importa: la
+app pregunta en tiempo de ejecución si existen. Bórralos, arma, y queda exactamente igual.
 
-Eso no es una promesa escrita en un README: hay una prueba que recorre `motor/`, `interfaz/`
-y `almacen/` y **falla si alguien nombra ese entorno fuera de su adaptador**.
+| Capa | Qué hace | ¿Se puede borrar? |
+|---|---|---|
+| IndexedDB (o localStorage) | el almacén base, en el dispositivo | no, es el piso |
+| Respaldo JSON | exportar/importar; la mudanza a donde sea | no |
+| `almacen/anfitrion-claude.js` | sincroniza entre dispositivos | **sí** |
+| `almacen/puente-correo.js` | trae los avisos de Gmail | **sí** |
 
-| Capa | Qué guarda |
-|---|---|
-| IndexedDB (o localStorage) | siempre — el almacén base, en el dispositivo |
-| Respaldo JSON | exportar/importar; es la mudanza a donde sea |
-| Adaptador del anfitrión | opcional: sincroniza y entrega el respaldo donde un enlace no basta |
+Eso no es una promesa escrita en un README: hay pruebas que recorren `motor/`, `interfaz/` y
+`almacen/` y **fallan** si alguien nombra ese entorno fuera de su adaptador, si alguien los
+importa, o si algún archivo que no sea el puente pide algo a la red.
+
+## Que capture sola
+
+Tres formas de llenar la bandeja, todas contra el mismo lector:
+
+1. **Pegar.** Copias el aviso y lo pegas. Funciona con cualquier banco, lo reconozca o no.
+2. **Compartir.** Con la app instalada en Android, le compartes el correo desde Gmail y cae
+   leída. Es la única vía para bancos que solo notifican dentro de su app.
+3. **El puente.** Un [Apps Script](puente/) en tu propia cuenta de Google que busca los
+   avisos de tus bancos y se los pasa a la app. Gratis, sin servidor, y lo borras cuando
+   quieras.
+
+Lo que hay que decir antes de que alguien se ilusione: **el correo no cubre todo tu dinero.**
+Nu no manda correo por cada compra —lo dice Nu: sus avisos solo viven dentro de su app— y
+HSBC solo avisa arriba de $1,500. Mercado Pago, DiDi, OXXO y Banorte sí. Para el resto,
+compartir a mano.
 
 ## Cómo se trabaja
 
 ```bash
-node --test pruebas/*.test.js      # 95 pruebas: sin red, sin API, sin gastar un peso
+node --test pruebas/*.test.js      # 158 pruebas: sin red, sin API, sin gastar un peso
 node herramientas/armar.mjs        # arma index.html y finanzas.html desde motor/ e interfaz/
 node herramientas/humo.mjs         # navegador real: disco, sin almacenamiento, e instalada
 node herramientas/logo.mjs         # solo si cambia el logo
@@ -108,11 +138,13 @@ navegador que no deja guardar nada, e instalada y abriendo **con la red apagada*
 ## Estructura
 
 ```
-motor/       cálculo puro, sin DOM: dinero, ciclos, presupuesto, ahorro, metas, fijos, deudas
+motor/       cálculo puro, sin DOM: dinero, ciclos, presupuesto, ahorro, metas, fijos, deudas,
+             lectura de avisos, bandeja, aprendizaje, recurrentes y tendencia
 almacen/     persistencia detrás de 4 métodos, con adaptadores intercambiables
 interfaz/    plantilla, estilos, render y el logo
-pruebas/     node --test, incluida la prueba de independencia
+pruebas/     node --test, incluidas las pruebas de independencia
 herramientas/armar.mjs (build), humo.mjs (navegador) y logo.mjs (íconos)
+puente/      el script de Google Apps Script que lee el correo, con sus instrucciones
 publicar/    la variante para publicar en un enlace privado
 ```
 

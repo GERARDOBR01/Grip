@@ -230,3 +230,55 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 .fila.apilada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .fila.apilada .nombre { flex: 1; min-width: 0; }
 .fila.apilada .acciones-fila { display: flex; gap: 8px; justify-content: flex-end; margin-top: 9px; }
+
+/* --- Bandeja: lo que llegó solo y espera confirmación --- */
+
+/* El contador solo se pinta cuando hay algo que hacer, así que no necesita estado vacío. */
+.nav button span { position: relative; }
+.globo {
+  position: absolute; top: -5px; left: 11px;
+  min-width: 15px; height: 15px; padding: 0 4px; box-sizing: border-box;
+  background: var(--acento); color: #fff;
+  border-radius: 999px; font-size: 10px; font-style: normal; font-weight: 600;
+  line-height: 15px; text-align: center;
+}
+
+.tarjeta.entrada { border-left: 3px solid var(--acento); }
+.entrada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.entrada .nombre { font-weight: 550; overflow: hidden; text-overflow: ellipsis; }
+.entrada .nombre.grande { font-size: 16px; }
+.entrada .monto { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 17px; white-space: nowrap; }
+.entrada .monto.bien { color: var(--bien); }
+.entrada .sub { font-size: 12px; color: var(--tinta-2); margin-top: 3px; }
+.entrada .acciones-fila { display: flex; gap: 8px; margin-top: 12px; }
+.entrada .acciones-fila .boton { flex: 1; }
+
+/* Qué tan seguro está el lector. Va junto al dato, no en una nota al pie: si la app supuso
+   algo, se tiene que ver antes de aceptar, no después. */
+.marca-confianza { font-weight: 600; }
+.marca-confianza.alta { color: var(--bien); }
+.marca-confianza.media { color: var(--ajustado); }
+.marca-confianza.baja { color: var(--mal); }
+
+.aviso-linea { margin-top: 8px; color: var(--ajustado); }
+.chips.apretados { margin-top: 11px; }
+.chips.apretados .chip { padding: 6px 10px; font-size: 12.5px; }
+
+.titulo-tarjeta { font-weight: 600; margin-bottom: 6px; }
+.campo.area {
+  width: 100%; box-sizing: border-box; margin-top: 10px; resize: vertical;
+  background: var(--superficie-2); border: 1px solid var(--borde); color: var(--tinta);
+  border-radius: 10px; padding: 11px 12px; font: inherit; font-size: 14px; line-height: 1.45;
+}
+.campo.area:focus { outline: 2px solid var(--acento); outline-offset: -1px; }
+
+/* --- Tendencia: seis barras dibujadas a mano, sin librería de gráficas --- */
+.tendencia { width: 100%; height: auto; display: block; margin: 12px 0 4px; }
+.tendencia .cero { stroke: var(--borde); stroke-width: 1; }
+.tendencia rect.bien { fill: var(--bien); }
+.tendencia rect.mal { fill: var(--mal); }
+.tendencia rect.sin-datos { fill: var(--borde); }
+/* La quincena en curso va translúcida: todavía le faltan días y compararla de tú a tú con
+   las cerradas haría ver una caída donde solo hay tiempo que no ha pasado. */
+.tendencia rect.encurso { opacity: .4; }
+.tendencia .etiqueta { fill: var(--tinta-3); font-size: 9px; font-family: inherit; }

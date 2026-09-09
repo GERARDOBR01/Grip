@@ -226,6 +226,43 @@ await marco.locator('[data-vista="hoy"]').click();
 revisar("y borrar de verdad borra", (await marco.locator(".cifra").first().textContent()).trim() === "—");
 revisar("sin un solo error de JavaScript", erroresEncerrada.length === 0, erroresEncerrada.slice(0, 2).join(" | "));
 
+// ── La bandeja, en el navegador ────────────────────────────────────────────────
+//
+// El motor ya está probado; esto comprueba lo otro: que se pueda pegar un aviso y aceptarlo
+// con el pulgar, y que la app aprenda de lo que se corrigió.
+
+console.log("\n  ── la bandeja ──");
+
+await pagina.click('[data-vista="bandeja"]');
+await pagina.waitForSelector("#aviso");
+await pagina.fill("#aviso", "Banorte: Compra por $189.50 MXN en STARBUCKS REFORMA con tarjeta terminacion 4821 el 08/09/2026. Saldo disponible: $9,000.00");
+await pagina.click('[data-accion="leer-aviso"]');
+await pagina.waitForSelector(".tarjeta.entrada", { timeout: 4000 });
+
+const leido = (await pagina.textContent(".entrada .monto")).trim();
+revisar("lee un aviso pegado y NO confunde el saldo con la compra", leido === "−$189.50", leido);
+revisar("el contador aparece en la barra", (await pagina.textContent(".globo")) === "1");
+
+const fichas = await pagina.locator(".entrada .chip").count();
+revisar("ofrece pocas categorías, no las doce", fichas > 0 && fichas <= 6, `${fichas} fichas`);
+
+await pagina.click('.entrada [data-categoria="comida-fuera"]');
+await pagina.click('[data-accion="aceptar-entrada"]');
+await pagina.waitForSelector(".entrada", { state: "detached", timeout: 4000 });
+revisar("aceptar vacía la bandeja", (await pagina.locator(".globo").count()) === 0);
+
+// Lo que separa esta app de las que se abandonan: no preguntar dos veces lo mismo.
+await pagina.fill("#aviso", "Banorte: Compra por $75.00 MXN en STARBUCKS POLANCO el 09/09/2026");
+await pagina.click('[data-accion="leer-aviso"]');
+await pagina.waitForSelector(".tarjeta.entrada", { timeout: 4000 });
+const aprendida = await pagina.getAttribute('.entrada .chip[aria-pressed="true"]', "data-categoria");
+revisar("APRENDIÓ: otra sucursal del mismo lugar llega ya categorizada", aprendida === "comida-fuera", aprendida);
+
+await pagina.click('[data-accion="descartar-entrada"]');
+await pagina.click(".velo button[type=submit]");
+await pagina.waitForSelector(".entrada", { state: "detached", timeout: 4000 });
+revisar("descartar no registra nada", (await pagina.locator(".globo").count()) === 0);
+
 // ── Escenario 3: instalada como app ─────────────────────────────────────────────
 //
 // La carpeta app/ servida por http: es como vive cuando está subida a un hosting. Aquí se
@@ -297,6 +334,98 @@ await instalada.reload().catch(() => {});
 revisar("y una vez instalada, abre SIN CONEXIÓN", await instalada.locator(".barra").isVisible().catch(() => false));
 await contexto.setOffline(false);
 
+// ── Compartir desde el celular ──────────────────────────────────────────────────
+//
+// Con la app instalada en Android, compartirle un correo la abre con el texto en la
+// dirección. Es la única vía para bancos que solo notifican dentro de su app, como Nu.
+
+const compartido = await contexto.newPage();
+const textoCompartido = encodeURIComponent("Compra por $312.00 MXN en FARMACIA GUADALAJARA el 09/09/2026");
+await compartido.goto(`http://127.0.0.1:${puerto}/index.html?texto=${textoCompartido}`);
+await compartido.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+revisar("lo compartido llega leído a la bandeja", (await compartido.textContent(".entrada .monto")).trim() === "−$312.00");
+revisar(
+  "y la dirección se limpia: recargar no lo duplica",
+  !compartido.url().includes("texto="),
+  compartido.url(),
+);
+
+// ── El puente de correo ─────────────────────────────────────────────────────────
+//
+// Este servidor imita a Apps Script: otro origen (otro puerto), y la misma cabecera que
+// devuelve Google. Prueba lo que sí está de nuestro lado — que el navegador deje pasar la
+// llamada y que el adaptador lea la respuesta. Que el Apps Script de verdad responda es
+// cosa de desplegarlo, y ahí no llega ninguna prueba automática.
+
+// Si alguien borró el adaptador, estas comprobaciones no aplican — igual que las del motor,
+// se saltan solas. Que el puente no esté es un escenario válido, no un fallo.
+const HAY_PUENTE = existsSync(join(RAIZ, "almacen/puente-correo.js"));
+
+let huboPreflight = false;
+const puente = createServer((peticion, respuesta) => {
+  if (peticion.method === "OPTIONS") huboPreflight = true;
+  let cuerpo = "";
+  peticion.on("data", (trozo) => { cuerpo += trozo; });
+  peticion.on("end", () => {
+    const pedido = JSON.parse(cuerpo || "{}");
+    const salida = pedido.token !== "llave-de-prueba"
+      ? { error: "Token incorrecto." }
+      : { avisos: [
+          { remitente: "alertas@banorte.com", asunto: "Compra aprobada",
+            texto: "Compra por $540.00 MXN en HOME DEPOT con tarjeta terminacion ****4821 el 09/09/2026" },
+          { remitente: "no-reply@mercadopago.com.mx", asunto: "Pago realizado",
+            texto: "Pagaste $128.00 MXN en RAPPI el 09/09/2026" },
+        ] };
+    respuesta.writeHead(200, {
+      "content-type": "application/json",
+      "access-control-allow-origin": "*", // lo mismo que devuelve Apps Script
+    });
+    respuesta.end(JSON.stringify(salida));
+  });
+});
+await new Promise((listo) => puente.listen(0, "127.0.0.1", listo));
+const puertoPuente = puente.address().port;
+
+if (HAY_PUENTE) {
+await instalada.evaluate((direccion) => {
+  localStorage.setItem("grip:puente", JSON.stringify({ url: direccion, token: "llave-de-prueba" }));
+}, `http://127.0.0.1:${puertoPuente}/exec`);
+await instalada.reload();
+await instalada.waitForSelector(".barra");
+await instalada.click('[data-vista="ajustes"]');
+await instalada.waitForSelector('[data-accion="traer-del-puente"]');
+// Esta página comparte origen con la de "compartir", así que ya hay algo en la bandeja:
+// lo que se mide es cuánto CRECE, no cuánto hay.
+await instalada.click('[data-vista="bandeja"]');
+const antes = await instalada.locator(".tarjeta.entrada").count();
+await instalada.click('[data-vista="ajustes"]');
+await instalada.click('[data-accion="traer-del-puente"]');
+await instalada.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+
+const traidas = (await instalada.locator(".tarjeta.entrada").count()) - antes;
+revisar("el puente trae los dos avisos y caen leídos en la bandeja", traidas === 2, `${traidas} nuevas`);
+revisar(
+  "sin petición de permiso previa: por eso se manda como text/plain",
+  !huboPreflight,
+  huboPreflight ? "hubo OPTIONS, Apps Script no lo contestaría" : "",
+);
+
+// Un token equivocado no puede quedarse callado.
+await instalada.evaluate((direccion) => {
+  localStorage.setItem("grip:puente", JSON.stringify({ url: direccion, token: "llave-mala" }));
+}, `http://127.0.0.1:${puertoPuente}/exec`);
+await instalada.reload();
+await instalada.waitForSelector(".barra");
+await instalada.click('[data-vista="ajustes"]');
+await instalada.click('[data-accion="traer-del-puente"]');
+await instalada.waitForSelector(".aviso", { timeout: 8000 });
+revisar("y un token equivocado lo dice, no falla en silencio",
+  (await instalada.textContent(".aviso")).includes("Token incorrecto"));
+} else {
+  console.log("  · el puente no está: se salta. La app corre sin él, que es justo lo que se promete.");
+}
+
+puente.close();
 servidor.close();
 
 // La promesa que no se toca, comprobada al final: el archivo suelto no depende de nada.

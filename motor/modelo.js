@@ -11,7 +11,7 @@ import { aCentavos } from "./dinero.js";
 import { hoyISO, mesDe, esISO } from "./ciclo.js";
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-export const VERSION_DATOS = 1;
+export const VERSION_DATOS = 2;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -51,6 +51,11 @@ export function datosVacios(iso = hoyISO()) {
     fijos: [],
     deudas: [],
     metas: [],
+    // Lo que llegó solo y todavía no confirma nadie. Nada de aquí cuenta en ningún número
+    // hasta que la persona lo acepta: un aviso mal leído no debe poder ensuciar las cuentas.
+    bandeja: [],
+    // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría".
+    reglas: [],
   };
 }
 
@@ -127,6 +132,48 @@ export function normalizar(entrada) {
     fijos: (Array.isArray(datos.fijos) ? datos.fijos : []).map(normalizarFijo).filter(Boolean),
     deudas: (Array.isArray(datos.deudas) ? datos.deudas : []).map(normalizarDeuda).filter(Boolean),
     metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
+    bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
+    reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
+  };
+}
+
+export const ESTADOS_BANDEJA = { PENDIENTE: "pendiente", ACEPTADO: "aceptado", DESCARTADO: "descartado" };
+export const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" };
+
+/**
+ * Una entrada de la bandeja: un movimiento propuesto, con de dónde salió y qué tan seguro
+ * está el lector. Guarda lo extraído, nunca el texto del aviso.
+ */
+export function normalizarEntrada(e) {
+  if (!e || typeof e !== "object") return null;
+  const movimiento = normalizarMovimiento(e.movimiento);
+  if (!movimiento) return null;
+  const estado = Object.values(ESTADOS_BANDEJA).includes(e.estado) ? e.estado : ESTADOS_BANDEJA.PENDIENTE;
+  return {
+    id: e.id || idNuevo("ent"),
+    recibido: esISO(e.recibido) ? e.recibido : movimiento.fecha,
+    estado,
+    movimiento,
+    huella: e.huella ? String(e.huella).slice(0, 200) : null,
+    confianza: ["alta", "media", "baja"].includes(e.confianza) ? e.confianza : "baja",
+    banco: e.banco ? String(e.banco).slice(0, 40) : null,
+    comercio: e.comercio ? String(e.comercio).slice(0, 60) : null,
+    ultimos4: /^\d{4}$/.test(e.ultimos4 || "") ? e.ultimos4 : null,
+    origen: Object.values(ORIGENES).includes(e.origen) ? e.origen : ORIGENES.PEGADO,
+    aviso: e.aviso ? String(e.aviso).slice(0, 280) : "",
+    posibleTraspaso: Boolean(e.posibleTraspaso),
+    movimientoId: e.movimientoId || null, // el que se creó al aceptarla, para poder deshacer
+  };
+}
+
+/** Una regla aprendida: "cuando veas este comercio, es esta categoría". */
+export function normalizarRegla(r) {
+  if (!r || !r.clave || !r.categoriaId) return null;
+  return {
+    clave: String(r.clave).slice(0, 60),
+    categoriaId: String(r.categoriaId),
+    veces: Number.isInteger(r.veces) && r.veces > 0 ? r.veces : 1,
+    ultima: esISO(r.ultima) ? r.ultima : null,
   };
 }
 

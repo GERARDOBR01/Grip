@@ -11,12 +11,17 @@
 
 import { VERSION_DATOS, normalizar } from "./modelo.js";
 
-/**
- * MIGRACIONES[n] convierte un documento de la versión n a la versión n+1.
- * Hoy hay una sola versión, así que la lista está vacía a propósito: el mecanismo existe
- * desde el primer día, que es cuando cuesta barato ponerlo.
- */
-export const MIGRACIONES = {};
+/** MIGRACIONES[n] convierte un documento de la versión n a la versión n+1. */
+export const MIGRACIONES = {
+  // v1 → v2: aparecen la bandeja de entrada (lo que llega solo y espera confirmación) y las
+  // reglas aprendidas. Un documento de v1 no tenía ninguna de las dos, y no tenerlas es un
+  // estado válido: se crean vacías. Ni un movimiento suyo se toca.
+  1: (datos) => ({
+    ...datos,
+    bandeja: Array.isArray(datos.bandeja) ? datos.bandeja : [],
+    reglas: Array.isArray(datos.reglas) ? datos.reglas : [],
+  }),
+};
 
 export function migrar(entrada) {
   const datos = entrada && typeof entrada === "object" ? { ...entrada } : null;

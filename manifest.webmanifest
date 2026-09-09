@@ -1,6 +1,6 @@
 {
-  "name": "Quincena",
-  "short_name": "Quincena",
+  "name": "Grip",
+  "short_name": "Grip",
   "description": "Ordena tu quincena y sabe si tus metas de ahorro alcanzan.",
   "lang": "es-MX",
   "start_url": "./",
@@ -22,5 +22,14 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
-  ]
+  ],
+  "share_target": {
+    "action": "./",
+    "method": "GET",
+    "params": {
+      "title": "titulo",
+      "text": "texto",
+      "url": "enlace"
+    }
+  }
 }

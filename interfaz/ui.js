@@ -11,12 +11,20 @@ import { formatear, aCentavos } from "../motor/dinero.js";
 import { hoyISO, mesDe, cicloDe, vencimientoEnMes } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
+  ORIGENES,
 } from "../motor/modelo.js";
 import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presupuesto.js";
 import { panelHoy, capacidadPorCiclo, estadoColchon, ahorroLibre } from "../motor/ahorro.js";
 import { resumenMetas, exigenciaTotal } from "../motor/metas.js";
 import { proximosVencimientos, totalFijosMensual, movimientoDeFijo, venceEnMes, montoMensualizado } from "../motor/fijos.js";
 import { planDeDeuda } from "../motor/deudas.js";
+import {
+  recibirAviso, pendientes, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja, impactoPendiente,
+} from "../motor/bandeja.js";
+import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
+import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
+import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
+import { nombreDeBanco } from "../motor/reglas-banco.js";
 import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
 import { exportar, importar, nombreDeRespaldo } from "../almacen/archivo.js";
 
@@ -28,10 +36,19 @@ const app = {
   aviso: null,
   bloqueado: false,
   filtro: { texto: "", tipo: "" },
+  // Lo que la persona eligió en la bandeja antes de aceptar, por entrada. Vive solo en la
+  // pantalla: si cierra la app sin aceptar, no queda rastro de una decisión a medias.
+  eleccion: {},
+  // Lo que lleva escrito en la caja de pegar. Vive en el estado y no solo en el DOM porque
+  // cualquier re-dibujo —un guardado, o que otro dispositivo escriba— lo borraría a media
+  // captura. Perder lo que alguien acaba de pegar es la clase de detalle que hace que una
+  // app se deje de usar.
+  borrador: "",
 };
 
 const VISTAS = [
   { id: "hoy", icono: "⌂", nombre: "Hoy" },
+  { id: "bandeja", icono: "⇊", nombre: "Bandeja" },
   { id: "presupuesto", icono: "▤", nombre: "Presupuesto" },
   { id: "metas", icono: "◎", nombre: "Metas" },
   { id: "fijos", icono: "⏱", nombre: "Fijos" },
@@ -89,6 +106,7 @@ function render() {
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
   const sincronizado = estado.modo === MODOS.SINCRONIZADO;
+  const esperando = resumenBandeja(app.datos).pendientes;
 
   const etiquetaEstado = sincronizado
     ? "Sincronizado"
@@ -114,15 +132,20 @@ function render() {
       <div class="pie">Tus datos viven en este dispositivo${sincronizado ? " y en tu cuenta" : ""}. Nunca en el repositorio.</div>
     </main>
 
-    <button class="flotante" data-accion="capturar" aria-label="Capturar gasto">+</button>
+    ${app.vista === "bandeja" ? "" : `<button class="flotante" data-accion="capturar" aria-label="Capturar gasto">+</button>`}
 
     <nav class="nav"><div class="envoltura">
-      ${VISTAS.map((v) => `<button data-accion="ir" data-vista="${v.id}" aria-current="${app.vista === v.id || (app.vista === 'historial' && v.id === 'hoy')}">
-        <span>${v.icono}</span>${esc(v.nombre)}</button>`).join("")}
+      ${VISTAS.map((v) => {
+        // El contador solo existe si hay algo que hacer. Un globo en cero es ruido.
+        const globo = v.id === "bandeja" && esperando > 0 ? `<i class="globo">${esperando}</i>` : "";
+        return `<button data-accion="ir" data-vista="${v.id}" aria-current="${app.vista === v.id || (app.vista === 'historial' && v.id === 'hoy')}">
+        <span>${v.icono}${globo}</span>${esc(v.nombre)}</button>`;
+      }).join("")}
     </div></nav>`;
 }
 
 function vistaActual() {
+  if (app.vista === "bandeja") return vistaBandeja();
   if (app.vista === "historial") return vistaHistorial();
   if (app.vista === "presupuesto") return vistaPresupuesto();
   if (app.vista === "metas") return vistaMetas();
@@ -212,7 +235,27 @@ function vistaHoy() {
     : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
         ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
 
+  const espera = pendientes(datos);
+  const bandejaBanner = espera.length
+    ? `<div class="aviso">
+        <b>${espera.length} ${espera.length === 1 ? "movimiento espera" : "movimientos esperan"} tu confirmación.</b>
+        Son ${monto(impactoPendiente(datos).gasto)} en gastos que todavía no cuentan aquí.
+        <div class="acciones"><button class="boton chico" data-accion="ir" data-vista="bandeja">Revisar</button></div>
+      </div>`
+    : "";
+
+  // El aviso que de verdad ahorra dinero: una suscripción que subió sin avisar.
+  const subidas = subieronDePrecio(datos, hoy);
+  const avisoSubidas = subidas.length
+    ? `<div class="titulo-seccion">Te subieron de precio</div><div class="tarjeta">${subidas
+        .map((r) => `<div class="fila apilada">
+          <div class="linea"><div class="nombre">${esc(r.nombre)}</div><div class="monto mal">+${monto(r.monto - r.montoAnterior)}</div></div>
+          <div class="sub">${esc(r.veredicto.motivo)}</div>
+        </div>`).join("")}</div>`
+    : "";
+
   const colchon = estadoColchon(datos);
+  const aguante = quincenasDeColchon(datos, hoy);
   const tarjetaColchon =
     colchon.objetivo === null && colchon.acumulado === 0
       ? "" // sin objetivo y sin nada apartado, no hay nada que enseñar todavía
@@ -226,11 +269,102 @@ function vistaHoy() {
                  Math.round((colchon.acumulado * 100) / colchon.objetivo), 100)}%"></i></div>`
              : ""}
            ${veredictoHTML(colchon.veredicto)}
+           ${veredictoHTML(aguante.veredicto)}
            <div class="acciones"><button class="boton chico tenue" data-accion="editar-colchon">
              ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
          </div>`;
 
-  return `${arranque}${principal}<div class="duo">${porDia}${capacidad}</div>${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+}
+
+// --- Vista: Bandeja ---
+
+const CONFIANZA_TEXTO = { alta: "Lo leí completo", media: "Revísalo", baja: "Confírmalo" };
+
+/** Cuántas fichas caben antes de que elegir cueste más que escribir. */
+const FICHAS_VISIBLES = 6;
+
+/**
+ * Las categorías que conviene ofrecer de un toque: la que ya está puesta, y después las que
+ * esta persona más usa. El resto siguen ahí, en "Editar" — pero no estorbando.
+ */
+function categoriasACalce(elegida) {
+  const uso = new Map();
+  for (const lista of Object.values(app.datos.movimientos)) {
+    for (const m of lista) if (m.categoria) uso.set(m.categoria, (uso.get(m.categoria) || 0) + 1);
+  }
+  const orden = opcionesCategorias().sort((a, b) => (uso.get(b.valor) || 0) - (uso.get(a.valor) || 0));
+  const puesta = orden.filter((c) => c.valor === elegida);
+  return [...puesta, ...orden.filter((c) => c.valor !== elegida)].slice(0, FICHAS_VISIBLES);
+}
+
+function tarjetaEntrada(entrada) {
+  const elegida = app.eleccion[entrada.id] !== undefined ? app.eleccion[entrada.id] : entrada.movimiento.categoria;
+  const esGasto = entrada.movimiento.tipo === TIPOS.GASTO;
+  const signo = esGasto ? "−" : "+";
+
+  const contexto = [
+    fechaCorta(entrada.movimiento.fecha),
+    entrada.banco ? nombreDeBanco(entrada.banco) || entrada.banco : null,
+    entrada.ultimos4 ? `••${entrada.ultimos4}` : null,
+    entrada.origen === ORIGENES.CORREO ? "de tu correo" : entrada.origen === ORIGENES.COMPARTIDO ? "compartido" : null,
+  ].filter(Boolean).join(" · ");
+
+  // Las categorías van como fichas para que aceptar sea un toque, no un formulario. Ésa es
+  // toda la diferencia entre una bandeja que se usa a diario y una que se abandona.
+  const fichas = esGasto
+    ? `<div class="chips apretados">${categoriasACalce(elegida).map((c) => `
+        <button class="chip" aria-pressed="${c.valor === elegida}" data-accion="elegir-categoria"
+          data-id="${esc(entrada.id)}" data-categoria="${esc(c.valor)}">${esc(c.etiqueta)}</button>`).join("")}</div>`
+    : "";
+
+  const alerta = entrada.posibleTraspaso
+    ? `<div class="rotulo aviso-linea">Parece un movimiento entre tus propias cuentas. Si lo es, descártalo: no es un gasto.</div>`
+    : entrada.aviso
+      ? `<div class="rotulo aviso-linea">${esc(entrada.aviso)}</div>`
+      : "";
+
+  return `<div class="tarjeta entrada">
+    <div class="linea">
+      <div class="nombre grande">${esc(entrada.comercio || entrada.movimiento.nota || "Movimiento")}</div>
+      <div class="monto ${esGasto ? "" : "bien"}">${signo}${monto(entrada.movimiento.monto)}</div>
+    </div>
+    <div class="sub">${esc(contexto)} · <span class="marca-confianza ${esc(entrada.confianza)}">${esc(CONFIANZA_TEXTO[entrada.confianza])}</span></div>
+    ${alerta}
+    ${fichas}
+    <div class="acciones-fila">
+      <button class="boton chico" data-accion="aceptar-entrada" data-id="${esc(entrada.id)}">Aceptar</button>
+      <button class="boton chico tenue" data-accion="editar-entrada" data-id="${esc(entrada.id)}">Editar</button>
+      <button class="boton chico tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">Descartar</button>
+    </div>
+  </div>`;
+}
+
+function vistaBandeja() {
+  const espera = pendientes(app.datos);
+  const impacto = impactoPendiente(app.datos);
+
+  const pegar = `<div class="tarjeta">
+    <div class="titulo-tarjeta">Pega el aviso de tu banco</div>
+    <div class="rotulo">Copia el correo o la notificación y pégalo aquí. Saco el monto, la fecha y el
+      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.</div>
+    <textarea id="aviso" class="campo area" rows="3" data-accion-input="borrador-aviso"
+      placeholder="Compra por $189.00 en ... el 09/09/2026">${esc(app.borrador)}</textarea>
+    <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
+  </div>`;
+
+  if (!espera.length) {
+    return `${pegar}<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`;
+  }
+
+  const resumen = `<div class="tarjeta">
+    <div class="rotulo">${esc(impacto.veredicto.motivo)}</div>
+    <div class="cifra" style="font-size:26px">−${monto(impacto.gasto)}${
+      impacto.ingreso ? ` <span class="rotulo">y +${monto(impacto.ingreso)} de ingreso</span>` : ""}</div>
+    <div class="rotulo">es lo que cambiaría si aceptas todo</div>
+  </div>`;
+
+  return `${resumen}${espera.map(tarjetaEntrada).join("")}${pegar}`;
 }
 
 function filaMovimiento(m) {
@@ -259,6 +393,44 @@ function filaMovimiento(m) {
 //
 // Mes por mes, con lo que entró, lo que salió y lo que se apartó. Sin gráficas: los números
 // y sus movimientos, que es lo que se necesita para revisar y corregir.
+
+/**
+ * La tendencia, en SVG escrito a mano. Sin librería de gráficas: son seis barras y una línea
+ * de cero, y meter una dependencia para eso sería cambiar durabilidad por nada.
+ */
+function graficaTendencia(puntos) {
+  const ANCHO = 300, ALTO = 96, BASE = 56, MAXIMO = 40;
+  const tope = Math.max(...puntos.map((p) => Math.abs(p.saldo)), 1);
+  const paso = ANCHO / puntos.length;
+  const grosor = Math.min(paso - 10, 28);
+
+  const barras = puntos.map((p, i) => {
+    const centro = paso * i + paso / 2;
+    const alto = Math.max(Math.round((Math.abs(p.saldo) * MAXIMO) / tope), p.hayDatos ? 2 : 0);
+    const y = p.saldo >= 0 ? BASE - alto : BASE;
+    const clase = !p.hayDatos ? "sin-datos" : p.saldo >= 0 ? "bien" : "mal";
+    return `<rect x="${(centro - grosor / 2).toFixed(1)}" y="${y}" width="${grosor.toFixed(1)}" height="${alto}"
+      rx="3" class="${clase}${p.completo ? "" : " encurso"}"/>
+      <text x="${centro.toFixed(1)}" y="${ALTO - 4}" text-anchor="middle" class="etiqueta">${esc(p.corta)}</text>`;
+  }).join("");
+
+  return `<svg class="tendencia" viewBox="0 0 ${ANCHO} ${ALTO}" role="img"
+      aria-label="Lo que sobró en cada una de las últimas ${puntos.length} quincenas">
+    <line x1="0" y1="${BASE}" x2="${ANCHO}" y2="${BASE}" class="cero"/>
+    ${barras}
+  </svg>`;
+}
+
+function tarjetaTendencia() {
+  const { puntos, veredicto: v } = resumenTendencia(app.datos, app.hoy, 6);
+  if (!puntos.some((p) => p.hayDatos)) return "";
+  return `<div class="titulo-seccion">¿Voy mejorando?</div>
+    <div class="tarjeta">
+      <div class="rotulo">Lo que sobró en cada quincena — la última todavía va corriendo</div>
+      ${graficaTendencia(puntos)}
+      ${veredictoHTML(v)}
+    </div>`;
+}
 
 function vistaHistorial() {
   const filtro = app.filtro || { texto: "", tipo: "" };
@@ -332,6 +504,7 @@ function vistaHistorial() {
     </div>`;
 
   return `<div class="acciones" style="margin:0 0 10px"><button class="boton tenue" data-accion="ir" data-vista="hoy">← Volver a Hoy</button></div>
+    ${tarjetaTendencia()}
     ${buscador}
     ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}`;
 }
@@ -452,6 +625,23 @@ function comoFrecuencia(fijo) {
 function vistaFijos() {
   const { datos, hoy } = app;
   const total = totalFijosMensual(datos, hoy);
+  const descubiertas = porRegistrar(datos, hoy);
+  const recurrente = totalRecurrenteMensual(datos, hoy);
+
+  // Encontradas solas en el historial. No se registran sin permiso: se proponen.
+  const propuestas = descubiertas.length
+    ? `<div class="titulo-seccion">Esto se repite y no lo tienes aquí</div>
+       <div class="tarjeta">${descubiertas.map((r) => `
+        <div class="fila apilada">
+          <div class="linea"><div class="nombre">${esc(r.nombre)}</div><div class="monto">${monto(r.monto)}</div></div>
+          <div class="sub">${esc(r.veredicto.motivo)}</div>
+          <div class="acciones-fila">
+            <button class="boton chico" data-accion="fijar-recurrente" data-clave="${esc(r.clave)}">Hacerlo fijo</button>
+          </div>
+        </div>`).join("")}
+        <div class="rotulo">${esc(recurrente.veredicto.motivo)}</div>
+       </div>`
+    : "";
 
   const fijos = datos.fijos.length
     ? datos.fijos
@@ -509,6 +699,7 @@ function vistaFijos() {
         : "",
     veredicto: total.veredicto,
   })}
+    ${propuestas}
     <div class="titulo-seccion">Pagos fijos</div><div class="tarjeta">${fijos}</div>
     <div class="acciones"><button class="boton tenue" data-accion="nuevo-fijo">Nuevo fijo</button></div>
     <div class="titulo-seccion">Deudas</div>${deudas}
@@ -521,6 +712,45 @@ function vistaAjustes() {
   const { perfil } = app.datos;
   const estado = app.almacen ? app.almacen.estado() : {};
   const movimientos = Object.values(app.datos.movimientos).reduce((t, l) => t + l.length, 0);
+
+  // Lo que la app aprendió tiene que poder mirarse y borrarse. Una app que decide por ti sin
+  // enseñarte con qué regla lo decidió es una caja negra, y esto toca tu dinero.
+  // El puente se descubre, no se importa: si alguien borró almacen/puente-correo.js, esto da
+  // undefined, la sección no se pinta, y la app no se entera de que faltaba nada.
+  const hayPuente = typeof traerAvisos === "function" && typeof configuracionDelPuente === "function";
+  const puente = hayPuente ? configuracionDelPuente() : null;
+  const seccionPuente = hayPuente
+    ? `<div class="titulo-seccion">Traer de mi correo</div>
+       <div class="tarjeta">
+         <div class="rotulo">Un script tuyo, dentro de tu cuenta de Google, le pasa a Grip los
+           avisos de tus bancos. Las instrucciones están en la carpeta <code>puente/</code> del
+           repositorio. La dirección y el token se guardan solo en este dispositivo.</div>
+         <div class="fila"><div class="crece">
+           <div class="nombre">${puente.url ? "Puente configurado" : "Sin configurar"}</div>
+           <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
+         </div>
+         <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
+         ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
+         <div class="rotulo">Ojo: hay bancos que no mandan correo por cada movimiento. Nu es uno:
+           sus avisos solo viven dentro de su app. Para esos, comparte el aviso a Grip.</div>
+       </div>`
+    : "";
+
+  const reglas = reglasAprendidas(app.datos);
+  const loAprendido = reglas.length
+    ? `<div class="titulo-seccion">Lo que aprendí de ti</div>
+       <div class="tarjeta">
+         <div class="rotulo">Cuando un aviso venga de estos lugares, le pongo esta categoría sola.</div>
+         ${reglas.map((r) => {
+           const categoria = categoriaPorId(app.datos, r.categoriaId);
+           return `<div class="fila">
+             <div class="crece"><div class="nombre">${esc(r.clave)}</div>
+               <div class="sub">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div></div>
+             <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
+           </div>`;
+         }).join("")}
+       </div>`
+    : "";
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
@@ -536,6 +766,9 @@ function vistaAjustes() {
         <div class="sub">claro, oscuro o el del sistema</div></div>
         <button class="boton chico tenue" data-accion="cambiar-tema">Cambiar</button></div>
     </div>
+
+    ${seccionPuente}
+    ${loAprendido}
 
     <div class="titulo-seccion">Tus datos</div>
     <div class="tarjeta">
@@ -693,6 +926,43 @@ function opcionesCategorias() {
   return app.datos.categorias.filter((c) => !c.archivada).map((c) => ({ valor: c.id, etiqueta: `${c.emoji} ${c.nombre}` }));
 }
 
+/**
+ * Lo que llegó por "Compartir" desde el celular.
+ *
+ * Con la app instalada en Android, compartirle un correo del banco la abre con el texto en
+ * la dirección. Se lee, cae en la bandeja, y la dirección se limpia: si después recarga la
+ * página, no se vuelve a leer el mismo aviso y a duplicarlo.
+ *
+ * Es la única vía que sirve para bancos que solo notifican dentro de su app, como Nu.
+ */
+async function atenderCompartido() {
+  let texto = "";
+  try {
+    const params = new URLSearchParams(location.search);
+    texto = [params.get("texto"), params.get("titulo"), params.get("enlace")].filter(Boolean).join("\n").trim();
+    if (texto) history.replaceState(null, "", location.pathname);
+  } catch (e) {
+    return; // en un contexto sin acceso a la dirección esto simplemente no aplica
+  }
+  if (!texto) return;
+
+  app.vista = "bandeja";
+  const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.COMPARTIDO, app.hoy);
+  if (error) {
+    app.aviso = `No pude leer lo que compartiste: ${error.motivo}`;
+    return render();
+  }
+  if (!entrada) {
+    app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+    return render();
+  }
+  try {
+    await guardar(datos);
+  } catch (e) {
+    // `guardar` ya avisó y revirtió. Que falle el disco no debe tirar el arranque.
+  }
+}
+
 // --- Acciones ---
 
 async function guardar(datos) {
@@ -741,6 +1011,145 @@ const acciones = {
 
   capturar() {
     hojaMovimiento();
+  },
+
+  async "leer-aviso"() {
+    const caja = document.getElementById("aviso");
+    const texto = (caja ? caja.value : app.borrador).trim();
+    if (!texto) {
+      app.aviso = "Pega primero el texto del aviso.";
+      return render();
+    }
+    const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.PEGADO, app.hoy);
+    if (error) {
+      app.aviso = `${error.motivo} ${error.datos.falta ? `→ ${error.datos.falta}` : ""}`.trim();
+      return render();
+    }
+    if (!entrada) {
+      app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+      return render();
+    }
+    app.aviso = duplicado ? duplicado.motivo : null;
+    app.borrador = ""; // ya está en la bandeja: dejarlo ahí invitaría a leerlo dos veces
+    await guardar(datos);
+  },
+
+  "configurar-puente"() {
+    const actual = configuracionDelPuente();
+    abrirHoja({
+      titulo: "Puente de correo",
+      textoGuardar: "Guardar",
+      extra: `<p class="rotulo" style="margin:0 0 4px">Déjalo en blanco para desconectarlo. Borrar
+        esto no borra nada de lo que ya está capturado.</p>`,
+      campos: [
+        { clave: "url", etiqueta: "Dirección del puente (…/exec)", tipo: "texto", valor: actual.url },
+        { clave: "token", etiqueta: "Token", tipo: "texto", valor: actual.token },
+      ],
+      async alGuardar(v) {
+        if (!guardarConfiguracionDelPuente({ url: v.url, token: v.token })) {
+          return "Este navegador no deja guardar ajustes en el dispositivo.";
+        }
+        render();
+        return null;
+      },
+    });
+  },
+
+  async "traer-del-puente"(el) {
+    const config = configuracionDelPuente();
+    el.disabled = true;
+    el.textContent = "Buscando…";
+
+    const { avisos, error } = await traerAvisos({ url: config.url, token: config.token, dias: 3 });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+
+    // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
+    // parpadeando y multiplicaría las escrituras por nada.
+    let datos = app.datos;
+    let nuevos = 0, repetidos = 0, ilegibles = 0;
+    for (const aviso of avisos) {
+      const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
+      const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
+      if (paso.error) ilegibles++;
+      else if (!paso.entrada) repetidos++;
+      else { nuevos++; datos = paso.datos; }
+    }
+
+    app.vista = "bandeja";
+    app.aviso = nuevos
+      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.${repetidos ? ` ${repetidos} ya los tenías.` : ""}`
+      : avisos.length
+        ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
+        : "No encontré avisos de tus bancos en los últimos días.";
+
+    if (nuevos) await guardar(datos);
+    else render();
+  },
+
+  async "fijar-recurrente"(el) {
+    const encontrada = porRegistrar(app.datos, app.hoy).find((r) => r.clave === el.dataset.clave);
+    if (!encontrada) return;
+    const fijo = fijoDesdeRecurrente(encontrada);
+    await guardar({ ...app.datos, fijos: [...app.datos.fijos, { ...fijo, id: idNuevo("fijo") }] });
+  },
+
+  async "olvidar-regla"(el) {
+    await guardar(olvidar(app.datos, el.dataset.clave));
+  },
+
+  "elegir-categoria"(el) {
+    app.eleccion = { ...app.eleccion, [el.dataset.id]: el.dataset.categoria };
+    render();
+  },
+
+  async "aceptar-entrada"(el) {
+    const id = el.dataset.id;
+    const cambios = app.eleccion[id] !== undefined ? { categoria: app.eleccion[id] } : {};
+    const { datos, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    const { [id]: quitada, ...resto } = app.eleccion;
+    app.eleccion = resto;
+    await guardar(datos);
+  },
+
+  "editar-entrada"(el) {
+    const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
+    if (!entrada) return;
+    const categoria = app.eleccion[entrada.id] !== undefined ? app.eleccion[entrada.id] : entrada.movimiento.categoria;
+    hojaMovimiento({
+      tipo: entrada.movimiento.tipo,
+      entradaId: entrada.id,
+      valores: {
+        monto: comoCampo(entrada.movimiento.monto),
+        categoria,
+        nota: entrada.movimiento.nota,
+        fecha: entrada.movimiento.fecha,
+      },
+    });
+  },
+
+  "descartar-entrada"(el) {
+    const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
+    if (!entrada) return;
+    confirmar({
+      titulo: "Descartar",
+      mensaje: `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)} no se registrará, y no vuelvo a preguntar por él.`,
+      textoBoton: "Descartar",
+      alConfirmar: async () => {
+        await guardar(descartarEntrada(app.datos, entrada.id));
+        return null;
+      },
+    });
+  },
+
+  async "deshacer-entrada"(el) {
+    await guardar(deshacerEntrada(app.datos, el.dataset.id));
   },
 
   "editar-movimiento"(el) {
@@ -1094,7 +1503,7 @@ const TIPOS_CAPTURA = [
  * no es borrar y volver a capturar.
  */
 function hojaMovimiento(config = {}) {
-  const { movimiento = null, valores = {} } = config;
+  const { movimiento = null, valores = {}, entradaId = null } = config;
   const tipo = config.tipo || TIPOS.GASTO;
   const editando = Boolean(movimiento);
 
@@ -1105,7 +1514,7 @@ function hojaMovimiento(config = {}) {
     {
       clave: "tipo", etiqueta: "Qué es", tipo: "chips", valor: tipo, opciones: TIPOS_CAPTURA,
       // Al cambiar de tipo se vuelve a abrir la hoja con los campos que corresponden.
-      alCambiar: (nuevo, actuales) => hojaMovimiento({ tipo: nuevo, movimiento, valores: { ...actuales, tipo: nuevo } }),
+      alCambiar: (nuevo, actuales) => hojaMovimiento({ tipo: nuevo, movimiento, entradaId, valores: { ...actuales, tipo: nuevo } }),
     },
     {
       clave: "monto", etiqueta: "Monto", tipo: "monto", requerido: true,
@@ -1146,6 +1555,18 @@ function hojaMovimiento(config = {}) {
       : "",
     campos,
     async alGuardar(v) {
+      // Editar algo que vino de la bandeja no crea un movimiento suelto: acepta la entrada
+      // con las correcciones. Así la bandeja se vacía y la app aprende de lo que corrigió.
+      if (entradaId) {
+        const { datos, error } = aceptarEntrada(app.datos, entradaId, {
+          fecha: v.fecha, monto: v.monto, tipo: v.tipo || tipo,
+          categoria: (v.tipo || tipo) === TIPOS.GASTO ? v.categoria : null,
+          nota: v.nota, metaId: v.metaId || null,
+        }, app.hoy);
+        if (error) return error;
+        await guardar(datos);
+        return null;
+      }
       const base = editando ? eliminarMovimiento(app.datos, movimiento.id) : app.datos;
       const { datos, error } = agregarMovimiento(base, {
         id: editando ? movimiento.id : undefined,
@@ -1286,6 +1707,10 @@ export async function arrancar() {
   } catch (e) {}
 
   document.addEventListener("input", (e) => {
+    if (e.target.dataset.accionInput === "borrador-aviso") {
+      app.borrador = e.target.value; // sin re-dibujar: escribir no debe repintar la pantalla
+      return;
+    }
     if (e.target.dataset.accionInput !== "filtrar-texto") return;
     // Se guarda el texto y se re-dibuja solo la lista: volver a pintar todo en cada tecla
     // le quitaría el foco al buscador.
@@ -1324,6 +1749,7 @@ export async function arrancar() {
     app.aviso = estado.motivo || "Este navegador no deja guardar datos: descarga un respaldo antes de cerrar la pestaña.";
   }
   render();
+  await atenderCompartido();
 
   // Si otro dispositivo escribe, esta pantalla se entera.
   app.almacen.suscribir(async () => {

@@ -1,4 +1,4 @@
-<title>Quincena</title>
+<title>Grip</title>
 <meta name="description" content="Ordena tu quincena, controla tus gastos y sabe si tus metas de ahorro de verdad alcanzan.">
 <style>
 /* Estilos — minimalismo con un trabajo que hacer.
@@ -233,6 +233,58 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 .fila.apilada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .fila.apilada .nombre { flex: 1; min-width: 0; }
 .fila.apilada .acciones-fila { display: flex; gap: 8px; justify-content: flex-end; margin-top: 9px; }
+
+/* --- Bandeja: lo que llegó solo y espera confirmación --- */
+
+/* El contador solo se pinta cuando hay algo que hacer, así que no necesita estado vacío. */
+.nav button span { position: relative; }
+.globo {
+  position: absolute; top: -5px; left: 11px;
+  min-width: 15px; height: 15px; padding: 0 4px; box-sizing: border-box;
+  background: var(--acento); color: #fff;
+  border-radius: 999px; font-size: 10px; font-style: normal; font-weight: 600;
+  line-height: 15px; text-align: center;
+}
+
+.tarjeta.entrada { border-left: 3px solid var(--acento); }
+.entrada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.entrada .nombre { font-weight: 550; overflow: hidden; text-overflow: ellipsis; }
+.entrada .nombre.grande { font-size: 16px; }
+.entrada .monto { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 17px; white-space: nowrap; }
+.entrada .monto.bien { color: var(--bien); }
+.entrada .sub { font-size: 12px; color: var(--tinta-2); margin-top: 3px; }
+.entrada .acciones-fila { display: flex; gap: 8px; margin-top: 12px; }
+.entrada .acciones-fila .boton { flex: 1; }
+
+/* Qué tan seguro está el lector. Va junto al dato, no en una nota al pie: si la app supuso
+   algo, se tiene que ver antes de aceptar, no después. */
+.marca-confianza { font-weight: 600; }
+.marca-confianza.alta { color: var(--bien); }
+.marca-confianza.media { color: var(--ajustado); }
+.marca-confianza.baja { color: var(--mal); }
+
+.aviso-linea { margin-top: 8px; color: var(--ajustado); }
+.chips.apretados { margin-top: 11px; }
+.chips.apretados .chip { padding: 6px 10px; font-size: 12.5px; }
+
+.titulo-tarjeta { font-weight: 600; margin-bottom: 6px; }
+.campo.area {
+  width: 100%; box-sizing: border-box; margin-top: 10px; resize: vertical;
+  background: var(--superficie-2); border: 1px solid var(--borde); color: var(--tinta);
+  border-radius: 10px; padding: 11px 12px; font: inherit; font-size: 14px; line-height: 1.45;
+}
+.campo.area:focus { outline: 2px solid var(--acento); outline-offset: -1px; }
+
+/* --- Tendencia: seis barras dibujadas a mano, sin librería de gráficas --- */
+.tendencia { width: 100%; height: auto; display: block; margin: 12px 0 4px; }
+.tendencia .cero { stroke: var(--borde); stroke-width: 1; }
+.tendencia rect.bien { fill: var(--bien); }
+.tendencia rect.mal { fill: var(--mal); }
+.tendencia rect.sin-datos { fill: var(--borde); }
+/* La quincena en curso va translúcida: todavía le faltan días y compararla de tú a tú con
+   las cerradas haría ver una caída donde solo hay tiempo que no ha pasado. */
+.tendencia rect.encurso { opacity: .4; }
+.tendencia .etiqueta { fill: var(--tinta-3); font-size: 9px; font-family: inherit; }
 </style>
 <div id="raiz"></div>
 <div id="hojas"></div>
@@ -559,7 +611,7 @@ function vencimientoEnMes(mes, diaCorte) {
 
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-const VERSION_DATOS = 1;
+const VERSION_DATOS = 2;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -599,6 +651,11 @@ function datosVacios(iso = hoyISO()) {
     fijos: [],
     deudas: [],
     metas: [],
+    // Lo que llegó solo y todavía no confirma nadie. Nada de aquí cuenta en ningún número
+    // hasta que la persona lo acepta: un aviso mal leído no debe poder ensuciar las cuentas.
+    bandeja: [],
+    // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría".
+    reglas: [],
   };
 }
 
@@ -675,6 +732,48 @@ function normalizar(entrada) {
     fijos: (Array.isArray(datos.fijos) ? datos.fijos : []).map(normalizarFijo).filter(Boolean),
     deudas: (Array.isArray(datos.deudas) ? datos.deudas : []).map(normalizarDeuda).filter(Boolean),
     metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
+    bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
+    reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
+  };
+}
+
+const ESTADOS_BANDEJA = { PENDIENTE: "pendiente", ACEPTADO: "aceptado", DESCARTADO: "descartado" };
+const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" };
+
+/**
+ * Una entrada de la bandeja: un movimiento propuesto, con de dónde salió y qué tan seguro
+ * está el lector. Guarda lo extraído, nunca el texto del aviso.
+ */
+function normalizarEntrada(e) {
+  if (!e || typeof e !== "object") return null;
+  const movimiento = normalizarMovimiento(e.movimiento);
+  if (!movimiento) return null;
+  const estado = Object.values(ESTADOS_BANDEJA).includes(e.estado) ? e.estado : ESTADOS_BANDEJA.PENDIENTE;
+  return {
+    id: e.id || idNuevo("ent"),
+    recibido: esISO(e.recibido) ? e.recibido : movimiento.fecha,
+    estado,
+    movimiento,
+    huella: e.huella ? String(e.huella).slice(0, 200) : null,
+    confianza: ["alta", "media", "baja"].includes(e.confianza) ? e.confianza : "baja",
+    banco: e.banco ? String(e.banco).slice(0, 40) : null,
+    comercio: e.comercio ? String(e.comercio).slice(0, 60) : null,
+    ultimos4: /^\d{4}$/.test(e.ultimos4 || "") ? e.ultimos4 : null,
+    origen: Object.values(ORIGENES).includes(e.origen) ? e.origen : ORIGENES.PEGADO,
+    aviso: e.aviso ? String(e.aviso).slice(0, 280) : "",
+    posibleTraspaso: Boolean(e.posibleTraspaso),
+    movimientoId: e.movimientoId || null, // el que se creó al aceptarla, para poder deshacer
+  };
+}
+
+/** Una regla aprendida: "cuando veas este comercio, es esta categoría". */
+function normalizarRegla(r) {
+  if (!r || !r.clave || !r.categoriaId) return null;
+  return {
+    clave: String(r.clave).slice(0, 60),
+    categoriaId: String(r.categoriaId),
+    veces: Number.isInteger(r.veces) && r.veces > 0 ? r.veces : 1,
+    ultima: esISO(r.ultima) ? r.ultima : null,
   };
 }
 
@@ -810,12 +909,17 @@ function eliminarMovimiento(datos, id) {
 // "downgrade" silencioso es la forma más rápida de perder datos para siempre.
 
 
-/**
- * MIGRACIONES[n] convierte un documento de la versión n a la versión n+1.
- * Hoy hay una sola versión, así que la lista está vacía a propósito: el mecanismo existe
- * desde el primer día, que es cuando cuesta barato ponerlo.
- */
-const MIGRACIONES = {};
+/** MIGRACIONES[n] convierte un documento de la versión n a la versión n+1. */
+const MIGRACIONES = {
+  // v1 → v2: aparecen la bandeja de entrada (lo que llega solo y espera confirmación) y las
+  // reglas aprendidas. Un documento de v1 no tenía ninguna de las dos, y no tenerlas es un
+  // estado válido: se crean vacías. Ni un movimiento suyo se toca.
+  1: (datos) => ({
+    ...datos,
+    bandeja: Array.isArray(datos.bandeja) ? datos.bandeja : [],
+    reglas: Array.isArray(datos.reglas) ? datos.reglas : [],
+  }),
+};
 
 function migrar(entrada) {
   const datos = entrada && typeof entrada === "object" ? { ...entrada } : null;
@@ -1690,6 +1794,1002 @@ function siPagarasMas(datos, deuda, extra) {
   };
 }
 
+// ═══ motor/reglas-banco.js ═══
+// Reglas por banco — lo que convierte "entendí algo" en "entendí bien".
+//
+// El lector (lectura.js) funciona SIN esta tabla: saca monto, fecha y comercio de cualquier
+// texto. Esta tabla solo sube la confianza cuando reconoce de quién viene el aviso y qué
+// palabras usa ese banco para decir "te cobré" o "te depositaron".
+//
+// Los remitentes son públicos y verificables. Los patrones del cuerpo se quedan cortos a
+// propósito: escribir una expresión regular para un correo que nunca vi es inventar. Cada
+// banco se afina cuando llega un correo real suyo, tapado, y con su prueba al lado.
+//
+// IMPORTANTE, y no es un detalle técnico: hay bancos que NUNCA van a estar aquí porque no
+// mandan correo por cada movimiento. Nu es el caso claro: sus avisos viven solo dentro de su
+// app. Para esos, la vía es compartir o pegar el texto a mano. Prometer lo contrario sería
+// venderle a alguien una automatización que no existe.
+
+const BANCOS = [
+  {
+    id: "banorte",
+    nombre: "Banorte",
+    remitentes: [/@banorte\.com$/i, /banorte/i],
+    // Manda alerta por cada operación, pero solo si el titular la activa en su banca en línea.
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "santander",
+    nombre: "Santander",
+    remitentes: [/@santander\.com\.mx$/i, /santander/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "banamex",
+    nombre: "Banamex",
+    remitentes: [/@banamex\.com$/i, /@banamex\.com\.mx$/i, /banamex|citibanamex/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "hsbc",
+    nombre: "HSBC",
+    remitentes: [/@hsbc\.com\.mx$/i, /hsbc/i],
+    // Solo avisa por operaciones grandes. Los gastos chicos NO llegan por correo.
+    avisaCadaMovimiento: false,
+    limiteConocido: 150000, // $1,500.00 — debajo de esto no manda nada
+  },
+  {
+    id: "mercadopago",
+    nombre: "Mercado Pago",
+    remitentes: [/@mercadopago\.com(\.mx)?$/i, /mercadopago|mercadolibre/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "didi",
+    nombre: "DiDi",
+    remitentes: [/@didiglobal\.com$/i, /didi/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "spin",
+    nombre: "Spin by OXXO",
+    remitentes: [/@spin(byoxxo)?\.com(\.mx)?$/i, /spin.?by.?oxxo|oxxo/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "klar",
+    nombre: "Klar",
+    remitentes: [/@klar\.mx$/i, /klar/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "stori",
+    nombre: "Stori",
+    remitentes: [/@storicard\.com$/i, /stori/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "hey",
+    nombre: "Hey Banco",
+    remitentes: [/@hey\.inc$/i, /hey ?banco/i],
+    avisaCadaMovimiento: true,
+  },
+  {
+    id: "nu",
+    nombre: "Nu",
+    remitentes: [/@nu\.com\.mx$/i, /\bnu\b|nubank/i],
+    // Nu lo dice en su propia documentación: sus notificaciones nunca llegan por correo ni
+    // SMS, solo dentro de su app. Lo que llegue por aquí serán estados de cuenta, no compras.
+    avisaCadaMovimiento: false,
+  },
+];
+
+/** Qué banco mandó esto. `null` si no lo reconoce — que es un resultado válido, no un error. */
+function bancoDeRemitente(remitente) {
+  const texto = String(remitente || "").trim();
+  if (!texto) return null;
+  for (const banco of BANCOS) {
+    if (banco.remitentes.some((patron) => patron.test(texto))) return banco;
+  }
+  return null;
+}
+
+/** Los que sí sirven para automatizar. Se usa para no prometer de más en la pantalla. */
+function bancosQueAvisan() {
+  return BANCOS.filter((b) => b.avisaCadaMovimiento);
+}
+
+/** El nombre como se escribe, a partir del id que se guardó. */
+function nombreDeBanco(id) {
+  const banco = BANCOS.find((b) => b.id === id);
+  return banco ? banco.nombre : null;
+}
+
+// ═══ motor/lectura.js ═══
+// Lectura de avisos — convertir el texto de un banco en un movimiento.
+//
+// Esta es la pieza que hace que la app sirva para alguien sin tiempo. Y es también la más
+// peligrosa, porque un aviso mal leído ensucia los números en silencio. Por eso:
+//
+//   1. NUNCA devuelve un movimiento a medias. Sin monto no hay nada que registrar y se
+//      declara `SIN_DATOS_SUFICIENTES`, igual que todo el motor.
+//   2. NUNCA guarda el correo. Solo monto, fecha, comercio y los últimos 4 de la tarjeta.
+//      El cuerpo del aviso se usa aquí y se tira.
+//   3. SIEMPRE dice qué tan seguro está. La confianza es parte de la respuesta, no una
+//      nota al pie: es lo que decide si esto se muestra como un hecho o como una pregunta.
+//
+// Funciona con cualquier banco, reconocido o no. La tabla de reglas-banco.js sube la
+// confianza; su ausencia no impide leer.
+
+
+
+
+
+
+const CONFIANZAS = { ALTA: "alta", MEDIA: "media", BAJA: "baja" };
+
+const MESES_ES = {
+  ene: 1, feb: 2, mar: 3, abr: 4, may: 5, jun: 6,
+  jul: 7, ago: 8, sep: 9, set: 9, oct: 10, nov: 11, dic: 12,
+};
+
+// Un monto se reconoce por el signo o por la moneda. Pedir una de las dos evita confundir
+// un número de referencia de 6 dígitos con dinero.
+const PATRON_MONTO = /\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)|(\d{1,3}(?:,\d{3})*\.\d{2}|\d+\.\d{2})\s*(?:MXN|M\.?N\.?|pesos)\b/gi;
+
+// Lo que aparece junto a un monto que NO es el de la operación. Es la regla que más errores
+// evita: casi todo aviso bancario trae el saldo, y el saldo no es un gasto.
+const CONTEXTO_AJENO = /(saldo|disponible|l[íi]mite|l[íi]nea de cr[ée]dito|puntos|cashback|pago m[íi]nimo|para no generar intereses)/i;
+const CONTEXTO_PROPIO = /(monto|importe|cargo|compra|total|pago|retiro|abono|dep[óo]sito|transferencia|env[íi]o|cobro|consumo)/i;
+
+const PISTAS_INGRESO = /(recibiste|recibida|recibido|te depositaron|te enviaron|abono|dep[óo]sito|devoluci[óo]n|reembolso|bonificaci[óo]n|cancelaci[óo]n de cargo|nómina|n[óo]mina)/i;
+const PISTAS_GASTO = /(compra|cargo|retiro|disposici[óo]n|pagaste|enviaste|realizaste un pago|transferencia enviada|spei enviado|domiciliaci[óo]n)/i;
+const PISTAS_TRASPASO = /(entre tus cuentas|entre cuentas propias|a tu cuenta|traspaso|cuenta propia)/i;
+
+/** Quita el HTML y deja texto plano. Los avisos de banco llegan casi siempre en HTML. */
+function limpiarAviso(entrada) {
+  return String(entrada || "")
+    .replace(/<(style|script|head)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<br\s*\/?>|<\/(p|div|tr|td|li|h\d)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;?/gi, " ")
+    .replace(/&amp;?/gi, "&")
+    .replace(/&(lt|gt|quot|#39|apos);?/gi, " ")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/[ \t ]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+/**
+ * El monto de la operación. Devuelve `{ centavos, seguro }`.
+ * `seguro` es false cuando el número existe pero nadie dijo de qué era: se lee, pero baja
+ * la confianza en vez de fingir certeza.
+ */
+function montoDelAviso(texto) {
+  const candidatos = [];
+  PATRON_MONTO.lastIndex = 0;
+  let hallazgo;
+  while ((hallazgo = PATRON_MONTO.exec(texto))) {
+    const centavos = aCentavos(hallazgo[1] || hallazgo[2]);
+    if (centavos === null || centavos === 0) continue;
+    const desde = Math.max(0, hallazgo.index - 60);
+    const contexto = texto.slice(desde, hallazgo.index + hallazgo[0].length + 20);
+    candidatos.push({
+      centavos,
+      ajeno: CONTEXTO_AJENO.test(contexto),
+      propio: CONTEXTO_PROPIO.test(contexto),
+    });
+  }
+
+  if (!candidatos.length) return { centavos: null, seguro: false };
+
+  const nombrado = candidatos.find((c) => c.propio && !c.ajeno);
+  if (nombrado) return { centavos: nombrado.centavos, seguro: true };
+
+  const noAjeno = candidatos.filter((c) => !c.ajeno);
+  if (noAjeno.length === 1) return { centavos: noAjeno[0].centavos, seguro: true };
+  if (noAjeno.length) return { centavos: noAjeno[0].centavos, seguro: false };
+
+  // Todos los montos parecían saldos. Se lee el primero, pero sin fingir seguridad.
+  return { centavos: candidatos[0].centavos, seguro: false };
+}
+
+function fechaValida(anio, mes, dia) {
+  if (mes < 1 || mes > 12) return null;
+  if (dia < 1 || dia > diasEnMes(anio, mes)) return null;
+  return armarISO(anio, mes, dia);
+}
+
+function anioCompleto(crudo, hoy) {
+  const n = Number(crudo);
+  if (crudo.length === 4) return n;
+  return n + (n > 70 ? 1900 : 2000);
+}
+
+/**
+ * La fecha de la operación. Devuelve `{ iso, explicita }`.
+ * Si no la encuentra usa hoy y lo dice: una fecha inventada que se presenta como leída es
+ * la clase de mentira que descuadra un ciclo entero.
+ */
+function fechaDelAviso(texto, hoy = hoyISO()) {
+  const iso = texto.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (iso) {
+    const f = fechaValida(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+    if (f) return { iso: f, explicita: true };
+  }
+
+  const conLetra = texto.match(/\b(\d{1,2})\s*(?:de\s+)?[\/\- ]?\s*([a-záéíóú]{3,10})\.?\s*(?:de\s+)?[\/\- ]?\s*(\d{2,4})?\b/i);
+  if (conLetra) {
+    const mes = MESES_ES[conLetra[2].slice(0, 3).toLowerCase()];
+    if (mes) {
+      const anio = conLetra[3] ? anioCompleto(conLetra[3], hoy) : Number(hoy.slice(0, 4));
+      const f = fechaValida(anio, mes, Number(conLetra[1]));
+      if (f) return { iso: f, explicita: true };
+    }
+  }
+
+  // En México el orden es día/mes/año. Asumir el orden gringo movería gastos de mes.
+  const numerica = texto.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/);
+  if (numerica) {
+    const f = fechaValida(anioCompleto(numerica[3], hoy), Number(numerica[2]), Number(numerica[1]));
+    if (f) return { iso: f, explicita: true };
+  }
+
+  return { iso: hoy, explicita: false };
+}
+
+/** Los últimos 4 de la tarjeta. Es lo único de la tarjeta que se guarda, nunca más. */
+function tarjetaDelAviso(texto) {
+  const m = texto.match(/(?:\*{2,}|x{2,}|terminaci[óo]n(?:\s+en)?|terminada en|final)\s*[:\-]?\s*(\d{4})\b/i);
+  return m ? m[1] : null;
+}
+
+const RUIDO_COMERCIO = /^(el|la|los|las|un|una|tu|su|de|del|en|por|con|monto|importe|cargo|compra|pago|fecha|hora|tarjeta|cuenta|total|mxn|pesos)$/i;
+
+/** El comercio donde se gastó. Sale de las frases que todos los bancos comparten. */
+function comercioDelAviso(texto) {
+  const nombrado = texto.match(/(?:comercio|establecimiento|negocio|beneficiario|destinatario|concepto)\s*[:\-]\s*([^\n|]{2,60})/i);
+  if (nombrado) return recortarComercio(nombrado[1]);
+
+  // El monto suele meterse entre "compra" y "en", así que hay que saltárselo. Y el nombre
+  // termina donde empieza a hablarse de la tarjeta o de la fecha, no en el primer punto:
+  // "EL PALACIO DE HIERRO" tiene preposiciones adentro y no hay que cortarlo a la mitad.
+  const conEn = texto.match(
+    /(?:compra|cargo|pago|consumo|compraste|pagaste)\b[^\n]{0,40}?\ben\s+(.{2,60}?)(?=\s+(?:con|usando|mediante|tu|su)\b|\s+el\s+\d|\s+a\s+las\b|\s+por\s+\$|[.,;|\n]|$)/i,
+  );
+  if (conEn) return recortarComercio(conEn[1]);
+
+  return null;
+}
+
+function recortarComercio(crudo) {
+  const limpio = String(crudo)
+    .replace(/\s+/g, " ")
+    .replace(/\s+(?:con|el|por|de)\s+(?:tu |su |la |el )?(?:tarjeta|cuenta|monto|importe|fecha|hora|folio|referencia)\b.*$/i, "")
+    .replace(/[\s.,;:-]+$/, "")
+    .trim();
+  if (!limpio || RUIDO_COMERCIO.test(limpio)) return null;
+  return limpio.slice(0, 60);
+}
+
+/**
+ * La forma comparable de un comercio: "OXXO GASOLINERA 4412 MEX" → "oxxo gasolinera".
+ * Es la llave con la que la app aprende y con la que detecta suscripciones, así que
+ * tiene que ser estable entre un cargo y el siguiente del mismo lugar.
+ */
+function normalizarComercio(nombre) {
+  return String(nombre || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    // Los sufijos legales se quitan ENTEROS y con su puntuación. Si se rompen antes, "S.A.
+    // de C.V." se convierte en letras sueltas que se cuelan en el nombre.
+    .replace(/\bs\.?\s*a\.?\s*(?:p\.?\s*i\.?\s*)?(?:de\s*)?c\.?\s*v\.?/g, " ")
+    .replace(/\bs\.?\s*de\s*r\.?\s*l\.?(?:\s*de\s*c\.?\s*v\.?)?/g, " ")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\b\d+\b/g, " ")                 // sucursales y referencias cambian, el nombre no
+    .replace(/\b(de|del|la|el|mexico|mex|mx|suc|sucursal)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ").slice(0, 3).join(" ");
+}
+
+/**
+ * La MARCA, más corta que el nombre normalizado: "starbucks reforma" → "starbucks".
+ *
+ * Existe porque las dos cosas se necesitan y son distintas:
+ *   · para saber si dos avisos son el MISMO cargo hace falta precisión — ahí va el nombre
+ *     completo, porque dos compras en sucursales distintas son dos compras;
+ *   · para aprender una categoría hace falta lo contrario, generalizar — si corriges el
+ *     Starbucks de Reforma, el de Polanco también es comida fuera.
+ *
+ * Se toma la primera palabra, y dos si la primera es muy corta ("wal mart", "la europea"):
+ * una sola letra o sílaba no identifica a nadie.
+ */
+function marcaDe(comercio) {
+  const partes = normalizarComercio(comercio).split(" ").filter(Boolean);
+  if (!partes.length) return "";
+  return partes[0].length <= 3 && partes[1] ? `${partes[0]} ${partes[1]}` : partes[0];
+}
+
+/** Gasto o ingreso. Devuelve `{ tipo, explicito }`. */
+function tipoDelAviso(texto) {
+  const ingreso = PISTAS_INGRESO.test(texto);
+  const gasto = PISTAS_GASTO.test(texto);
+  if (ingreso && !gasto) return { tipo: TIPOS.INGRESO, explicito: true };
+  if (gasto && !ingreso) return { tipo: TIPOS.GASTO, explicito: true };
+  // Ambas o ninguna: la mayoría de los avisos son cobros, pero eso es una suposición.
+  return { tipo: TIPOS.GASTO, explicito: false };
+}
+
+/**
+ * La huella: qué hace que dos avisos sean el MISMO movimiento.
+ * Los bancos mandan dos correos por una compra (la autorización y el cargo). Sin esto, cada
+ * compra se contaría dos veces y la app mentiría hacia arriba, que es la peor dirección.
+ */
+function huellaDe({ banco, fecha, monto, ultimos4, comercio }) {
+  return [banco || "?", fecha || "?", monto == null ? "?" : monto, ultimos4 || "?", normalizarComercio(comercio)]
+    .join("|");
+}
+
+/**
+ * Lee un aviso. Nunca lanza: un texto basura devuelve SIN_DATOS_SUFICIENTES con qué falta.
+ */
+function interpretar(entrada, remitente = "", hoy = hoyISO()) {
+  const texto = limpiarAviso(entrada);
+  const banco = bancoDeRemitente(remitente) || bancoDeRemitente(texto.slice(0, 200));
+
+  if (!texto) {
+    return sinLectura(sinDatos("No hay texto que leer.", "pega el aviso del banco"), banco);
+  }
+
+  const { centavos, seguro } = montoDelAviso(texto);
+  if (centavos === null) {
+    return sinLectura(
+      sinDatos("No encontré un monto en este texto.", "revisa que el aviso traiga el importe con $ o MXN"),
+      banco,
+    );
+  }
+
+  const { iso, explicita } = fechaDelAviso(texto, hoy);
+  const comercio = comercioDelAviso(texto);
+  const ultimos4 = tarjetaDelAviso(texto);
+  const { tipo, explicito } = tipoDelAviso(texto);
+  const traspaso = PISTAS_TRASPASO.test(texto);
+
+  const señales = [seguro, explicita, explicito, Boolean(comercio)].filter(Boolean).length;
+  const confianza =
+    banco && seguro && señales >= 3 ? CONFIANZAS.ALTA
+      : señales >= 2 ? CONFIANZAS.MEDIA
+        : CONFIANZAS.BAJA;
+
+  const razones = [];
+  if (!seguro) razones.push("el monto no venía etiquetado");
+  if (!explicita) razones.push("no traía fecha, usé la de hoy");
+  if (!explicito) razones.push("no decía si era cargo o abono, lo tomé como gasto");
+  if (!comercio) razones.push("no identifiqué el comercio");
+
+  return {
+    movimiento: {
+      fecha: iso,
+      monto: Math.abs(centavos),
+      tipo,
+      categoria: tipo === TIPOS.GASTO ? "otros" : null,
+      nota: comercio || (banco ? banco.nombre : ""),
+      metodo: ultimos4 ? `••${ultimos4}` : null,
+    },
+    banco: banco ? banco.id : null,
+    comercio,
+    ultimos4,
+    confianza,
+    posibleTraspaso: traspaso,
+    huella: huellaDe({ banco: banco ? banco.id : null, fecha: iso, monto: Math.abs(centavos), ultimos4, comercio }),
+    veredicto: veredicto(
+      confianza === CONFIANZAS.ALTA ? ESTADOS.VA_BIEN : ESTADOS.AJUSTADO,
+      confianza === CONFIANZAS.ALTA ? SEVERIDADES.OK : SEVERIDADES.INFO,
+      razones.length ? `Revísalo: ${razones.join("; ")}.` : "Lo leí completo.",
+      { confianza, razones },
+    ),
+  };
+}
+
+function sinLectura(v, banco) {
+  return {
+    movimiento: null,
+    banco: banco ? banco.id : null,
+    comercio: null,
+    ultimos4: null,
+    confianza: CONFIANZAS.BAJA,
+    posibleTraspaso: false,
+    huella: null,
+    veredicto: v,
+  };
+}
+
+/**
+ * ¿Ya conocía esto? Mira la bandeja (misma huella) y lo ya registrado (mismo monto y
+ * comercio en ±1 día). Devuelve un veredicto que la pantalla puede mostrar, o null.
+ */
+function posibleDuplicado(datos, lectura) {
+  if (!lectura || !lectura.movimiento || !lectura.huella) return null;
+
+  const enBandeja = (datos.bandeja || []).some((e) => e.huella === lectura.huella && e.estado !== "descartado");
+  if (enBandeja) {
+    return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA, "Este mismo aviso ya está en la bandeja.", {
+      motivo: "huella",
+    });
+  }
+
+  const clave = normalizarComercio(lectura.comercio);
+  const { fecha, monto } = lectura.movimiento;
+  const desde = sumarDias(fecha, -1);
+  const hasta = sumarDias(fecha, 1);
+
+  for (const mes of new Set([desde.slice(0, 7), fecha.slice(0, 7), hasta.slice(0, 7)])) {
+    for (const m of datos.movimientos[mes] || []) {
+      if (m.monto !== monto || Math.abs(diasEntre(m.fecha, fecha)) > 1) continue;
+      if (clave && normalizarComercio(m.nota) !== clave) continue;
+      return veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+        "Ya tienes un movimiento igual por estos días. ¿Es el mismo cargo?", { motivo: "parecido", id: m.id });
+    }
+  }
+  return null;
+}
+
+// ═══ motor/aprendizaje.js ═══
+// Aprendizaje — que no tengas que decirle dos veces lo mismo.
+//
+// Es la diferencia entre las apps que la gente abandona y las que no. La más respetada del
+// mundo (YNAB) obliga a categorizar cada movimiento a mano, siempre, incluso los importados;
+// hay quien la deja a las tres semanas por eso. Las buenas aprenden de tus correcciones.
+//
+// Aquí "aprender" no es nada misterioso ni hace falta que lo sea: si corriges OXXO a Súper,
+// se guarda una regla, y el siguiente cargo de OXXO ya llega con Súper puesto. Determinista,
+// inspeccionable y borrable — que es justo lo que se le pide a algo que toca tu dinero.
+//
+// Además, antes de que exista una sola regla, ya puede sugerir mirando lo que tú mismo
+// capturaste a mano: si tus tres últimos cargos de OXXO fueron Súper, ese es el dato.
+
+
+
+
+
+/** Cuántos movimientos pasados hay que ver para sugerir sin una regla explícita. */
+const MINIMO_PARA_DEDUCIR = 2;
+
+/** La categoría que la persona usó más para este comercio, según su propio historial. */
+function categoriaMasUsada(datos, clave) {
+  if (!clave) return null;
+  const cuenta = new Map();
+  for (const lista of Object.values(datos.movimientos || {})) {
+    for (const m of lista) {
+      if (!m.categoria || marcaDe(m.nota) !== clave) continue;
+      cuenta.set(m.categoria, (cuenta.get(m.categoria) || 0) + 1);
+    }
+  }
+  let mejor = null;
+  for (const [categoria, veces] of cuenta) {
+    if (!mejor || veces > mejor.veces) mejor = { categoria, veces };
+  }
+  return mejor && mejor.veces >= MINIMO_PARA_DEDUCIR ? mejor : null;
+}
+
+/**
+ * Qué categoría le toca a este comercio. Devuelve `{ categoriaId, veredicto }` o null.
+ * Primero lo que la persona dijo, después lo que la persona hizo. Nunca inventa.
+ */
+function sugerirCategoria(datos, comercio) {
+  const clave = marcaDe(comercio);
+  if (!clave) return null;
+
+  const regla = (datos.reglas || []).find((r) => r.clave === clave);
+  if (regla) {
+    return {
+      categoriaId: regla.categoriaId,
+      veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK,
+        `Ya me habías dicho que ${comercio} va aquí.`, { clave, veces: regla.veces, fuente: "regla" }),
+    };
+  }
+
+  const deducida = categoriaMasUsada(datos, clave);
+  if (deducida) {
+    return {
+      categoriaId: deducida.categoria,
+      veredicto: veredicto(ESTADOS.AJUSTADO, SEVERIDADES.INFO,
+        `Tus últimos ${deducida.veces} movimientos de ${comercio} fueron de esta categoría.`,
+        { clave, veces: deducida.veces, fuente: "historial" }),
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Guarda la corrección. Devuelve datos nuevos; no muta lo recibido.
+ * Si la regla ya existía con otra categoría, gana la última: la persona cambió de opinión y
+ * la app no está para discutir con ella.
+ */
+function recordar(datos, comercio, categoriaId, iso = hoyISO()) {
+  const clave = marcaDe(comercio);
+  if (!clave || !categoriaId) return datos;
+
+  const previas = datos.reglas || [];
+  const anterior = previas.find((r) => r.clave === clave);
+  const nueva = normalizarRegla({
+    clave,
+    categoriaId,
+    veces: anterior && anterior.categoriaId === categoriaId ? anterior.veces + 1 : 1,
+    ultima: iso,
+  });
+
+  return { ...datos, reglas: [nueva, ...previas.filter((r) => r.clave !== clave)] };
+}
+
+/** Borrar una regla tiene que ser tan fácil como crearla. */
+function olvidar(datos, clave) {
+  return { ...datos, reglas: (datos.reglas || []).filter((r) => r.clave !== clave) };
+}
+
+/** Lo aprendido, para poder mirarlo y corregirlo en Ajustes. */
+function reglasAprendidas(datos) {
+  return [...(datos.reglas || [])].sort((a, b) => b.veces - a.veces || (a.clave < b.clave ? -1 : 1));
+}
+
+// ═══ motor/recurrentes.js ═══
+// Recurrentes — encontrar las suscripciones que ya estás pagando.
+//
+// Es el negocio entero de una app que cobra por esto: mirar el historial, ver qué se repite,
+// y avisar cuando algo sube de precio. Aquí sale gratis, porque los datos ya están.
+//
+// Dos cosas hacen que sirva en vez de estorbar:
+//   · Se piden TRES cargos antes de llamarle recurrente. Dos son una casualidad.
+//   · Si ya lo tienes como pago fijo, no vuelve a proponerlo. Nada peor que una app que
+//     insiste en algo que ya resolviste.
+
+
+
+
+
+
+const MINIMO_CARGOS = 3;
+const TOLERANCIA_DIAS = 8; // un cobro mensual cae en días distintos; eso no lo hace irregular
+
+/**
+ * Cuánto puede desviarse un ciclo de N meses y seguir siendo el mismo cobro.
+ * Crece poco a propósito: lo mensual baila (meses de 28 a 31 días, fines de semana), pero un
+ * cobro semestral cae en la misma fecha del calendario. Si la holgura creciera proporcional,
+ * un hueco de 200 días pasaría por "cada 6 meses" y eso ya es inventarse un ritmo.
+ */
+function toleranciaDe(meses) {
+  return Math.min(TOLERANCIA_DIAS + (meses - 1) * 1.5, 18);
+}
+
+/** Cada cuánto se repite, en meses, o null si el ritmo no se parece a nada conocido. */
+function frecuenciaDeDias(dias) {
+  for (const [meses, centro] of [[1, 30], [2, 61], [3, 91], [6, 182], [12, 365]]) {
+    if (Math.abs(dias - centro) <= toleranciaDe(meses)) return meses;
+  }
+  return null;
+}
+
+function mediana(numeros) {
+  const orden = [...numeros].sort((a, b) => a - b);
+  const medio = Math.floor(orden.length / 2);
+  return orden.length % 2 ? orden[medio] : Math.round((orden[medio - 1] + orden[medio]) / 2);
+}
+
+/** Los gastos agrupados por comercio, cada grupo ordenado de viejo a nuevo. */
+function agruparPorComercio(datos) {
+  const grupos = new Map();
+  for (const lista of Object.values(datos.movimientos || {})) {
+    for (const m of lista) {
+      if (m.tipo !== TIPOS.GASTO) continue;
+      const clave = normalizarComercio(m.nota);
+      if (!clave) continue;
+      if (!grupos.has(clave)) grupos.set(clave, []);
+      grupos.get(clave).push(m);
+    }
+  }
+  for (const lista of grupos.values()) lista.sort((a, b) => comparar(a.fecha, b.fecha));
+  return grupos;
+}
+
+/**
+ * Las suscripciones que se ven en el historial.
+ * Devuelve una lista ordenada por lo que más cuesta al mes, que es el orden en que conviene
+ * mirarlas cuando quieres recortar.
+ */
+function detectarRecurrentes(datos, iso = hoyISO()) {
+  const yaFijos = new Set((datos.fijos || []).map((f) => normalizarComercio(f.nombre)).filter(Boolean));
+  const salida = [];
+
+  for (const [clave, cargos] of agruparPorComercio(datos)) {
+    if (cargos.length < MINIMO_CARGOS) continue;
+
+    const huecos = cargos.slice(1).map((m, i) => diasEntre(cargos[i].fecha, m.fecha));
+    const tipico = mediana(huecos);
+    const frecuencia = frecuenciaDeDias(tipico);
+    if (!frecuencia) continue;
+
+    // Un ritmo es un ritmo si casi todos los huecos se parecen entre sí.
+    const regulares = huecos.filter((d) => Math.abs(d - tipico) <= toleranciaDe(frecuencia));
+    if (regulares.length < huecos.length - 1) continue;
+
+    const ultimo = cargos[cargos.length - 1];
+    const anteriores = cargos.slice(0, -1).map((m) => m.monto);
+    const montoAnterior = mediana(anteriores);
+    const subio = ultimo.monto > montoAnterior;
+
+    salida.push({
+      clave,
+      nombre: ultimo.nota || clave,
+      monto: ultimo.monto,
+      montoAnterior: subio ? montoAnterior : null,
+      frecuencia,
+      mensualizado: Math.round(ultimo.monto / frecuencia),
+      veces: cargos.length,
+      ultimaFecha: ultimo.fecha,
+      proximaFecha: sumarDias(ultimo.fecha, tipico),
+      categoria: ultimo.categoria,
+      yaEsFijo: yaFijos.has(clave),
+      veredicto: subio
+        ? veredicto(ESTADOS.NO_ALCANZA, SEVERIDADES.MEDIA,
+          `${ultimo.nota || clave} te subió de ${formatear(montoAnterior)} a ${formatear(ultimo.monto)}.`,
+          { clave, antes: montoAnterior, ahora: ultimo.monto, sube: ultimo.monto - montoAnterior })
+        : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.INFO,
+          `Se repite cada ${frecuencia === 1 ? "mes" : `${frecuencia} meses`}: ${cargos.length} cargos de ${formatear(ultimo.monto)}.`,
+          { clave, frecuencia, veces: cargos.length }),
+    });
+  }
+
+  return salida.sort((a, b) => b.mensualizado - a.mensualizado);
+}
+
+/** Lo que todavía no está registrado como pago fijo — lo único que vale la pena proponer. */
+function porRegistrar(datos, iso = hoyISO()) {
+  return detectarRecurrentes(datos, iso).filter((r) => !r.yaEsFijo);
+}
+
+/** Las que subieron de precio. Este es el aviso que de verdad ahorra dinero. */
+function subieronDePrecio(datos, iso = hoyISO()) {
+  return detectarRecurrentes(datos, iso).filter((r) => r.montoAnterior !== null);
+}
+
+/** Convierte una recurrente detectada en el pago fijo que ya se sabe manejar. */
+function fijoDesdeRecurrente(recurrente) {
+  return {
+    nombre: recurrente.nombre.slice(0, 80),
+    monto: recurrente.monto,
+    diaCorte: Number(recurrente.proximaFecha.slice(8, 10)),
+    frecuencia: recurrente.frecuencia,
+    mesAncla: recurrente.frecuencia === 1 ? null : recurrente.proximaFecha.slice(0, 7),
+    categoria: recurrente.categoria || "suscripciones",
+    activo: true,
+  };
+}
+
+/** Cuánto se va al mes en cosas que se repiten. El número que nadie tiene a la mano. */
+function totalRecurrenteMensual(datos, iso = hoyISO()) {
+  const lista = detectarRecurrentes(datos, iso);
+  const total = lista.reduce((t, r) => t + r.mensualizado, 0);
+  return {
+    total,
+    cuantas: lista.length,
+    veredicto: lista.length
+      ? veredicto(ESTADOS.VA_BIEN, SEVERIDADES.INFO,
+        `${lista.length} ${lista.length === 1 ? "cosa se repite y suma" : "cosas se repiten y suman"} ${formatear(total)} al mes.`, { total, cuantas: lista.length })
+      : veredicto(ESTADOS.SIN_DATOS, SEVERIDADES.INFO,
+        "Todavía no hay suficiente historial para ver qué se repite.",
+        { falta: `captura al menos ${MINIMO_CARGOS} cargos del mismo lugar` }),
+  };
+}
+
+// ═══ motor/tendencia.js ═══
+// Tendencia — ¿voy mejorando?
+//
+// La app contesta muy bien "¿cómo voy hoy?", y no contestaba "¿estoy mejor que hace tres
+// meses?". Son preguntas distintas: se puede tener una quincena buena dentro de un año malo.
+//
+// Y va la cuarta regla de YNAB traída a la quincena mexicana: no "ahorré algo", sino
+// "cuántas quincenas puedo vivir con lo que tengo guardado". Ese número es el que de verdad
+// dice si alguien está saliendo del hoyo o solo tuvo una semana tranquila.
+
+
+
+
+
+
+const MESES_ABREVIADOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+
+/** "sep 1", "sep 2" — la etiqueta del ciclo sola se repite cada mes y no sirve para una gráfica. */
+function etiquetaCorta(ciclo) {
+  return `${MESES_ABREVIADOS[Number(ciclo.inicio.slice(5, 7)) - 1]} ${ciclo.indice + 1}`;
+}
+
+/** Cuántos ciclos completos hacen falta antes de hablar de tendencia. Menos es ruido. */
+const CICLOS_MINIMOS = 4;
+
+/** Los últimos n ciclos, del más viejo al más nuevo. */
+function ciclosRecientes(datos, iso = hoyISO(), n = 6) {
+  const cortes = datos.perfil.cortes;
+  const lista = [];
+  let cursor = iso;
+  for (let i = 0; i < n; i++) {
+    const ciclo = cicloDe(cursor, cortes);
+    lista.unshift(ciclo);
+    cursor = sumarDias(ciclo.inicio, -1);
+  }
+  return lista;
+}
+
+/**
+ * Cuánto entró, cuánto salió y cuánto sobró en cada uno de los últimos ciclos.
+ * El ciclo en curso viene marcado `completo: false`: compararlo de tú a tú con los cerrados
+ * haría ver una caída donde solo hay días que todavía no pasan.
+ */
+function tendenciaPorCiclo(datos, iso = hoyISO(), n = 6) {
+  return ciclosRecientes(datos, iso, n).map((ciclo) => {
+    const movimientos = movimientosEntre(datos, ciclo.inicio, ciclo.fin);
+    const ingresos = suma(movimientos, (m) => m.tipo === TIPOS.INGRESO);
+    const gastos = suma(movimientos, (m) => m.tipo === TIPOS.GASTO);
+    const ahorrado = suma(movimientos, (m) => m.tipo === TIPOS.AHORRO) - suma(movimientos, (m) => m.tipo === TIPOS.RETIRO);
+    return {
+      etiqueta: ciclo.etiqueta,
+      corta: etiquetaCorta(ciclo),
+      inicio: ciclo.inicio,
+      fin: ciclo.fin,
+      ingresos,
+      gastos,
+      ahorrado,
+      saldo: ingresos - gastos,
+      completo: comparar(ciclo.fin, iso) < 0,
+      hayDatos: movimientos.length > 0,
+    };
+  });
+}
+
+/**
+ * ¿Va mejorando? Compara la primera mitad de los ciclos cerrados con la segunda.
+ * Con pocos datos NO adivina: dice cuántos ciclos faltan para poder contestar.
+ */
+function resumenTendencia(datos, iso = hoyISO(), n = 6) {
+  const puntos = tendenciaPorCiclo(datos, iso, n);
+  const cerrados = puntos.filter((p) => p.completo && p.hayDatos);
+
+  if (cerrados.length < CICLOS_MINIMOS) {
+    return {
+      puntos,
+      cambio: null,
+      veredicto: sinDatos(
+        `Llevas ${cerrados.length} ${cerrados.length === 1 ? "quincena" : "quincenas"} con datos; con ${CICLOS_MINIMOS} ya se puede ver si mejoras.`,
+        "sigue capturando: la tendencia aparece sola",
+      ),
+    };
+  }
+
+  const mitad = Math.floor(cerrados.length / 2);
+  const promedio = (lista) => Math.round(lista.reduce((t, p) => t + p.saldo, 0) / lista.length);
+  const antes = promedio(cerrados.slice(0, mitad));
+  const ahora = promedio(cerrados.slice(mitad));
+  const cambio = ahora - antes;
+
+  const mejora = cambio > 0;
+  return {
+    puntos,
+    cambio,
+    antes,
+    ahora,
+    veredicto: veredicto(
+      mejora ? ESTADOS.VA_BIEN : ESTADOS.AJUSTADO,
+      mejora ? SEVERIDADES.OK : SEVERIDADES.MEDIA,
+      mejora
+        ? `Te está sobrando ${formatear(cambio)} más por quincena que antes.`
+        : `Te está sobrando ${formatear(Math.abs(cambio))} menos por quincena que antes.`,
+      { antes, ahora, cambio, ciclos: cerrados.length },
+    ),
+  };
+}
+
+/**
+ * Cuántas quincenas podrías vivir con lo guardado, si mañana dejaras de cobrar.
+ * Es la cuarta regla de YNAB —"envejece tu dinero"— en la moneda de esta app. Se mide contra
+ * lo que de verdad gastas, no contra lo que crees que gastas.
+ */
+function quincenasDeColchon(datos, iso = hoyISO(), n = 6) {
+  const guardado = ahorroLibre(datos);
+  const cerrados = tendenciaPorCiclo(datos, iso, n).filter((p) => p.completo && p.hayDatos);
+
+  if (!cerrados.length) {
+    return {
+      quincenas: null,
+      guardado,
+      gastoTipico: null,
+      veredicto: sinDatos(
+        "Todavía no sé cuánto gastas en una quincena normal, así que no puedo decir cuánto te duraría lo guardado.",
+        "captura una quincena completa de gastos",
+      ),
+    };
+  }
+
+  const gastoTipico = Math.round(cerrados.reduce((t, p) => t + p.gastos, 0) / cerrados.length);
+  if (gastoTipico <= 0) {
+    return { quincenas: null, guardado, gastoTipico, veredicto: sinDatos("No hay gastos registrados con qué comparar.", "captura tus gastos de una quincena") };
+  }
+
+  const quincenas = guardado / gastoTipico;
+  const redondo = Math.round(quincenas * 10) / 10;
+
+  return {
+    quincenas: redondo,
+    guardado,
+    gastoTipico,
+    veredicto: veredicto(
+      quincenas >= 4 ? ESTADOS.VA_BIEN : quincenas >= 1 ? ESTADOS.AJUSTADO : ESTADOS.NO_ALCANZA,
+      quincenas >= 4 ? SEVERIDADES.OK : quincenas >= 1 ? SEVERIDADES.MEDIA : SEVERIDADES.ALTA,
+      quincenas >= 1
+        ? `Con lo guardado vivirías ${redondo} ${redondo === 1 ? "quincena" : "quincenas"} sin cobrar.`
+        : `Lo guardado no cubre ni una quincena: gastas ${formatear(gastoTipico)} y tienes ${formatear(guardado)}.`,
+      { quincenas: redondo, guardado, gastoTipico },
+    ),
+  };
+}
+
+// ═══ motor/bandeja.js ═══
+// La bandeja — lo que llegó solo, esperando que tú digas que sí.
+//
+// Es la pieza que hace útil todo lo demás, y la regla que la gobierna es una sola:
+// NADA de aquí cuenta en ningún número hasta que la persona lo acepta. Un aviso mal leído
+// puede equivocarse; lo que no puede es equivocarse en silencio dentro de tus cuentas.
+//
+// Al aceptar, la app aprende. Esa es la mitad que convierte la bandeja de un trámite diario
+// en algo que se hace cada vez más corto.
+
+
+
+
+
+
+/**
+ * Lee un aviso y lo deja en la bandeja. Devuelve `{ datos, entrada, duplicado, error }`.
+ * Si es exactamente el mismo aviso que ya está esperando, NO lo agrega: devuelve el aviso de
+ * duplicado. Dos correos por una compra es lo normal, no la excepción.
+ */
+function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, iso = hoyISO()) {
+  const lectura = interpretar(texto, remitente, iso);
+  if (!lectura.movimiento) return { datos, entrada: null, duplicado: null, error: lectura.veredicto };
+
+  const duplicado = posibleDuplicado(datos, lectura);
+  if (duplicado && duplicado.datos.motivo === "huella") {
+    return { datos, entrada: null, duplicado, error: null };
+  }
+
+  const sugerida = lectura.movimiento.tipo === TIPOS.GASTO ? sugerirCategoria(datos, lectura.comercio) : null;
+  const razones = lectura.veredicto.datos.razones || [];
+  const entrada = normalizarEntrada({
+    recibido: iso,
+    estado: ESTADOS_BANDEJA.PENDIENTE,
+    movimiento: { ...lectura.movimiento, categoria: sugerida ? sugerida.categoriaId : lectura.movimiento.categoria },
+    huella: lectura.huella,
+    confianza: lectura.confianza,
+    banco: lectura.banco,
+    comercio: lectura.comercio,
+    ultimos4: lectura.ultimos4,
+    origen,
+    posibleTraspaso: lectura.posibleTraspaso,
+    aviso: [duplicado ? duplicado.motivo : "", ...razones].filter(Boolean).join(" "),
+  });
+
+  return { datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] }, entrada, duplicado, error: null };
+}
+
+function entradaPorId(datos, id) {
+  return (datos.bandeja || []).find((e) => e.id === id) || null;
+}
+
+/** Lo que espera respuesta, lo más reciente arriba. */
+function pendientes(datos) {
+  return (datos.bandeja || [])
+    .filter((e) => e.estado === ESTADOS_BANDEJA.PENDIENTE)
+    .sort((a, b) => comparar(b.recibido, a.recibido) || (a.id < b.id ? 1 : -1));
+}
+
+/** Para el contador de la barra y para saber si hay algo que hacer hoy. */
+function resumenBandeja(datos) {
+  const espera = pendientes(datos);
+  return {
+    pendientes: espera.length,
+    dudosos: espera.filter((e) => e.confianza !== "alta").length,
+    total: (datos.bandeja || []).length,
+  };
+}
+
+/**
+ * Acepta una entrada: crea el movimiento de verdad y aprende de lo que se corrigió.
+ * `cambios` es lo que la persona editó antes de aceptar (categoría, monto, tipo, fecha, nota).
+ */
+function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
+  const entrada = entradaPorId(datos, id);
+  if (!entrada) return { datos, movimiento: null, error: "Esa entrada ya no está en la bandeja." };
+  if (entrada.estado !== ESTADOS_BANDEJA.PENDIENTE) {
+    return { datos, movimiento: null, error: "Esa entrada ya estaba resuelta." };
+  }
+
+  const propuesto = { ...entrada.movimiento, ...cambios };
+  const { datos: conMovimiento, movimiento, error } = agregarMovimiento(datos, propuesto);
+  if (error) return { datos, movimiento: null, error };
+
+  // Aprender solo tiene sentido si sabemos de qué comercio hablamos y a dónde lo mandó.
+  const aprendido = entrada.comercio && movimiento.tipo === TIPOS.GASTO && movimiento.categoria
+    ? recordar(conMovimiento, entrada.comercio, movimiento.categoria, iso)
+    : conMovimiento;
+
+  return {
+    datos: {
+      ...aprendido,
+      bandeja: aprendido.bandeja.map((e) =>
+        e.id === id ? { ...e, estado: ESTADOS_BANDEJA.ACEPTADO, movimientoId: movimiento.id } : e),
+    },
+    movimiento,
+    error: null,
+  };
+}
+
+/** Descartar: ni se registra ni se vuelve a preguntar. Sirve para traspasos y para errores. */
+function descartarEntrada(datos, id) {
+  return {
+    ...datos,
+    bandeja: (datos.bandeja || []).map((e) =>
+      e.id === id && e.estado === ESTADOS_BANDEJA.PENDIENTE
+        ? { ...e, estado: ESTADOS_BANDEJA.DESCARTADO }
+        : e),
+  };
+}
+
+/** Deshacer una aceptación: borra el movimiento que creó y la deja esperando otra vez. */
+function deshacerEntrada(datos, id) {
+  const entrada = entradaPorId(datos, id);
+  if (!entrada || entrada.estado !== ESTADOS_BANDEJA.ACEPTADO) return datos;
+
+  const sinMovimiento = entrada.movimientoId ? eliminarMovimiento(datos, entrada.movimientoId) : datos;
+  return {
+    ...sinMovimiento,
+    bandeja: sinMovimiento.bandeja.map((e) =>
+      e.id === id ? { ...e, estado: ESTADOS_BANDEJA.PENDIENTE, movimientoId: null } : e),
+  };
+}
+
+/**
+ * Tira lo ya resuelto que es viejo. La bandeja es un buzón, no un archivo: sin esto crecería
+ * para siempre y el respaldo se volvería pesado sin darle nada a nadie. Lo pendiente NUNCA
+ * se tira, por viejo que sea.
+ */
+function purgarBandeja(datos, antesDe) {
+  return {
+    ...datos,
+    bandeja: (datos.bandeja || []).filter(
+      (e) => e.estado === ESTADOS_BANDEJA.PENDIENTE || comparar(e.recibido, antesDe) >= 0),
+  };
+}
+
+/** Cuánto suma lo que está esperando: el "si aceptas todo, esto cambia". */
+function impactoPendiente(datos) {
+  const espera = pendientes(datos);
+  const gasto = espera.filter((e) => e.movimiento.tipo === TIPOS.GASTO)
+    .reduce((t, e) => t + e.movimiento.monto, 0);
+  const ingreso = espera.filter((e) => e.movimiento.tipo === TIPOS.INGRESO)
+    .reduce((t, e) => t + e.movimiento.monto, 0);
+
+  return {
+    gasto,
+    ingreso,
+    veredicto: espera.length
+      ? veredicto(ESTADOS.AJUSTADO, SEVERIDADES.INFO,
+        `${espera.length} ${espera.length === 1 ? "movimiento espera" : "movimientos esperan"} tu confirmación.`,
+        { pendientes: espera.length, gasto, ingreso })
+      : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "No hay nada esperando.", { pendientes: 0 }),
+  };
+}
+
 // ═══ almacen/archivo.js ═══
 // Respaldo — el puente para que estos datos nunca queden atrapados en ninguna app.
 //
@@ -2117,6 +3217,99 @@ async function descargarEnAnfitrion({ nombre, texto }) {
   }
 }
 
+// ═══ almacen/puente-correo.js ═══
+// Adaptador del puente de correo — OPCIONAL Y BORRABLE.
+//
+// Igual que el adaptador del anfitrión: nadie lo importa. La app pregunta en tiempo de
+// ejecución si estas funciones existen, y si no, no pasa nada — la bandeja se sigue llenando
+// pegando o compartiendo. Borra este archivo, arma, y la app queda exactamente igual.
+// Hay una prueba que falla si eso deja de ser cierto.
+//
+// Del otro lado vive puente/Codigo.gs, un script en la cuenta de Google de la persona.
+//
+// Detalle que decide el diseño: se manda POST con Content-Type "text/plain". Suena raro para
+// algo que manda JSON, y es a propósito. Un POST con "application/json" es una petición que
+// el navegador precede de un OPTIONS de permiso, y Apps Script no contesta OPTIONS: la
+// llamada moriría siempre. Con "text/plain" es una petición simple, sin permiso previo, y
+// pasa. El contenido sigue siendo JSON; lo que cambia es la etiqueta.
+
+const CLAVE = "grip:puente";
+const ESPERA_MAXIMA = 15000;
+
+/** localStorage puede LANZAR con solo tocarlo (iframes sin permiso). Nunca se accede pelón. */
+function almacenLocal() {
+  try {
+    return globalThis.localStorage || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * La configuración vive SOLO en este dispositivo, nunca en el documento de datos.
+ * Si viviera con los movimientos, el token viajaría a donde viajen los datos — y una llave
+ * que se sincroniza sola deja de ser una llave.
+ */
+function configuracionDelPuente() {
+  const almacen = almacenLocal();
+  if (!almacen) return { url: "", token: "", disponible: false };
+  try {
+    const crudo = almacen.getItem(CLAVE);
+    const guardado = crudo ? JSON.parse(crudo) : {};
+    return { url: guardado.url || "", token: guardado.token || "", disponible: true };
+  } catch (e) {
+    return { url: "", token: "", disponible: true };
+  }
+}
+
+function guardarConfiguracionDelPuente({ url, token }) {
+  const almacen = almacenLocal();
+  if (!almacen) return false;
+  try {
+    if (!url && !token) almacen.removeItem(CLAVE);
+    else almacen.setItem(CLAVE, JSON.stringify({ url: String(url || "").trim(), token: String(token || "").trim() }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Pide al puente los avisos de los últimos días.
+ * NUNCA lanza: devuelve `{ avisos, error }`. Que el correo no responda no puede tumbar la app.
+ */
+async function traerAvisos({ url, token, dias = 3 } = {}) {
+  if (!url || !token) return { avisos: [], error: "Falta la dirección del puente o el token." };
+
+  const cancelador = typeof AbortController === "function" ? new AbortController() : null;
+  const reloj = cancelador ? setTimeout(() => cancelador.abort(), ESPERA_MAXIMA) : null;
+
+  try {
+    const respuesta = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" }, // petición simple: sin OPTIONS previo
+      body: JSON.stringify({ token, dias }),
+      redirect: "follow", // Apps Script responde con un salto a googleusercontent
+      signal: cancelador ? cancelador.signal : undefined,
+    });
+
+    if (!respuesta.ok) return { avisos: [], error: `El puente respondió ${respuesta.status}.` };
+
+    const datos = await respuesta.json();
+    if (datos.error) return { avisos: [], error: datos.error };
+    if (!Array.isArray(datos.avisos)) return { avisos: [], error: "El puente respondió algo que no entiendo." };
+
+    return { avisos: datos.avisos, error: null };
+  } catch (e) {
+    const motivo = e && e.name === "AbortError"
+      ? "El puente tardó demasiado en responder."
+      : "No se pudo hablar con el puente. Revisa la dirección y tu conexión.";
+    return { avisos: [], error: motivo };
+  } finally {
+    if (reloj) clearTimeout(reloj);
+  }
+}
+
 // ═══ interfaz/ui.js ═══
 // Interfaz — render directo, sin framework y sin dependencias.
 //
@@ -2137,6 +3330,11 @@ async function descargarEnAnfitrion({ nombre, texto }) {
 
 
 
+
+
+
+
+
 const app = {
   datos: datosVacios(),
   almacen: null,
@@ -2145,10 +3343,19 @@ const app = {
   aviso: null,
   bloqueado: false,
   filtro: { texto: "", tipo: "" },
+  // Lo que la persona eligió en la bandeja antes de aceptar, por entrada. Vive solo en la
+  // pantalla: si cierra la app sin aceptar, no queda rastro de una decisión a medias.
+  eleccion: {},
+  // Lo que lleva escrito en la caja de pegar. Vive en el estado y no solo en el DOM porque
+  // cualquier re-dibujo —un guardado, o que otro dispositivo escriba— lo borraría a media
+  // captura. Perder lo que alguien acaba de pegar es la clase de detalle que hace que una
+  // app se deje de usar.
+  borrador: "",
 };
 
 const VISTAS = [
   { id: "hoy", icono: "⌂", nombre: "Hoy" },
+  { id: "bandeja", icono: "⇊", nombre: "Bandeja" },
   { id: "presupuesto", icono: "▤", nombre: "Presupuesto" },
   { id: "metas", icono: "◎", nombre: "Metas" },
   { id: "fijos", icono: "⏱", nombre: "Fijos" },
@@ -2206,6 +3413,7 @@ function render() {
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
   const sincronizado = estado.modo === MODOS.SINCRONIZADO;
+  const esperando = resumenBandeja(app.datos).pendientes;
 
   const etiquetaEstado = sincronizado
     ? "Sincronizado"
@@ -2231,15 +3439,20 @@ function render() {
       <div class="pie">Tus datos viven en este dispositivo${sincronizado ? " y en tu cuenta" : ""}. Nunca en el repositorio.</div>
     </main>
 
-    <button class="flotante" data-accion="capturar" aria-label="Capturar gasto">+</button>
+    ${app.vista === "bandeja" ? "" : `<button class="flotante" data-accion="capturar" aria-label="Capturar gasto">+</button>`}
 
     <nav class="nav"><div class="envoltura">
-      ${VISTAS.map((v) => `<button data-accion="ir" data-vista="${v.id}" aria-current="${app.vista === v.id || (app.vista === 'historial' && v.id === 'hoy')}">
-        <span>${v.icono}</span>${esc(v.nombre)}</button>`).join("")}
+      ${VISTAS.map((v) => {
+        // El contador solo existe si hay algo que hacer. Un globo en cero es ruido.
+        const globo = v.id === "bandeja" && esperando > 0 ? `<i class="globo">${esperando}</i>` : "";
+        return `<button data-accion="ir" data-vista="${v.id}" aria-current="${app.vista === v.id || (app.vista === 'historial' && v.id === 'hoy')}">
+        <span>${v.icono}${globo}</span>${esc(v.nombre)}</button>`;
+      }).join("")}
     </div></nav>`;
 }
 
 function vistaActual() {
+  if (app.vista === "bandeja") return vistaBandeja();
   if (app.vista === "historial") return vistaHistorial();
   if (app.vista === "presupuesto") return vistaPresupuesto();
   if (app.vista === "metas") return vistaMetas();
@@ -2329,7 +3542,27 @@ function vistaHoy() {
     : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
         ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
 
+  const espera = pendientes(datos);
+  const bandejaBanner = espera.length
+    ? `<div class="aviso">
+        <b>${espera.length} ${espera.length === 1 ? "movimiento espera" : "movimientos esperan"} tu confirmación.</b>
+        Son ${monto(impactoPendiente(datos).gasto)} en gastos que todavía no cuentan aquí.
+        <div class="acciones"><button class="boton chico" data-accion="ir" data-vista="bandeja">Revisar</button></div>
+      </div>`
+    : "";
+
+  // El aviso que de verdad ahorra dinero: una suscripción que subió sin avisar.
+  const subidas = subieronDePrecio(datos, hoy);
+  const avisoSubidas = subidas.length
+    ? `<div class="titulo-seccion">Te subieron de precio</div><div class="tarjeta">${subidas
+        .map((r) => `<div class="fila apilada">
+          <div class="linea"><div class="nombre">${esc(r.nombre)}</div><div class="monto mal">+${monto(r.monto - r.montoAnterior)}</div></div>
+          <div class="sub">${esc(r.veredicto.motivo)}</div>
+        </div>`).join("")}</div>`
+    : "";
+
   const colchon = estadoColchon(datos);
+  const aguante = quincenasDeColchon(datos, hoy);
   const tarjetaColchon =
     colchon.objetivo === null && colchon.acumulado === 0
       ? "" // sin objetivo y sin nada apartado, no hay nada que enseñar todavía
@@ -2343,11 +3576,102 @@ function vistaHoy() {
                  Math.round((colchon.acumulado * 100) / colchon.objetivo), 100)}%"></i></div>`
              : ""}
            ${veredictoHTML(colchon.veredicto)}
+           ${veredictoHTML(aguante.veredicto)}
            <div class="acciones"><button class="boton chico tenue" data-accion="editar-colchon">
              ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
          </div>`;
 
-  return `${arranque}${principal}<div class="duo">${porDia}${capacidad}</div>${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+}
+
+// --- Vista: Bandeja ---
+
+const CONFIANZA_TEXTO = { alta: "Lo leí completo", media: "Revísalo", baja: "Confírmalo" };
+
+/** Cuántas fichas caben antes de que elegir cueste más que escribir. */
+const FICHAS_VISIBLES = 6;
+
+/**
+ * Las categorías que conviene ofrecer de un toque: la que ya está puesta, y después las que
+ * esta persona más usa. El resto siguen ahí, en "Editar" — pero no estorbando.
+ */
+function categoriasACalce(elegida) {
+  const uso = new Map();
+  for (const lista of Object.values(app.datos.movimientos)) {
+    for (const m of lista) if (m.categoria) uso.set(m.categoria, (uso.get(m.categoria) || 0) + 1);
+  }
+  const orden = opcionesCategorias().sort((a, b) => (uso.get(b.valor) || 0) - (uso.get(a.valor) || 0));
+  const puesta = orden.filter((c) => c.valor === elegida);
+  return [...puesta, ...orden.filter((c) => c.valor !== elegida)].slice(0, FICHAS_VISIBLES);
+}
+
+function tarjetaEntrada(entrada) {
+  const elegida = app.eleccion[entrada.id] !== undefined ? app.eleccion[entrada.id] : entrada.movimiento.categoria;
+  const esGasto = entrada.movimiento.tipo === TIPOS.GASTO;
+  const signo = esGasto ? "−" : "+";
+
+  const contexto = [
+    fechaCorta(entrada.movimiento.fecha),
+    entrada.banco ? nombreDeBanco(entrada.banco) || entrada.banco : null,
+    entrada.ultimos4 ? `••${entrada.ultimos4}` : null,
+    entrada.origen === ORIGENES.CORREO ? "de tu correo" : entrada.origen === ORIGENES.COMPARTIDO ? "compartido" : null,
+  ].filter(Boolean).join(" · ");
+
+  // Las categorías van como fichas para que aceptar sea un toque, no un formulario. Ésa es
+  // toda la diferencia entre una bandeja que se usa a diario y una que se abandona.
+  const fichas = esGasto
+    ? `<div class="chips apretados">${categoriasACalce(elegida).map((c) => `
+        <button class="chip" aria-pressed="${c.valor === elegida}" data-accion="elegir-categoria"
+          data-id="${esc(entrada.id)}" data-categoria="${esc(c.valor)}">${esc(c.etiqueta)}</button>`).join("")}</div>`
+    : "";
+
+  const alerta = entrada.posibleTraspaso
+    ? `<div class="rotulo aviso-linea">Parece un movimiento entre tus propias cuentas. Si lo es, descártalo: no es un gasto.</div>`
+    : entrada.aviso
+      ? `<div class="rotulo aviso-linea">${esc(entrada.aviso)}</div>`
+      : "";
+
+  return `<div class="tarjeta entrada">
+    <div class="linea">
+      <div class="nombre grande">${esc(entrada.comercio || entrada.movimiento.nota || "Movimiento")}</div>
+      <div class="monto ${esGasto ? "" : "bien"}">${signo}${monto(entrada.movimiento.monto)}</div>
+    </div>
+    <div class="sub">${esc(contexto)} · <span class="marca-confianza ${esc(entrada.confianza)}">${esc(CONFIANZA_TEXTO[entrada.confianza])}</span></div>
+    ${alerta}
+    ${fichas}
+    <div class="acciones-fila">
+      <button class="boton chico" data-accion="aceptar-entrada" data-id="${esc(entrada.id)}">Aceptar</button>
+      <button class="boton chico tenue" data-accion="editar-entrada" data-id="${esc(entrada.id)}">Editar</button>
+      <button class="boton chico tenue" data-accion="descartar-entrada" data-id="${esc(entrada.id)}">Descartar</button>
+    </div>
+  </div>`;
+}
+
+function vistaBandeja() {
+  const espera = pendientes(app.datos);
+  const impacto = impactoPendiente(app.datos);
+
+  const pegar = `<div class="tarjeta">
+    <div class="titulo-tarjeta">Pega el aviso de tu banco</div>
+    <div class="rotulo">Copia el correo o la notificación y pégalo aquí. Saco el monto, la fecha y el
+      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.</div>
+    <textarea id="aviso" class="campo area" rows="3" data-accion-input="borrador-aviso"
+      placeholder="Compra por $189.00 en ... el 09/09/2026">${esc(app.borrador)}</textarea>
+    <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
+  </div>`;
+
+  if (!espera.length) {
+    return `${pegar}<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`;
+  }
+
+  const resumen = `<div class="tarjeta">
+    <div class="rotulo">${esc(impacto.veredicto.motivo)}</div>
+    <div class="cifra" style="font-size:26px">−${monto(impacto.gasto)}${
+      impacto.ingreso ? ` <span class="rotulo">y +${monto(impacto.ingreso)} de ingreso</span>` : ""}</div>
+    <div class="rotulo">es lo que cambiaría si aceptas todo</div>
+  </div>`;
+
+  return `${resumen}${espera.map(tarjetaEntrada).join("")}${pegar}`;
 }
 
 function filaMovimiento(m) {
@@ -2376,6 +3700,44 @@ function filaMovimiento(m) {
 //
 // Mes por mes, con lo que entró, lo que salió y lo que se apartó. Sin gráficas: los números
 // y sus movimientos, que es lo que se necesita para revisar y corregir.
+
+/**
+ * La tendencia, en SVG escrito a mano. Sin librería de gráficas: son seis barras y una línea
+ * de cero, y meter una dependencia para eso sería cambiar durabilidad por nada.
+ */
+function graficaTendencia(puntos) {
+  const ANCHO = 300, ALTO = 96, BASE = 56, MAXIMO = 40;
+  const tope = Math.max(...puntos.map((p) => Math.abs(p.saldo)), 1);
+  const paso = ANCHO / puntos.length;
+  const grosor = Math.min(paso - 10, 28);
+
+  const barras = puntos.map((p, i) => {
+    const centro = paso * i + paso / 2;
+    const alto = Math.max(Math.round((Math.abs(p.saldo) * MAXIMO) / tope), p.hayDatos ? 2 : 0);
+    const y = p.saldo >= 0 ? BASE - alto : BASE;
+    const clase = !p.hayDatos ? "sin-datos" : p.saldo >= 0 ? "bien" : "mal";
+    return `<rect x="${(centro - grosor / 2).toFixed(1)}" y="${y}" width="${grosor.toFixed(1)}" height="${alto}"
+      rx="3" class="${clase}${p.completo ? "" : " encurso"}"/>
+      <text x="${centro.toFixed(1)}" y="${ALTO - 4}" text-anchor="middle" class="etiqueta">${esc(p.corta)}</text>`;
+  }).join("");
+
+  return `<svg class="tendencia" viewBox="0 0 ${ANCHO} ${ALTO}" role="img"
+      aria-label="Lo que sobró en cada una de las últimas ${puntos.length} quincenas">
+    <line x1="0" y1="${BASE}" x2="${ANCHO}" y2="${BASE}" class="cero"/>
+    ${barras}
+  </svg>`;
+}
+
+function tarjetaTendencia() {
+  const { puntos, veredicto: v } = resumenTendencia(app.datos, app.hoy, 6);
+  if (!puntos.some((p) => p.hayDatos)) return "";
+  return `<div class="titulo-seccion">¿Voy mejorando?</div>
+    <div class="tarjeta">
+      <div class="rotulo">Lo que sobró en cada quincena — la última todavía va corriendo</div>
+      ${graficaTendencia(puntos)}
+      ${veredictoHTML(v)}
+    </div>`;
+}
 
 function vistaHistorial() {
   const filtro = app.filtro || { texto: "", tipo: "" };
@@ -2449,6 +3811,7 @@ function vistaHistorial() {
     </div>`;
 
   return `<div class="acciones" style="margin:0 0 10px"><button class="boton tenue" data-accion="ir" data-vista="hoy">← Volver a Hoy</button></div>
+    ${tarjetaTendencia()}
     ${buscador}
     ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}`;
 }
@@ -2569,6 +3932,23 @@ function comoFrecuencia(fijo) {
 function vistaFijos() {
   const { datos, hoy } = app;
   const total = totalFijosMensual(datos, hoy);
+  const descubiertas = porRegistrar(datos, hoy);
+  const recurrente = totalRecurrenteMensual(datos, hoy);
+
+  // Encontradas solas en el historial. No se registran sin permiso: se proponen.
+  const propuestas = descubiertas.length
+    ? `<div class="titulo-seccion">Esto se repite y no lo tienes aquí</div>
+       <div class="tarjeta">${descubiertas.map((r) => `
+        <div class="fila apilada">
+          <div class="linea"><div class="nombre">${esc(r.nombre)}</div><div class="monto">${monto(r.monto)}</div></div>
+          <div class="sub">${esc(r.veredicto.motivo)}</div>
+          <div class="acciones-fila">
+            <button class="boton chico" data-accion="fijar-recurrente" data-clave="${esc(r.clave)}">Hacerlo fijo</button>
+          </div>
+        </div>`).join("")}
+        <div class="rotulo">${esc(recurrente.veredicto.motivo)}</div>
+       </div>`
+    : "";
 
   const fijos = datos.fijos.length
     ? datos.fijos
@@ -2626,6 +4006,7 @@ function vistaFijos() {
         : "",
     veredicto: total.veredicto,
   })}
+    ${propuestas}
     <div class="titulo-seccion">Pagos fijos</div><div class="tarjeta">${fijos}</div>
     <div class="acciones"><button class="boton tenue" data-accion="nuevo-fijo">Nuevo fijo</button></div>
     <div class="titulo-seccion">Deudas</div>${deudas}
@@ -2638,6 +4019,45 @@ function vistaAjustes() {
   const { perfil } = app.datos;
   const estado = app.almacen ? app.almacen.estado() : {};
   const movimientos = Object.values(app.datos.movimientos).reduce((t, l) => t + l.length, 0);
+
+  // Lo que la app aprendió tiene que poder mirarse y borrarse. Una app que decide por ti sin
+  // enseñarte con qué regla lo decidió es una caja negra, y esto toca tu dinero.
+  // El puente se descubre, no se importa: si alguien borró almacen/puente-correo.js, esto da
+  // undefined, la sección no se pinta, y la app no se entera de que faltaba nada.
+  const hayPuente = typeof traerAvisos === "function" && typeof configuracionDelPuente === "function";
+  const puente = hayPuente ? configuracionDelPuente() : null;
+  const seccionPuente = hayPuente
+    ? `<div class="titulo-seccion">Traer de mi correo</div>
+       <div class="tarjeta">
+         <div class="rotulo">Un script tuyo, dentro de tu cuenta de Google, le pasa a Grip los
+           avisos de tus bancos. Las instrucciones están en la carpeta <code>puente/</code> del
+           repositorio. La dirección y el token se guardan solo en este dispositivo.</div>
+         <div class="fila"><div class="crece">
+           <div class="nombre">${puente.url ? "Puente configurado" : "Sin configurar"}</div>
+           <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
+         </div>
+         <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
+         ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
+         <div class="rotulo">Ojo: hay bancos que no mandan correo por cada movimiento. Nu es uno:
+           sus avisos solo viven dentro de su app. Para esos, comparte el aviso a Grip.</div>
+       </div>`
+    : "";
+
+  const reglas = reglasAprendidas(app.datos);
+  const loAprendido = reglas.length
+    ? `<div class="titulo-seccion">Lo que aprendí de ti</div>
+       <div class="tarjeta">
+         <div class="rotulo">Cuando un aviso venga de estos lugares, le pongo esta categoría sola.</div>
+         ${reglas.map((r) => {
+           const categoria = categoriaPorId(app.datos, r.categoriaId);
+           return `<div class="fila">
+             <div class="crece"><div class="nombre">${esc(r.clave)}</div>
+               <div class="sub">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div></div>
+             <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
+           </div>`;
+         }).join("")}
+       </div>`
+    : "";
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
@@ -2653,6 +4073,9 @@ function vistaAjustes() {
         <div class="sub">claro, oscuro o el del sistema</div></div>
         <button class="boton chico tenue" data-accion="cambiar-tema">Cambiar</button></div>
     </div>
+
+    ${seccionPuente}
+    ${loAprendido}
 
     <div class="titulo-seccion">Tus datos</div>
     <div class="tarjeta">
@@ -2810,6 +4233,43 @@ function opcionesCategorias() {
   return app.datos.categorias.filter((c) => !c.archivada).map((c) => ({ valor: c.id, etiqueta: `${c.emoji} ${c.nombre}` }));
 }
 
+/**
+ * Lo que llegó por "Compartir" desde el celular.
+ *
+ * Con la app instalada en Android, compartirle un correo del banco la abre con el texto en
+ * la dirección. Se lee, cae en la bandeja, y la dirección se limpia: si después recarga la
+ * página, no se vuelve a leer el mismo aviso y a duplicarlo.
+ *
+ * Es la única vía que sirve para bancos que solo notifican dentro de su app, como Nu.
+ */
+async function atenderCompartido() {
+  let texto = "";
+  try {
+    const params = new URLSearchParams(location.search);
+    texto = [params.get("texto"), params.get("titulo"), params.get("enlace")].filter(Boolean).join("\n").trim();
+    if (texto) history.replaceState(null, "", location.pathname);
+  } catch (e) {
+    return; // en un contexto sin acceso a la dirección esto simplemente no aplica
+  }
+  if (!texto) return;
+
+  app.vista = "bandeja";
+  const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.COMPARTIDO, app.hoy);
+  if (error) {
+    app.aviso = `No pude leer lo que compartiste: ${error.motivo}`;
+    return render();
+  }
+  if (!entrada) {
+    app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+    return render();
+  }
+  try {
+    await guardar(datos);
+  } catch (e) {
+    // `guardar` ya avisó y revirtió. Que falle el disco no debe tirar el arranque.
+  }
+}
+
 // --- Acciones ---
 
 async function guardar(datos) {
@@ -2858,6 +4318,145 @@ const acciones = {
 
   capturar() {
     hojaMovimiento();
+  },
+
+  async "leer-aviso"() {
+    const caja = document.getElementById("aviso");
+    const texto = (caja ? caja.value : app.borrador).trim();
+    if (!texto) {
+      app.aviso = "Pega primero el texto del aviso.";
+      return render();
+    }
+    const { datos, entrada, duplicado, error } = recibirAviso(app.datos, texto, "", ORIGENES.PEGADO, app.hoy);
+    if (error) {
+      app.aviso = `${error.motivo} ${error.datos.falta ? `→ ${error.datos.falta}` : ""}`.trim();
+      return render();
+    }
+    if (!entrada) {
+      app.aviso = duplicado ? duplicado.motivo : "Ese aviso ya estaba.";
+      return render();
+    }
+    app.aviso = duplicado ? duplicado.motivo : null;
+    app.borrador = ""; // ya está en la bandeja: dejarlo ahí invitaría a leerlo dos veces
+    await guardar(datos);
+  },
+
+  "configurar-puente"() {
+    const actual = configuracionDelPuente();
+    abrirHoja({
+      titulo: "Puente de correo",
+      textoGuardar: "Guardar",
+      extra: `<p class="rotulo" style="margin:0 0 4px">Déjalo en blanco para desconectarlo. Borrar
+        esto no borra nada de lo que ya está capturado.</p>`,
+      campos: [
+        { clave: "url", etiqueta: "Dirección del puente (…/exec)", tipo: "texto", valor: actual.url },
+        { clave: "token", etiqueta: "Token", tipo: "texto", valor: actual.token },
+      ],
+      async alGuardar(v) {
+        if (!guardarConfiguracionDelPuente({ url: v.url, token: v.token })) {
+          return "Este navegador no deja guardar ajustes en el dispositivo.";
+        }
+        render();
+        return null;
+      },
+    });
+  },
+
+  async "traer-del-puente"(el) {
+    const config = configuracionDelPuente();
+    el.disabled = true;
+    el.textContent = "Buscando…";
+
+    const { avisos, error } = await traerAvisos({ url: config.url, token: config.token, dias: 3 });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+
+    // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
+    // parpadeando y multiplicaría las escrituras por nada.
+    let datos = app.datos;
+    let nuevos = 0, repetidos = 0, ilegibles = 0;
+    for (const aviso of avisos) {
+      const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
+      const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
+      if (paso.error) ilegibles++;
+      else if (!paso.entrada) repetidos++;
+      else { nuevos++; datos = paso.datos; }
+    }
+
+    app.vista = "bandeja";
+    app.aviso = nuevos
+      ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.${repetidos ? ` ${repetidos} ya los tenías.` : ""}`
+      : avisos.length
+        ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
+        : "No encontré avisos de tus bancos en los últimos días.";
+
+    if (nuevos) await guardar(datos);
+    else render();
+  },
+
+  async "fijar-recurrente"(el) {
+    const encontrada = porRegistrar(app.datos, app.hoy).find((r) => r.clave === el.dataset.clave);
+    if (!encontrada) return;
+    const fijo = fijoDesdeRecurrente(encontrada);
+    await guardar({ ...app.datos, fijos: [...app.datos.fijos, { ...fijo, id: idNuevo("fijo") }] });
+  },
+
+  async "olvidar-regla"(el) {
+    await guardar(olvidar(app.datos, el.dataset.clave));
+  },
+
+  "elegir-categoria"(el) {
+    app.eleccion = { ...app.eleccion, [el.dataset.id]: el.dataset.categoria };
+    render();
+  },
+
+  async "aceptar-entrada"(el) {
+    const id = el.dataset.id;
+    const cambios = app.eleccion[id] !== undefined ? { categoria: app.eleccion[id] } : {};
+    const { datos, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    const { [id]: quitada, ...resto } = app.eleccion;
+    app.eleccion = resto;
+    await guardar(datos);
+  },
+
+  "editar-entrada"(el) {
+    const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
+    if (!entrada) return;
+    const categoria = app.eleccion[entrada.id] !== undefined ? app.eleccion[entrada.id] : entrada.movimiento.categoria;
+    hojaMovimiento({
+      tipo: entrada.movimiento.tipo,
+      entradaId: entrada.id,
+      valores: {
+        monto: comoCampo(entrada.movimiento.monto),
+        categoria,
+        nota: entrada.movimiento.nota,
+        fecha: entrada.movimiento.fecha,
+      },
+    });
+  },
+
+  "descartar-entrada"(el) {
+    const entrada = app.datos.bandeja.find((e) => e.id === el.dataset.id);
+    if (!entrada) return;
+    confirmar({
+      titulo: "Descartar",
+      mensaje: `${entrada.comercio || "Este movimiento"} por ${monto(entrada.movimiento.monto)} no se registrará, y no vuelvo a preguntar por él.`,
+      textoBoton: "Descartar",
+      alConfirmar: async () => {
+        await guardar(descartarEntrada(app.datos, entrada.id));
+        return null;
+      },
+    });
+  },
+
+  async "deshacer-entrada"(el) {
+    await guardar(deshacerEntrada(app.datos, el.dataset.id));
   },
 
   "editar-movimiento"(el) {
@@ -3211,7 +4810,7 @@ const TIPOS_CAPTURA = [
  * no es borrar y volver a capturar.
  */
 function hojaMovimiento(config = {}) {
-  const { movimiento = null, valores = {} } = config;
+  const { movimiento = null, valores = {}, entradaId = null } = config;
   const tipo = config.tipo || TIPOS.GASTO;
   const editando = Boolean(movimiento);
 
@@ -3222,7 +4821,7 @@ function hojaMovimiento(config = {}) {
     {
       clave: "tipo", etiqueta: "Qué es", tipo: "chips", valor: tipo, opciones: TIPOS_CAPTURA,
       // Al cambiar de tipo se vuelve a abrir la hoja con los campos que corresponden.
-      alCambiar: (nuevo, actuales) => hojaMovimiento({ tipo: nuevo, movimiento, valores: { ...actuales, tipo: nuevo } }),
+      alCambiar: (nuevo, actuales) => hojaMovimiento({ tipo: nuevo, movimiento, entradaId, valores: { ...actuales, tipo: nuevo } }),
     },
     {
       clave: "monto", etiqueta: "Monto", tipo: "monto", requerido: true,
@@ -3263,6 +4862,18 @@ function hojaMovimiento(config = {}) {
       : "",
     campos,
     async alGuardar(v) {
+      // Editar algo que vino de la bandeja no crea un movimiento suelto: acepta la entrada
+      // con las correcciones. Así la bandeja se vacía y la app aprende de lo que corrigió.
+      if (entradaId) {
+        const { datos, error } = aceptarEntrada(app.datos, entradaId, {
+          fecha: v.fecha, monto: v.monto, tipo: v.tipo || tipo,
+          categoria: (v.tipo || tipo) === TIPOS.GASTO ? v.categoria : null,
+          nota: v.nota, metaId: v.metaId || null,
+        }, app.hoy);
+        if (error) return error;
+        await guardar(datos);
+        return null;
+      }
       const base = editando ? eliminarMovimiento(app.datos, movimiento.id) : app.datos;
       const { datos, error } = agregarMovimiento(base, {
         id: editando ? movimiento.id : undefined,
@@ -3403,6 +5014,10 @@ async function arrancar() {
   } catch (e) {}
 
   document.addEventListener("input", (e) => {
+    if (e.target.dataset.accionInput === "borrador-aviso") {
+      app.borrador = e.target.value; // sin re-dibujar: escribir no debe repintar la pantalla
+      return;
+    }
     if (e.target.dataset.accionInput !== "filtrar-texto") return;
     // Se guarda el texto y se re-dibuja solo la lista: volver a pintar todo en cada tecla
     // le quitaría el foco al buscador.
@@ -3441,6 +5056,7 @@ async function arrancar() {
     app.aviso = estado.motivo || "Este navegador no deja guardar datos: descarga un respaldo antes de cerrar la pestaña.";
   }
   render();
+  await atenderCompartido();
 
   // Si otro dispositivo escribe, esta pantalla se entera.
   app.almacen.suscribir(async () => {
