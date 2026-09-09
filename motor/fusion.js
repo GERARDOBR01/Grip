@@ -119,3 +119,31 @@ export function difieren(a, b) {
   if (!a || !b) return true;
   return JSON.stringify(a) !== JSON.stringify(b);
 }
+
+/** Cuánto se le tolera a un reloj antes de considerarlo desfasado. */
+export const TOLERANCIA_RELOJ_MIN = 5;
+
+/**
+ * ¿Alguna de las dos copias viene sellada en el futuro?
+ *
+ * Al unir, lo escalar —el perfil, los topes— se toma de la copia con el sello más reciente.
+ * Eso da por hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la
+ * suposición que rompe cualquier sistema repartido: un celular diez minutos adelantado gana
+ * SIEMPRE, aunque haya escrito antes.
+ *
+ * Los movimientos ya no corren peligro —se unen por id y borrar exige lápida—, así que esto
+ * no bloquea nada: avisa, que es lo que se puede hacer con honestidad. Devuelve los minutos
+ * de desfase, o `null` si los relojes van bien.
+ */
+export function relojDesfasado(documentos, ahoraISO, tolerancia = TOLERANCIA_RELOJ_MIN) {
+  const ahora = Date.parse(ahoraISO);
+  if (!Number.isFinite(ahora)) return null;
+
+  let peor = 0;
+  for (const documento of documentos) {
+    const sello = Date.parse(selloDe(documento));
+    if (!Number.isFinite(sello)) continue;
+    peor = Math.max(peor, Math.round((sello - ahora) / 60000));
+  }
+  return peor > tolerancia ? peor : null;
+}

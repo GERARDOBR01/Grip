@@ -674,6 +674,9 @@ function datosVacios(iso = hoyISO()) {
     // Lápidas. Sin ellas, borrar algo en un dispositivo lo resucitaría al sincronizar con otro
     // que todavía lo tiene: la unión no sabría distinguir "esto es nuevo" de "esto se borró".
     borrados: [],
+    // Cuándo bajó el último respaldo. `null` = nunca. Lo que salva tu historia el día que el
+    // navegador hace limpieza no es tener exportador: es haberlo usado.
+    ultimoRespaldo: null,
   };
 }
 
@@ -753,6 +756,8 @@ function normalizar(entrada) {
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
     borrados: (Array.isArray(datos.borrados) ? datos.borrados : []).map(normalizarLapida).filter(Boolean),
+    // Escalar y opcional: un documento viejo que no lo traiga se lee igual, sin migración.
+    ultimoRespaldo: datos.ultimoRespaldo ? String(datos.ultimoRespaldo).slice(0, 40) : null,
   };
 }
 
@@ -1132,6 +1137,34 @@ function unirReglas(viejas, nuevas) {
 function difieren(a, b) {
   if (!a || !b) return true;
   return JSON.stringify(a) !== JSON.stringify(b);
+}
+
+/** Cuánto se le tolera a un reloj antes de considerarlo desfasado. */
+const TOLERANCIA_RELOJ_MIN = 5;
+
+/**
+ * ¿Alguna de las dos copias viene sellada en el futuro?
+ *
+ * Al unir, lo escalar —el perfil, los topes— se toma de la copia con el sello más reciente.
+ * Eso da por hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la
+ * suposición que rompe cualquier sistema repartido: un celular diez minutos adelantado gana
+ * SIEMPRE, aunque haya escrito antes.
+ *
+ * Los movimientos ya no corren peligro —se unen por id y borrar exige lápida—, así que esto
+ * no bloquea nada: avisa, que es lo que se puede hacer con honestidad. Devuelve los minutos
+ * de desfase, o `null` si los relojes van bien.
+ */
+function relojDesfasado(documentos, ahoraISO, tolerancia = TOLERANCIA_RELOJ_MIN) {
+  const ahora = Date.parse(ahoraISO);
+  if (!Number.isFinite(ahora)) return null;
+
+  let peor = 0;
+  for (const documento of documentos) {
+    const sello = Date.parse(selloDe(documento));
+    if (!Number.isFinite(sello)) continue;
+    peor = Math.max(peor, Math.round((sello - ahora) / 60000));
+  }
+  return peor > tolerancia ? peor : null;
 }
 
 // ═══ motor/presupuesto.js ═══
@@ -3156,6 +3189,45 @@ function importar(texto) {
   return migrar(crudo);
 }
 
+/**
+ * Cada cuántos días tiene sentido volver a bajar un respaldo. Ni tan seguido que se vuelva
+ * ruido que se aprende a ignorar, ni tan lejos que una limpieza del navegador duela.
+ */
+const DIAS_ENTRE_RESPALDOS = 30;
+
+/** Debajo de esto no se molesta a nadie: todavía no hay gran cosa que perder. */
+const MINIMO_PARA_INSISTIR = 10;
+
+/**
+ * ¿Toca recordarle bajar un respaldo? Devuelve `null` cuando no, y si sí, con qué números.
+ *
+ * Es la lección de Mint, que cerró con 25 millones de usuarios encima: lo que salva tu
+ * historia no es que la app tenga exportador, es haberlo USADO. Grip lo tiene desde el
+ * principio y nunca lo mencionaba, así que servía de nada.
+ *
+ * No bloquea, no regaña y no aparece si no hay nada nuevo que perder.
+ */
+function respaldoPendiente(datos, iso = hoyISO()) {
+  const movimientos = Object.values((datos && datos.movimientos) || {}).flat();
+  if (!movimientos.length) return null; // sin nada capturado, no hay nada que salvar
+
+  const ultimo = datos.ultimoRespaldo || null;
+
+  if (!ultimo) {
+    // Nunca ha bajado uno. Se espera a que haya algo que de verdad duela perder.
+    return movimientos.length >= MINIMO_PARA_INSISTIR
+      ? { nunca: true, dias: null, movimientos: movimientos.length }
+      : null;
+  }
+
+  const dias = diasEntre(ultimo.slice(0, 10), iso);
+  if (dias < DIAS_ENTRE_RESPALDOS) return null;
+
+  // Y si desde el último respaldo no capturó nada, tampoco hay por qué molestarlo.
+  const nuevos = movimientos.filter((m) => comparar(m.fecha, ultimo.slice(0, 10)) > 0).length;
+  return nuevos > 0 ? { nunca: false, dias, movimientos: nuevos } : null;
+}
+
 // ═══ almacen/local.js ═══
 // Almacén local — la base sobre la que corre todo, en el propio navegador.
 //
@@ -3464,7 +3536,18 @@ async function abrirAlmacen(opciones = {}) {
         }
       }
 
-      const avisos = [ladoLocal, ladoEspejo].filter((lado) => lado && lado.motivo).map((lado) => lado.motivo);
+      // Un reloj adelantado hace que gane el aparato equivocado en todo lo escalar. No se
+      // bloquea nada por eso —los movimientos ya se unen por id—, pero sí se dice.
+      const desfase = relojDesfasado([datosLocal, datosEspejo], new Date().toISOString());
+      estado.aviso = desfase
+        ? `El reloj de alguno de tus dispositivos va ${desfase} minutos adelantado. ` +
+          "Tus movimientos están completos, pero ajústalo para que los cambios de ajustes no se pisen."
+        : null;
+
+      const avisos = [ladoLocal, ladoEspejo]
+        .filter((lado) => lado && lado.motivo)
+        .map((lado) => lado.motivo)
+        .concat(estado.aviso || []);
       return { datos: unido, nuevo: false, aviso: avisos.length ? avisos.join(" ") : null };
     },
 
@@ -3962,6 +4045,19 @@ function vistaHoy() {
     : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
         ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
 
+  // La lección de Mint: tener exportador no salva a nadie; haberlo usado, sí. No bloquea,
+  // no regaña, y no aparece si no hay nada nuevo que perder.
+  const pendienteRespaldo = respaldoPendiente(datos, hoy);
+  const respaldoBanner = pendienteRespaldo
+    ? `<div class="aviso">
+        <b>${pendienteRespaldo.nunca
+            ? `Llevas ${pendienteRespaldo.movimientos} movimientos y ningún respaldo.`
+            : `Hace ${pendienteRespaldo.dias} días del último respaldo.`}</b>
+        Vive todo en este dispositivo: si el navegador hace limpieza, se va. Es un toque.
+        <div class="acciones"><button class="boton chico" data-accion="exportar">Bajar respaldo</button></div>
+      </div>`
+    : "";
+
   const espera = pendientes(datos);
   const bandejaBanner = espera.length
     ? `<div class="aviso">
@@ -4001,7 +4097,7 @@ function vistaHoy() {
              ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
          </div>`;
 
-  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${respaldoBanner}${listaMovimientos}`;
 }
 
 // --- Vista: Bandeja ---
@@ -5245,6 +5341,8 @@ const acciones = {
       enlace.remove();
     }
 
+    // Queda anotado: es lo que apaga el recordatorio y lo que hace que vuelva en 30 días.
+    await guardar({ ...app.datos, ultimoRespaldo: new Date().toISOString() });
     app.aviso = `Respaldo listo: ${nombre}. Es un JSON con todo dentro; guárdalo donde tú quieras.`;
     render();
   },

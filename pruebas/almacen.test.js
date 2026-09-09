@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { exportar, importar, nombreDeRespaldo } from "../almacen/archivo.js";
+import { exportar, importar, nombreDeRespaldo, respaldoPendiente } from "../almacen/archivo.js";
 import { VERSION_DATOS } from "../motor/modelo.js";
 import { datosDePrueba, conMovimientos } from "./ayuda.js";
 
@@ -258,4 +258,65 @@ test("si persist() lanza, se trata como negada en vez de tumbar el arranque", as
     () => pedirPersistencia(),
   );
   assert.equal(concedido, false);
+});
+
+// ————————————————————————————————————————————————————————————————————————————————
+// El recordatorio de respaldo. Mint cerró con 25 millones de usuarios encima y quien no había
+// exportado perdió su historia. Grip tiene exportador desde el primer día y nunca lo mencionó,
+// así que servía de nada. Esto es esa lección, con la regla de no volverse ruido que se ignora.
+
+const conNMovimientos = (n, extra = {}) =>
+  conMovimientos({ ...datosDePrueba(), ...extra },
+    Array.from({ length: n }, (_, i) => ({
+      fecha: `2026-09-0${(i % 9) + 1}`, monto: 10000, tipo: "gasto", categoria: "super", nota: `g${i}`,
+    })));
+
+test("sin nada capturado no se molesta a nadie", () => {
+  assert.equal(respaldoPendiente(datosVacios("2026-09-09"), "2026-09-09"), null);
+});
+
+test("con poquito capturado y sin respaldo, todavía no insiste", () => {
+  assert.equal(respaldoPendiente(conNMovimientos(3), "2026-09-09"), null, "3 movimientos no son una historia");
+});
+
+test("con bastante capturado y ningún respaldo, sí lo dice", () => {
+  const aviso = respaldoPendiente(conNMovimientos(12), "2026-09-09");
+  assert.equal(aviso.nunca, true);
+  assert.equal(aviso.movimientos, 12);
+});
+
+test("recién respaldado, se calla", () => {
+  const datos = conNMovimientos(12, { ultimoRespaldo: "2026-09-08T10:00:00.000Z" });
+  assert.equal(respaldoPendiente(datos, "2026-09-09"), null);
+});
+
+test("pasados 30 días con capturas nuevas, vuelve", () => {
+  const datos = conMovimientos({ ...datosDePrueba(), ultimoRespaldo: "2026-07-01T10:00:00.000Z" }, [
+    { fecha: "2026-09-05", monto: 45000, tipo: "gasto", categoria: "super", nota: "nuevo" },
+  ]);
+  const aviso = respaldoPendiente(datos, "2026-09-09");
+  assert.equal(aviso.nunca, false);
+  assert.equal(aviso.dias, 70);
+  assert.equal(aviso.movimientos, 1);
+});
+
+test("pasados 30 días pero SIN capturar nada nuevo, no molesta", () => {
+  // No hay nada que no esté ya en el respaldo anterior: insistir sería puro ruido.
+  const datos = conMovimientos({ ...datosDePrueba(), ultimoRespaldo: "2026-09-08T10:00:00.000Z" }, [
+    { fecha: "2026-06-05", monto: 45000, tipo: "gasto", categoria: "super", nota: "viejo" },
+  ]);
+  assert.equal(respaldoPendiente(datos, "2026-10-20"), null);
+});
+
+test("un reloj adelantado se detecta y se dice, sin bloquear nada", async () => {
+  const delFuturo = { ...datosDePrueba(), actualizado: "2126-01-01T00:00:00.000Z" };
+  const local = localFalso({ guardado: datosDePrueba() });
+  const almacen = await abrirAlmacen({
+    local,
+    proveedorSincronizacion: espejoFalso(delFuturo).proveedor,
+  });
+
+  const { datos, aviso } = await almacen.cargar();
+  assert.match(aviso, /adelantado/i);
+  assert.ok(datos, "y aun así abre: avisar no es bloquear");
 });

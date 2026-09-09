@@ -11,7 +11,7 @@
 
 import { abrirLocal, enMemoria } from "./local.js";
 import { migrar } from "../motor/migraciones.js";
-import { fusionar, difieren } from "../motor/fusion.js";
+import { fusionar, difieren, relojDesfasado } from "../motor/fusion.js";
 import { datosVacios, normalizar } from "../motor/modelo.js";
 import { hoyISO, mesDe } from "../motor/ciclo.js";
 
@@ -111,7 +111,18 @@ export async function abrirAlmacen(opciones = {}) {
         }
       }
 
-      const avisos = [ladoLocal, ladoEspejo].filter((lado) => lado && lado.motivo).map((lado) => lado.motivo);
+      // Un reloj adelantado hace que gane el aparato equivocado en todo lo escalar. No se
+      // bloquea nada por eso —los movimientos ya se unen por id—, pero sí se dice.
+      const desfase = relojDesfasado([datosLocal, datosEspejo], new Date().toISOString());
+      estado.aviso = desfase
+        ? `El reloj de alguno de tus dispositivos va ${desfase} minutos adelantado. ` +
+          "Tus movimientos están completos, pero ajústalo para que los cambios de ajustes no se pisen."
+        : null;
+
+      const avisos = [ladoLocal, ladoEspejo]
+        .filter((lado) => lado && lado.motivo)
+        .map((lado) => lado.motivo)
+        .concat(estado.aviso || []);
       return { datos: unido, nuevo: false, aviso: avisos.length ? avisos.join(" ") : null };
     },
 

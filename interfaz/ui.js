@@ -27,7 +27,7 @@ import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMen
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
 import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
-import { exportar, importar, nombreDeRespaldo } from "../almacen/archivo.js";
+import { exportar, importar, nombreDeRespaldo, respaldoPendiente } from "../almacen/archivo.js";
 
 const app = {
   datos: datosVacios(),
@@ -266,6 +266,19 @@ function vistaHoy() {
     : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
         ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
 
+  // La lección de Mint: tener exportador no salva a nadie; haberlo usado, sí. No bloquea,
+  // no regaña, y no aparece si no hay nada nuevo que perder.
+  const pendienteRespaldo = respaldoPendiente(datos, hoy);
+  const respaldoBanner = pendienteRespaldo
+    ? `<div class="aviso">
+        <b>${pendienteRespaldo.nunca
+            ? `Llevas ${pendienteRespaldo.movimientos} movimientos y ningún respaldo.`
+            : `Hace ${pendienteRespaldo.dias} días del último respaldo.`}</b>
+        Vive todo en este dispositivo: si el navegador hace limpieza, se va. Es un toque.
+        <div class="acciones"><button class="boton chico" data-accion="exportar">Bajar respaldo</button></div>
+      </div>`
+    : "";
+
   const espera = pendientes(datos);
   const bandejaBanner = espera.length
     ? `<div class="aviso">
@@ -305,7 +318,7 @@ function vistaHoy() {
              ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
          </div>`;
 
-  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${listaMovimientos}`;
+  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${respaldoBanner}${listaMovimientos}`;
 }
 
 // --- Vista: Bandeja ---
@@ -1549,6 +1562,8 @@ const acciones = {
       enlace.remove();
     }
 
+    // Queda anotado: es lo que apaga el recordatorio y lo que hace que vuelva en 30 días.
+    await guardar({ ...app.datos, ultimoRespaldo: new Date().toISOString() });
     app.aviso = `Respaldo listo: ${nombre}. Es un JSON con todo dentro; guárdalo donde tú quieras.`;
     render();
   },

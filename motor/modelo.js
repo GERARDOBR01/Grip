@@ -59,6 +59,9 @@ export function datosVacios(iso = hoyISO()) {
     // Lápidas. Sin ellas, borrar algo en un dispositivo lo resucitaría al sincronizar con otro
     // que todavía lo tiene: la unión no sabría distinguir "esto es nuevo" de "esto se borró".
     borrados: [],
+    // Cuándo bajó el último respaldo. `null` = nunca. Lo que salva tu historia el día que el
+    // navegador hace limpieza no es tener exportador: es haberlo usado.
+    ultimoRespaldo: null,
   };
 }
 
@@ -138,6 +141,8 @@ export function normalizar(entrada) {
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
     borrados: (Array.isArray(datos.borrados) ? datos.borrados : []).map(normalizarLapida).filter(Boolean),
+    // Escalar y opcional: un documento viejo que no lo traiga se lee igual, sin migración.
+    ultimoRespaldo: datos.ultimoRespaldo ? String(datos.ultimoRespaldo).slice(0, 40) : null,
   };
 }
 
