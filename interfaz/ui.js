@@ -20,8 +20,9 @@ import { proximosVencimientos, totalFijosMensual, movimientoDeFijo, venceEnMes, 
 import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
 import {
   recibirAviso, pendientes, ilegibles, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja,
-  impactoPendiente, purgarBandeja,
+  impactoPendiente, purgarBandeja, aceptarTanda, deshacerTanda, deConfianzaAlta,
 } from "../motor/bandeja.js";
+import { montosFrecuentes } from "../motor/rapido.js";
 import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
@@ -30,6 +31,8 @@ import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
 import { exportar, importar, nombreDeRespaldo, respaldoPendiente } from "../almacen/archivo.js";
 
 const app = {
+  // Los ids de lo último aceptado en lote, para poder revertirlo entero.
+  ultimaTanda: null,
   datos: datosVacios(),
   almacen: null,
   vista: "hoy",
@@ -269,6 +272,26 @@ function vistaHoy() {
     : `<div class="titulo-seccion">Últimos movimientos</div><div class="tarjeta">${vacio("Nada capturado en este ciclo todavía. El botón + es para eso.")}
         ${totalMovimientos ? `<div class="acciones"><button class="boton tenue" data-accion="ver-historial">Ver el historial (${totalMovimientos})</button></div>` : ""}</div>`;
 
+  // Lo que nunca va a llegar por correo: los tacos, el OXXO, el camión, las propinas. Si eso
+  // no entra, los números mienten hacia abajo. Los montos salen de SU historial —la gente
+  // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
+  // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
+  const frecuentes = montosFrecuentes(datos, hoy);
+  const rapido = frecuentes.length
+    ? `<div class="tarjeta">
+        <div class="rotulo">Lo de siempre, en efectivo</div>
+        <div class="acciones">
+          ${frecuentes.map((f) => {
+            const categoria = categoriaPorId(datos, f.categoriaId);
+            return `<button class="boton tenue" data-accion="gasto-rapido"
+              data-monto="${f.monto}" data-categoria="${esc(f.categoriaId || "otros")}"
+              title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
+          }).join("")}
+          <button class="boton tenue" data-accion="capturar">Otro</button>
+        </div>
+      </div>`
+    : "";
+
   // La lección de Mint: tener exportador no salva a nadie; haberlo usado, sí. No bloquea,
   // no regaña, y no aparece si no hay nada nuevo que perder.
   const pendienteRespaldo = respaldoPendiente(datos, hoy);
@@ -321,7 +344,7 @@ function vistaHoy() {
              ${colchon.objetivo === null ? "Definir mi fondo" : "Cambiar objetivo"}</button></div>
          </div>`;
 
-  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${tarjetaColchon}${respaldoBanner}${listaMovimientos}`;
+  return `${arranque}${bandejaBanner}${principal}<div class="duo">${porDia}${capacidad}</div>${avisoSubidas}${listaVencimientos}${rapido}${tarjetaColchon}${respaldoBanner}${listaMovimientos}`;
 }
 
 // --- Vista: Bandeja ---
@@ -421,8 +444,17 @@ function vistaBandeja() {
        ${sinLeer.slice(0, app.verBandeja).map(tarjetaIlegible).join("")}`
     : "";
 
+  const deshacerLote = app.ultimaTanda && app.ultimaTanda.length
+    ? `<div class="aviso">
+        <b>Acepté ${app.ultimaTanda.length}.</b> Si alguno no era, se revierte entero.
+        <div class="acciones">
+          <button class="boton chico tenue" data-accion="deshacer-tanda">Deshacer</button>
+        </div>
+      </div>`
+    : "";
+
   if (!espera.length) {
-    return `${seccionSinLeer}${pegar}${sinLeer.length ? "" : `<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`}`;
+    return `${seccionSinLeer}${deshacerLote}${pegar}${sinLeer.length ? "" : `<div class="tarjeta">${vacio("Todo al día. Nada espera tu confirmación.")}</div>`}`;
   }
 
   const resumen = `<div class="tarjeta">
@@ -432,6 +464,22 @@ function vistaBandeja() {
     <div class="rotulo">es lo que cambiaría si aceptas todo</div>
   </div>`;
 
+  // Aceptar en lote. La regla no cambia —sigue aceptando él, viendo antes qué acepta—; lo que
+  // cambia es que decir que sí a doce cosas cueste un toque en vez de doce. Con el puente
+  // trayendo ~40 avisos por quincena, ésta es la diferencia entre una app que se usa y una que
+  // se abandona a los 30 días, que es lo que le pasa a dos de cada tres.
+  const claras = deConfianzaAlta(app.datos);
+  const totalClaras = claras.reduce((t, e) => t + (e.movimiento.tipo === TIPOS.GASTO ? e.movimiento.monto : 0), 0);
+  const lote = claras.length >= 2
+    ? `<div class="aviso">
+        <b>${claras.length} los leí completos, sin nada que revisar.</b>
+        Suman ${monto(totalClaras)} en gastos. Están abajo, uno por uno, por si quieres mirarlos.
+        <div class="acciones">
+          <button class="boton chico" data-accion="aceptar-tanda">Aceptar los ${claras.length}</button>
+        </div>
+      </div>`
+    : "";
+
   const visibles = espera.slice(0, app.verBandeja);
   const faltan = espera.length - visibles.length;
   const masBoton = faltan
@@ -439,7 +487,7 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${seccionSinLeer}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  return `${seccionSinLeer}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
 }
 
 /**
@@ -1308,6 +1356,49 @@ const acciones = {
         fecha: entrada.movimiento.fecha,
       },
     });
+  },
+
+  async "aceptar-tanda"() {
+    const claras = deConfianzaAlta(app.datos);
+    if (!claras.length) return;
+
+    const { datos, aceptados, fallaron } = aceptarTanda(app.datos, claras.map((e) => e.id), app.hoy);
+    if (!aceptados.length) {
+      app.aviso = "No pude aceptar ninguno. Míralos uno por uno.";
+      return render();
+    }
+
+    app.ultimaTanda = aceptados;
+    app.aviso = `Listo: ${aceptados.length} ${aceptados.length === 1 ? "movimiento" : "movimientos"} registrados.` +
+      (fallaron.length ? ` ${fallaron.length} no se pudieron y siguen esperando.` : "");
+    await guardar(datos);
+  },
+
+  async "deshacer-tanda"() {
+    if (!app.ultimaTanda || !app.ultimaTanda.length) return;
+    const datos = deshacerTanda(app.datos, app.ultimaTanda);
+    app.aviso = `Revertidos ${app.ultimaTanda.length}. Vuelven a estar esperando.`;
+    app.ultimaTanda = null;
+    await guardar(datos);
+  },
+
+  async "gasto-rapido"(el) {
+    const centavos = Number(el.dataset.monto);
+    if (!Number.isFinite(centavos) || centavos <= 0) return;
+
+    const { datos, error } = agregarMovimiento(app.datos, {
+      fecha: app.hoy,
+      monto: centavos,
+      tipo: TIPOS.GASTO,
+      categoria: el.dataset.categoria || "otros",
+      nota: "",
+    });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    app.aviso = `${monto(centavos)} anotado. Toca deshacer en el historial si no era.`;
+    await guardar(datos);
   },
 
   async "guardar-ilegible"(el) {

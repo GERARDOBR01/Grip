@@ -411,6 +411,40 @@ revisar(
   compartido.url(),
 );
 
+// ── El peaje diario, medido ─────────────────────────────────────────────────────
+//
+// Con el puente son ~40 avisos por quincena. A un toque cada uno, eso es exactamente el
+// mecanismo que hace que dos de cada tres personas abandonen estas apps antes de los 30 días.
+// La regla no cambia —sigue aceptando él, viendo antes qué acepta—; lo que cambia es el costo.
+
+// Contexto propio: las pruebas de arriba dejan la bandeja sembrada, y aquí hay que contar.
+const contextoLote = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const lote = await contextoLote.newPage();
+await lote.goto(`http://127.0.0.1:${puerto}/index.html`);
+await lote.waitForSelector(".tarjeta");
+await lote.click('[data-vista="bandeja"]');
+await lote.waitForSelector("#aviso");
+
+for (let i = 0; i < 6; i++) {
+  await lote.fill("#aviso", `Banorte: Compra por $${120 + i}.00 MXN en TIENDA ${i} el 08/09/2026 con tu tarjeta terminación 4821.`);
+  await lote.click('[data-accion="leer-aviso"]');
+  await lote.waitForTimeout(120);
+}
+
+const antesDelLote = await lote.$$eval(".tarjeta.entrada", (n) => n.length);
+revisar("seis avisos esperando, uno por uno", antesDelLote === 6, `${antesDelLote} tarjetas`);
+
+await lote.click('[data-accion="aceptar-tanda"]');
+await lote.waitForTimeout(500);
+const quedan = await lote.$$eval(".tarjeta.entrada", (n) => n.length);
+revisar("un toque los acepta todos", quedan === 0, `quedan ${quedan}`);
+
+await lote.click('[data-accion="deshacer-tanda"]');
+await lote.waitForTimeout(500);
+const trasDeshacer = await lote.$$eval(".tarjeta.entrada", (n) => n.length);
+revisar("y otro toque los devuelve enteros", trasDeshacer === 6, `${trasDeshacer} tarjetas`);
+await contextoLote.close();
+
 // ── Un banco que nadie programó ─────────────────────────────────────────────────
 //
 // Ocho de los once bancos de la tabla nunca han enseñado su formato, y las plantillas cambian

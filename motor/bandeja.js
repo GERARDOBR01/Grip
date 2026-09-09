@@ -219,3 +219,45 @@ export function impactoPendiente(datos) {
       : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "No hay nada esperando.", { pendientes: 0 }),
   };
 }
+
+/**
+ * Acepta varias entradas de un jalón, con UN solo guardado.
+ *
+ * Ésta es la pieza que decide si la app sirve para alguien sin tiempo. Con el puente trayendo
+ * correos, son ~40 avisos por quincena, y a un toque cada uno eso es exactamente el mecanismo
+ * que la investigación señala como la causa número uno de que la gente abandone estas apps
+ * antes de los 30 días. En lote son tres.
+ *
+ * La regla de la casa NO cambia: sigue aceptando la persona, viendo antes lo que acepta. Lo
+ * que cambia es que decir que sí a doce cosas cueste un toque en vez de doce.
+ *
+ * Si alguna no se puede aceptar, se queda esperando y las demás pasan: un fallo suelto no
+ * puede tumbar la tanda ni dejarla a medias sin decirlo.
+ */
+export function aceptarTanda(datos, ids, iso = hoyISO()) {
+  let actual = datos;
+  const aceptados = [];
+  const fallaron = [];
+
+  for (const id of ids || []) {
+    const paso = aceptarEntrada(actual, id, {}, iso);
+    if (paso.error || !paso.movimiento) {
+      fallaron.push(id);
+      continue;
+    }
+    actual = paso.datos;
+    aceptados.push(id);
+  }
+
+  return { datos: actual, aceptados, fallaron };
+}
+
+/** Deshace una tanda entera. Es lo que hace que aceptar de golpe no dé miedo. */
+export function deshacerTanda(datos, ids) {
+  return (ids || []).reduce((acumulado, id) => deshacerEntrada(acumulado, id), datos);
+}
+
+/** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */
+export function deConfianzaAlta(datos) {
+  return pendientes(datos).filter((e) => e.confianza === "alta" && !e.reemplaza);
+}
