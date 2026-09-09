@@ -4173,6 +4173,78 @@ async function traerAvisos({ url, token, dias = 3 } = {}) {
   }
 }
 
+/**
+ * Habla con el puente y traduce el fallo a algo accionable.
+ *
+ * Existe porque el puente vive en la cuenta de Google de la persona, no aquí, y cuando algo
+ * falla el error de red no dice nada útil. Sin esto, "no se pudo hablar con el puente" deja a
+ * cualquiera sin saber si le falta pegar la URL, si el token está mal, o si a Google se le
+ * acabó el permiso. Un diagnóstico que no dice qué mover no sirve de nada.
+ */
+async function probarPuente({ url, token } = {}) {
+  if (!url) return { ok: false, motivo: "Falta la dirección. Es la que termina en /exec." };
+  if (!/\/exec\s*$/.test(url)) {
+    return {
+      ok: false,
+      motivo: "Esa dirección no termina en /exec. La que sirve es la de la IMPLEMENTACIÓN, " +
+        "no la del editor del script.",
+    };
+  }
+  if (!token) return { ok: false, motivo: "Falta el token: la frase que inventaste en el script." };
+
+  const { avisos, error } = await traerAvisos({ url, token, dias: 1 });
+
+  if (error) {
+    if (/token/i.test(error)) {
+      return { ok: false, motivo: "El puente contesta, pero rechaza el token. Tiene que ser IDÉNTICO al del script." };
+    }
+    if (/\b(401|403)\b/.test(error)) {
+      return {
+        ok: false,
+        motivo: "Google no deja entrar. En la implementación, 'Quién tiene acceso' debe decir " +
+          "Cualquier usuario, y 'Ejecutar como' debe decir Yo.",
+      };
+    }
+    if (/\b404\b/.test(error)) {
+      return { ok: false, motivo: "En esa dirección no hay nada. Si editaste el script, haz una implementación NUEVA: la URL cambia." };
+    }
+    if (/no entiendo/i.test(error)) {
+      return { ok: false, motivo: "Contesta algo que no es JSON. Suele ser que Apps Script está pidiendo permisos: ábrela en el navegador y acéptalos." };
+    }
+    return { ok: false, motivo: error };
+  }
+
+  return {
+    ok: true,
+    motivo: avisos.length
+      ? `El puente funciona: encontró ${avisos.length} ${avisos.length === 1 ? "aviso" : "avisos"} del último día.`
+      : "El puente funciona. No encontró avisos del último día, que puede ser normal — revisa que REMITENTES tenga tus bancos.",
+    avisos: avisos.length,
+  };
+}
+
+/**
+ * Le deja al puente el resumen para el correo diario. Son cuatro cifras, no los movimientos.
+ *
+ * Silencioso a propósito: esto ocurre al guardar, y que el correo diario no se actualice no
+ * puede interrumpir a nadie ni ensuciar la pantalla. Si falla, el correo lo dirá por su cuenta
+ * —va sellado con su fecha— y eso es mejor que una alerta que nadie pidió.
+ */
+async function depositarResumen({ url, token, resumen } = {}) {
+  if (!url || !token || !resumen) return false;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ token, accion: "resumen", resumen }),
+      redirect: "follow",
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 // ═══ interfaz/ui.js ═══
 // Interfaz — render directo, sin framework y sin dependencias.
 //
@@ -5069,7 +5141,25 @@ function vistaAjustes() {
            <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
          </div>
          <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
-         ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
+         ${puente.url ? `<div class="acciones">
+             <button class="boton" data-accion="traer-del-puente">Traer ahora</button>
+             <button class="boton tenue" data-accion="probar-puente">Probar puente</button>
+           </div>` : ""}
+         <details style="margin-top:10px">
+           <summary class="rotulo" style="cursor:pointer">Cómo encenderlo, paso a paso</summary>
+           <ol class="rotulo" style="padding-left:18px;line-height:1.7">
+             <li>Entra a <b>script.google.com</b> → Nuevo proyecto.</li>
+             <li>Pega el archivo <code>puente/Codigo.gs</code> del repositorio, completo.</li>
+             <li>Cambia <code>TOKEN</code> por una frase larga que inventes tú, y pon tus bancos en <code>REMITENTES</code>.</li>
+             <li>Implementar → Nueva implementación → <b>Aplicación web</b>.
+               Ejecutar como <b>Yo</b>, acceso <b>Cualquier usuario</b>.</li>
+             <li>Copia la dirección que termina en <code>/exec</code> y pégala aquí arriba con tu token.</li>
+             <li>Dale a <b>Probar puente</b>: si algo falla, te digo exactamente qué mover.</li>
+           </ol>
+           <div class="rotulo">Para el correo diario, en el editor: elige la función
+             <code>enviarResumenDiario</code>, ejecútala una vez para dar permiso, y en
+             <b>Activadores</b> ponle un temporizador diario. Para apagarlo, borra el activador.</div>
+         </details>
          <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
          ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
@@ -5362,6 +5452,38 @@ async function guardar(datos) {
     throw e;
   }
   render();
+  dejarResumenEnElPuente();
+}
+
+/**
+ * Le deja al puente las cuatro cifras del correo diario. Sin esperar y sin molestar.
+ *
+ * El script de Google no conoce tus números —viven aquí— así que la única forma de que el
+ * correo diario diga algo cierto es que la app se los deje al guardar. Va sellado con su
+ * fecha del lado del script: si se queda viejo, el correo lo dice en vez de presentarlo como
+ * si fuera de hoy.
+ */
+function dejarResumenEnElPuente() {
+  if (typeof depositarResumen !== "function" || typeof configuracionDelPuente !== "function") return;
+  const puente = configuracionDelPuente();
+  if (!puente || !puente.url || !puente.token) return;
+
+  try {
+    const panel = panelHoy(app.datos, app.hoy);
+    depositarResumen({
+      url: puente.url,
+      token: puente.token,
+      resumen: {
+        disponible: panel.disponible,
+        porDia: panel.porDia,
+        cierre: panel.capacidad ? panel.capacidad.monto : null,
+        finDeCiclo: panel.ciclo.fin,
+        pendientes: resumenBandeja(app.datos).pendientes,
+      },
+    });
+  } catch (e) {
+    // Que el correo diario no se actualice no puede interrumpir a nadie.
+  }
 }
 
 const acciones = {
@@ -5525,6 +5647,18 @@ const acciones = {
         fecha: entrada.movimiento.fecha,
       },
     });
+  },
+
+  async "probar-puente"() {
+    if (typeof probarPuente !== "function" || typeof configuracionDelPuente !== "function") return;
+    const puente = configuracionDelPuente();
+
+    app.aviso = "Probando el puente…";
+    render();
+
+    const { ok, motivo } = await probarPuente({ url: puente.url, token: puente.token });
+    app.aviso = ok ? `✓ ${motivo}` : motivo;
+    render();
   },
 
   async "aceptar-tanda"() {

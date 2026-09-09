@@ -89,3 +89,75 @@ export async function traerAvisos({ url, token, dias = 3 } = {}) {
     if (reloj) clearTimeout(reloj);
   }
 }
+
+/**
+ * Habla con el puente y traduce el fallo a algo accionable.
+ *
+ * Existe porque el puente vive en la cuenta de Google de la persona, no aquí, y cuando algo
+ * falla el error de red no dice nada útil. Sin esto, "no se pudo hablar con el puente" deja a
+ * cualquiera sin saber si le falta pegar la URL, si el token está mal, o si a Google se le
+ * acabó el permiso. Un diagnóstico que no dice qué mover no sirve de nada.
+ */
+export async function probarPuente({ url, token } = {}) {
+  if (!url) return { ok: false, motivo: "Falta la dirección. Es la que termina en /exec." };
+  if (!/\/exec\s*$/.test(url)) {
+    return {
+      ok: false,
+      motivo: "Esa dirección no termina en /exec. La que sirve es la de la IMPLEMENTACIÓN, " +
+        "no la del editor del script.",
+    };
+  }
+  if (!token) return { ok: false, motivo: "Falta el token: la frase que inventaste en el script." };
+
+  const { avisos, error } = await traerAvisos({ url, token, dias: 1 });
+
+  if (error) {
+    if (/token/i.test(error)) {
+      return { ok: false, motivo: "El puente contesta, pero rechaza el token. Tiene que ser IDÉNTICO al del script." };
+    }
+    if (/\b(401|403)\b/.test(error)) {
+      return {
+        ok: false,
+        motivo: "Google no deja entrar. En la implementación, 'Quién tiene acceso' debe decir " +
+          "Cualquier usuario, y 'Ejecutar como' debe decir Yo.",
+      };
+    }
+    if (/\b404\b/.test(error)) {
+      return { ok: false, motivo: "En esa dirección no hay nada. Si editaste el script, haz una implementación NUEVA: la URL cambia." };
+    }
+    if (/no entiendo/i.test(error)) {
+      return { ok: false, motivo: "Contesta algo que no es JSON. Suele ser que Apps Script está pidiendo permisos: ábrela en el navegador y acéptalos." };
+    }
+    return { ok: false, motivo: error };
+  }
+
+  return {
+    ok: true,
+    motivo: avisos.length
+      ? `El puente funciona: encontró ${avisos.length} ${avisos.length === 1 ? "aviso" : "avisos"} del último día.`
+      : "El puente funciona. No encontró avisos del último día, que puede ser normal — revisa que REMITENTES tenga tus bancos.",
+    avisos: avisos.length,
+  };
+}
+
+/**
+ * Le deja al puente el resumen para el correo diario. Son cuatro cifras, no los movimientos.
+ *
+ * Silencioso a propósito: esto ocurre al guardar, y que el correo diario no se actualice no
+ * puede interrumpir a nadie ni ensuciar la pantalla. Si falla, el correo lo dirá por su cuenta
+ * —va sellado con su fecha— y eso es mejor que una alerta que nadie pidió.
+ */
+export async function depositarResumen({ url, token, resumen } = {}) {
+  if (!url || !token || !resumen) return false;
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ token, accion: "resumen", resumen }),
+      redirect: "follow",
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}

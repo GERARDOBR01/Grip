@@ -11,8 +11,10 @@
  *   · No lee tu correo entero. Solo lo que empata con REMITENTES y con los días que se piden.
  *   · No devuelve el correo completo: corta el texto y tapa cualquier número largo dejando
  *     los últimos 4. Un número de tarjeta no sale de Gmail ni por accidente.
- *   · No cubre a los bancos que solo avisan dentro de su app. Nu es el caso: sus
- *     notificaciones nunca llegan por correo. Para esos, comparte el aviso a la app.
+ *   · No cubre lo que el banco no manda por correo. Nu, por ejemplo, SÍ manda correo de las
+ *     transferencias que envías —con monto, fecha, destinatario y clave de rastreo—, pero no
+ *     de las compras con tarjeta: eso vive solo en su app. Para lo que no llegue, comparte el
+ *     aviso a Grip desde el celular.
  *
  * ── Cómo instalarlo (10 minutos, una sola vez) ──
  *  1. Entra a script.google.com → Nuevo proyecto. Pega este archivo completo.
@@ -63,6 +65,11 @@ function atender(peticion) {
     return responder({ error: "Token incorrecto." });
   }
 
+  // Guardar el resumen que manda la app. Son cuatro cifras, no tus movimientos.
+  if (peticion.accion === "resumen") {
+    return guardarResumen(peticion.resumen);
+  }
+
   var dias = Math.min(Math.max(parseInt(peticion.dias, 10) || 3, 1), 30);
   var consulta = "(" + REMITENTES.map(function (r) { return "from:" + r; }).join(" OR ") + ")"
     + " newer_than:" + dias + "d";
@@ -100,11 +107,111 @@ function limpiar(crudo) {
     .replace(/[ \t]+/g, " ")
     .replace(/\n{2,}/g, "\n");
 
+  // Los identificadores de la OPERACIÓN se apartan antes de tapar nada: la clave de rastreo
+  // del SPEI y el folio de autorización son lo que le permite a la app saber que dos avisos
+  // son el mismo movimiento —y que una preautorización de $100 y su cargo real de $43 son una
+  // compra, no dos—. Sin esto, el tapado de abajo se los comía y la app volvía a adivinar por
+  // monto y fecha. No son números de tarjeta ni de cuenta: no abren nada.
+  var apartados = [];
+  texto = texto.replace(
+    /((?:clave de rastreo|clave de seguimiento|folio de autorizaci[oó]n|n[uú]mero de autorizaci[oó]n|clave de autorizaci[oó]n|autorizaci[oó]n|folio)\s*[:\-]?\s*)([A-Za-z0-9]{4,30})/gi,
+    function (todo, etiqueta, valor) {
+      apartados.push(valor);
+      return etiqueta + "\u0001" + (apartados.length - 1) + "\u0001";
+    });
+
   // Cualquier corrida de 6 dígitos o más se reduce a sus últimos 4. Tarjetas y cuentas
   // completas no tienen por qué salir de Gmail para que la app sepa cuánto gastaste.
   texto = texto.replace(/\d{6,}/g, function (n) { return "****" + n.slice(-4); });
 
+  // Y se devuelven a su sitio. Las marcas llevan uno o dos dígitos, así que el tapado de
+  // arriba no las toca.
+  texto = texto.replace(/\u0001(\d+)\u0001/g, function (todo, indice) { return apartados[Number(indice)]; });
+
   return texto.trim().slice(0, MAXIMO_CARACTERES);
+}
+
+// ── El resumen diario ──────────────────────────────────────────────────────
+//
+// Alguien sin tiempo no abre la app. Así que la app tiene que llegarle a él, y la única vía
+// que no obliga a levantar un servidor es ésta: un correo que TÚ te mandas desde TU cuenta.
+//
+// Hay un problema honesto que resolver: este script NO conoce tus números. Viven en tu
+// navegador. Lo que hace es guardar el último resumen que la app le dejó —disponible, por
+// día, cierre proyectado— y mandarlo con SU FECHA. Si tiene días de viejo, el correo lo dice
+// en vez de presentarlo como si fuera de hoy. Un número viejo disfrazado de actual es peor
+// que no mandar nada.
+//
+// ── Para encenderlo (2 minutos) ──
+//  1. En el editor, arriba, elige la función "enviarResumenDiario" y dale Ejecutar una vez.
+//     Te va a pedir permiso para mandarte correo: es a ti mismo.
+//  2. Reloj (Activadores) → Añadir activador.
+//       Función: enviarResumenDiario.  Origen: Según tiempo.  Tipo: Temporizador diario.
+//       Hora: la que quieras, por ejemplo 8am-9am.
+//  Para apagarlo: borra el activador. Nada más.
+
+var LLAVE_RESUMEN = "grip_resumen";
+
+/** Cuántos días puede tener el resumen antes de que el correo avise que está viejo. */
+var DIAS_ANTES_DE_AVISAR = 3;
+
+function guardarResumen(resumen) {
+  if (!resumen || typeof resumen !== "object") {
+    return responder({ error: "No venía el resumen." });
+  }
+  PropertiesService.getUserProperties().setProperty(LLAVE_RESUMEN, JSON.stringify({
+    disponible: resumen.disponible,
+    porDia: resumen.porDia,
+    cierre: resumen.cierre,
+    finDeCiclo: resumen.finDeCiclo,
+    pendientes: resumen.pendientes,
+    guardado: Utilities.formatDate(new Date(), "America/Mexico_City", "yyyy-MM-dd"),
+  }));
+  return responder({ ok: true });
+}
+
+function enviarResumenDiario() {
+  var crudo = PropertiesService.getUserProperties().getProperty(LLAVE_RESUMEN);
+  if (!crudo) return; // la app todavía no ha dejado nada: no hay nada que contar
+
+  var resumen = JSON.parse(crudo);
+  var hoy = Utilities.formatDate(new Date(), "America/Mexico_City", "yyyy-MM-dd");
+  var dias = Math.round((new Date(hoy) - new Date(resumen.guardado)) / 86400000);
+
+  var lineas = [];
+  if (dias > DIAS_ANTES_DE_AVISAR) {
+    // Lo primero y en su propia línea: estos números son viejos.
+    lineas.push("Ojo: estos números son del " + resumen.guardado + ". Abre Grip para ponerlos al día.");
+    lineas.push("");
+  }
+
+  lineas.push("Te quedan " + pesos(resumen.disponible) + " para esta quincena.");
+  if (resumen.porDia !== null && resumen.porDia !== undefined) {
+    lineas.push("Son " + pesos(resumen.porDia) + " por día hasta el " + resumen.finDeCiclo + ".");
+  }
+  if (resumen.cierre !== null && resumen.cierre !== undefined) {
+    lineas.push("Al ritmo que llevas, cierras en " + pesos(resumen.cierre) + ".");
+  }
+  if (resumen.pendientes) {
+    lineas.push("");
+    lineas.push(resumen.pendientes + " avisos esperan tu confirmación.");
+  }
+
+  MailApp.sendEmail(
+    Session.getActiveUser().getEmail(),
+    "Grip · " + pesos(resumen.disponible) + " para esta quincena",
+    lineas.join("\n"),
+  );
+}
+
+/** Centavos a pesos, para el correo. */
+function pesos(centavos) {
+  if (centavos === null || centavos === undefined) return "—";
+  var signo = centavos < 0 ? "-" : "";
+  var entero = Math.floor(Math.abs(centavos) / 100);
+  var resto = String(Math.abs(centavos) % 100);
+  if (resto.length < 2) resto = "0" + resto;
+  return signo + "$" + entero.toLocaleString("en-US") + "." + resto;
 }
 
 function responder(objeto) {

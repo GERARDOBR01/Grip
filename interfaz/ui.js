@@ -900,7 +900,25 @@ function vistaAjustes() {
            <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
          </div>
          <button class="boton chico tenue" data-accion="configurar-puente">${puente.url ? "Cambiar" : "Configurar"}</button></div>
-         ${puente.url ? `<div class="acciones"><button class="boton" data-accion="traer-del-puente">Traer ahora</button></div>` : ""}
+         ${puente.url ? `<div class="acciones">
+             <button class="boton" data-accion="traer-del-puente">Traer ahora</button>
+             <button class="boton tenue" data-accion="probar-puente">Probar puente</button>
+           </div>` : ""}
+         <details style="margin-top:10px">
+           <summary class="rotulo" style="cursor:pointer">Cómo encenderlo, paso a paso</summary>
+           <ol class="rotulo" style="padding-left:18px;line-height:1.7">
+             <li>Entra a <b>script.google.com</b> → Nuevo proyecto.</li>
+             <li>Pega el archivo <code>puente/Codigo.gs</code> del repositorio, completo.</li>
+             <li>Cambia <code>TOKEN</code> por una frase larga que inventes tú, y pon tus bancos en <code>REMITENTES</code>.</li>
+             <li>Implementar → Nueva implementación → <b>Aplicación web</b>.
+               Ejecutar como <b>Yo</b>, acceso <b>Cualquier usuario</b>.</li>
+             <li>Copia la dirección que termina en <code>/exec</code> y pégala aquí arriba con tu token.</li>
+             <li>Dale a <b>Probar puente</b>: si algo falla, te digo exactamente qué mover.</li>
+           </ol>
+           <div class="rotulo">Para el correo diario, en el editor: elige la función
+             <code>enviarResumenDiario</code>, ejecútala una vez para dar permiso, y en
+             <b>Activadores</b> ponle un temporizador diario. Para apagarlo, borra el activador.</div>
+         </details>
          <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
          ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
@@ -1193,6 +1211,38 @@ async function guardar(datos) {
     throw e;
   }
   render();
+  dejarResumenEnElPuente();
+}
+
+/**
+ * Le deja al puente las cuatro cifras del correo diario. Sin esperar y sin molestar.
+ *
+ * El script de Google no conoce tus números —viven aquí— así que la única forma de que el
+ * correo diario diga algo cierto es que la app se los deje al guardar. Va sellado con su
+ * fecha del lado del script: si se queda viejo, el correo lo dice en vez de presentarlo como
+ * si fuera de hoy.
+ */
+function dejarResumenEnElPuente() {
+  if (typeof depositarResumen !== "function" || typeof configuracionDelPuente !== "function") return;
+  const puente = configuracionDelPuente();
+  if (!puente || !puente.url || !puente.token) return;
+
+  try {
+    const panel = panelHoy(app.datos, app.hoy);
+    depositarResumen({
+      url: puente.url,
+      token: puente.token,
+      resumen: {
+        disponible: panel.disponible,
+        porDia: panel.porDia,
+        cierre: panel.capacidad ? panel.capacidad.monto : null,
+        finDeCiclo: panel.ciclo.fin,
+        pendientes: resumenBandeja(app.datos).pendientes,
+      },
+    });
+  } catch (e) {
+    // Que el correo diario no se actualice no puede interrumpir a nadie.
+  }
 }
 
 const acciones = {
@@ -1356,6 +1406,18 @@ const acciones = {
         fecha: entrada.movimiento.fecha,
       },
     });
+  },
+
+  async "probar-puente"() {
+    if (typeof probarPuente !== "function" || typeof configuracionDelPuente !== "function") return;
+    const puente = configuracionDelPuente();
+
+    app.aviso = "Probando el puente…";
+    render();
+
+    const { ok, motivo } = await probarPuente({ url: puente.url, token: puente.token });
+    app.aviso = ok ? `✓ ${motivo}` : motivo;
+    render();
   },
 
   async "aceptar-tanda"() {
