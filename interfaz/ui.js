@@ -579,7 +579,10 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${seccionSinLeer}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  // Pegar y leer una captura van ARRIBA, no al final. Son las dos vías principales de la app y
+  // tenían que bajar por toda la lista de pendientes para encontrarlas. Lo único que va antes
+  // es lo que no se supo leer: si nadie lo completa, ahí desaparece un gasto de verdad.
+  return `${seccionSinLeer}${pegar}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}`;
 }
 
 /**
@@ -1015,12 +1018,17 @@ function vistaAjustes() {
         diario del puente, aquí abajo.</div>
     </div>`;
 
+  // El puente sigue funcionando y no se toca, pero deja de estar en el centro: la app gira
+  // ahora alrededor de pegar y de leer capturas, que no piden instalar nada ni dar permisos.
+  // Quien lo quiera lo abre; quien no, ni lo ve.
   const seccionPuente = hayPuente
     ? `<div class="titulo-seccion">Traer de mi correo</div>
-       <div class="tarjeta">
-         <div class="rotulo">Un script tuyo, dentro de tu cuenta de Google, le pasa a Grip los
-           avisos de tus bancos. Las instrucciones están en la carpeta <code>puente/</code> del
-           repositorio. La dirección y el token se guardan solo en este dispositivo.</div>
+       <details class="tarjeta"${puente.url ? " open" : ""}>
+         <summary class="rotulo" style="cursor:pointer">Un script tuyo, en tu cuenta de Google, que
+           le pasa a Grip los avisos de tus bancos. ${puente.url ? "Configurado." : "Opcional — toca para verlo."}</summary>
+         <div class="rotulo" style="margin-top:10px">Las instrucciones están en la carpeta
+           <code>puente/</code> del repositorio. La dirección y el token se guardan solo en este
+           dispositivo.</div>
          <div class="fila"><div class="crece">
            <div class="nombre">${puente.url ? "Puente configurado" : "Sin configurar"}</div>
            <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
@@ -1051,7 +1059,7 @@ function vistaAjustes() {
          ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
            <b>${esc(b.nombre)}:</b> ${esc(b.nota)}. Para lo que no llegue, compártele el aviso a
            Grip desde el celular.</div>`).join("")}
-       </div>`
+       </details>`
     : "";
 
   const reglas = reglasAprendidas(app.datos);

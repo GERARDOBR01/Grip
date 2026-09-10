@@ -1,9 +1,13 @@
 # Grip
 
-App de finanzas personales para quien no tiene tiempo de llevarlas. Le pegas el aviso de tu
-banco y ella saca el monto, la fecha y el comercio; tú confirmas de un toque. Y aprende: si
-corriges una categoría una vez, no vuelve a preguntar — ni por los cargos que vienen, ni por
-los que ya estaban, que se ofrece a arreglar de un toque.
+App de finanzas personales para quien no tiene tiempo de llevarlas. **Le pasas la captura de
+pantalla del aviso de tu banco y ella lo lee**: saca el monto, la fecha y el comercio, y tú
+confirmas. Si prefieres, pegas el correo. Y aprende: si corriges una categoría una vez, no
+vuelve a preguntar — ni por los cargos que vienen, ni por los que ya estaban, que se ofrece a
+arreglar de un toque.
+
+El efectivo, que en México es el **78%** de los pagos, se anota con un teclado propio en dos
+toques. Y tu ingreso sale del XML de tu recibo de nómina: exacto, sin teclearlo.
 
 Contesta lo que importa a diario: a dónde se va el dinero, cuánto puedes gastar hoy sin
 quedarte corto, y si una meta de ahorro de verdad alcanza o no.
@@ -35,16 +39,20 @@ motor/          el cálculo, en JavaScript puro y sin DOM
 | **Presupuesto** | Cuánto va gastado por categoría contra su tope, con semáforo |
 | **Metas** | Cuánto hay que apartar por quincena — y si eso cabe en la capacidad real de ahorro |
 | **Fijos** | Qué vence, qué ya se pagó y cuánto se debe, más las suscripciones que encontró sola en el historial |
-| **Ajustes** | Ingreso, ciclo, fondo de emergencia, lo que aprendió de ti, avisos, el puente de correo y respaldo en JSON |
+| **Ajustes** | Ingreso (o **sube tu recibo de nómina** y sale exacto), ciclo, fondo de emergencia, lo que aprendió de ti, avisos, el puente de correo y respaldo en JSON |
 
-Cuatro cosas mueven dinero y todas se capturan igual, desde el botón `+`: **gasto**,
-**ingreso**, **apartar** y **retirar**. Un retiro no borra el apartado original — los dos
+Cuatro cosas mueven dinero y todas salen del botón `+`: **gasto**, **ingreso**, **apartar** y
+**retirar**. El `+` abre directo el teclado de efectivo —nueve de cada diez capturas son un
+gasto— y los otros tres están a un toque de ahí. Un retiro no borra el apartado original — los dos
 quedan en el historial, porque eso fue lo que pasó.
 
 ## Las tres reglas
 
 **1. El código decide.** No hay ningún modelo de por medio: todo sale de reglas
-deterministas y cada veredicto dice de dónde salió.
+deterministas y cada veredicto dice de dónde salió. El lector de capturas no es la excepción
+— convierte píxeles en **texto**, y de ahí en adelante manda el mismo lector determinista que
+lee un correo pegado. Ningún modelo decide un peso. Y por eso mismo, **lo que sale de una
+imagen nunca se acepta sin mirarlo**: un OCR puede leer $89.00 donde decía $8,900.00.
 
 ```
 NO_ALCANZA — requiere $3,750.00 por quincena, capacidad estimada $530.00 — fuente: CODIGO
@@ -123,12 +131,16 @@ importa, o si algún archivo que no sea el puente pide algo a la red.
 
 ## Que capture sola
 
-Tres formas de llenar la bandeja, todas contra el mismo lector:
+Cuatro formas de llenar la bandeja, todas contra el mismo lector:
 
-1. **Pegar.** Copias el aviso y lo pegas. Funciona con cualquier banco, lo reconozca o no.
-2. **Compartir.** Con la app instalada en Android, le compartes el correo desde Gmail y cae
-   leída. Es la única vía para bancos que solo notifican dentro de su app.
-3. **El puente.** Un [Apps Script](puente/) en tu propia cuenta de Google que busca los
+1. **La captura de pantalla.** El texto de una notificación no se puede seleccionar; una
+   captura se hace con dos botones. Se la pegas o la eliges, y la lee. Es la vía para los
+   bancos que solo notifican dentro de su app — Nu manda push por cada compra y ya no manda
+   correo.
+2. **Pegar.** Copias el aviso y lo pegas. Funciona con cualquier banco, lo reconozca o no.
+3. **Compartir.** Con la app instalada en Android, le compartes el correo desde Gmail —o la
+   captura desde la galería— y cae leída.
+4. **El puente.** Opcional, para quien lo quiera. Un [Apps Script](puente/) en tu propia cuenta de Google que busca los
    avisos de tus bancos y se los pasa a la app. Gratis, sin servidor, y lo borras cuando
    quieras. Configurado una vez, **la app va por ellos sola cada vez que la abres**: pide los
    días que hagan falta desde la última, así que volver de vacaciones no deja correo afuera. Si
@@ -187,10 +199,11 @@ alguien afloje uno.
 
 ```
 motor/       cálculo puro, sin DOM: dinero, ciclos, presupuesto, ahorro, metas, fijos, deudas,
-             lectura de avisos, bandeja, aprendizaje, recurrentes, tendencia, fusión y qué
-             merece un recordatorio
+             lectura de avisos, recibo de nómina, bandeja, aprendizaje, recurrentes, tendencia,
+             fusión y qué merece un recordatorio
 almacen/     persistencia detrás de 4 métodos, con adaptadores intercambiables
-interfaz/    plantilla, estilos, render, avisos del sistema y el logo
+interfaz/    plantilla, estilos, render, teclado de efectivo, lector de capturas y el logo
+ocr/         el motor que convierte una captura en texto (lo único que no escribimos nosotros)
 pruebas/     node --test: ejemplos, corpus de avisos e invariantes sobre entrada generada
 herramientas/armar.mjs (build), humo.mjs (navegador) y logo.mjs (íconos)
 puente/      el script de Google Apps Script que lee el correo, con sus instrucciones
