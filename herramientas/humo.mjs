@@ -305,6 +305,12 @@ const manifiesto = await instalada.evaluate(async () => {
 });
 revisar("el manifest carga y la declara instalable", Boolean(manifiesto) && manifiesto.display === "standalone");
 revisar(
+  "y trae los atajos de Android: pegar y gasto rápido",
+  Boolean(manifiesto) && (manifiesto.shortcuts || []).length === 2 &&
+    manifiesto.shortcuts.every((a) => a.url && a.name && (a.icons || []).length),
+  `${((manifiesto || {}).shortcuts || []).length} atajos`,
+);
+revisar(
   "con íconos enmascarables, como piden Android e iOS",
   Boolean(manifiesto) && manifiesto.icons.length === 2 && manifiesto.icons.every((i) => i.purpose.includes("maskable")),
 );
@@ -444,6 +450,34 @@ await lote.waitForTimeout(500);
 const trasDeshacer = await lote.$$eval(".tarjeta.entrada", (n) => n.length);
 revisar("y otro toque los devuelve enteros", trasDeshacer === 6, `${trasDeshacer} tarjetas`);
 await contextoLote.close();
+
+// ── Los atajos, y el permiso que NO se pide ─────────────────────────────────────
+//
+// Lo segundo importa más que lo primero. Pedir permiso de notificaciones al abrir es la forma
+// más rápida de que te lo nieguen para siempre; aquí se pide desde Ajustes, cuando la persona
+// lo enciende, y nunca antes. Esta prueba es lo que evita que alguien lo "mejore".
+
+const contextoAtajo = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const atajo = await contextoAtajo.newPage();
+await atajo.addInitScript(() => {
+  window.__pidioPermiso = false;
+  if (typeof Notification !== "undefined") {
+    const original = Notification.requestPermission;
+    Notification.requestPermission = function (...args) {
+      window.__pidioPermiso = true;
+      return original.apply(this, args);
+    };
+  }
+});
+await atajo.goto(`http://127.0.0.1:${puerto}/index.html?atajo=pegar`);
+await atajo.waitForSelector("#aviso", { timeout: 8000 });
+revisar("el atajo «pegar» abre directo en la caja de pegar", true);
+revisar("y limpia la dirección: recargar no repite el atajo", !atajo.url().includes("atajo="), atajo.url());
+
+await atajo.waitForTimeout(500);
+revisar("al abrir NO se pide permiso de avisos: eso se enciende en Ajustes",
+  (await atajo.evaluate(() => window.__pidioPermiso)) === false);
+await contextoAtajo.close();
 
 // ── Corregir una vez, no veinte ─────────────────────────────────────────────────
 //

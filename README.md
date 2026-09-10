@@ -35,7 +35,7 @@ motor/          el cálculo, en JavaScript puro y sin DOM
 | **Presupuesto** | Cuánto va gastado por categoría contra su tope, con semáforo |
 | **Metas** | Cuánto hay que apartar por quincena — y si eso cabe en la capacidad real de ahorro |
 | **Fijos** | Qué vence, qué ya se pagó y cuánto se debe, más las suscripciones que encontró sola en el historial |
-| **Ajustes** | Ingreso, ciclo, fondo de emergencia, lo que aprendió de ti, respaldo en JSON |
+| **Ajustes** | Ingreso, ciclo, fondo de emergencia, lo que aprendió de ti, avisos, el puente de correo y respaldo en JSON |
 
 Cuatro cosas mueven dinero y todas se capturan igual, desde el botón `+`: **gasto**,
 **ingreso**, **apartar** y **retirar**. Un retiro no borra el apartado original — los dos
@@ -134,6 +134,18 @@ Tres formas de llenar la bandeja, todas contra el mismo lector:
    días que hagan falta desde la última, así que volver de vacaciones no deja correo afuera. Si
    el puente está caído no te interrumpe — lo dice en Ajustes y ya.
 
+## Que avise sin que la abras
+
+Un aviso cuando venga un pago fijo, y cuando lleves varios correos sin confirmar. Nada más: una
+app que avisa de todo se apaga a los tres días y no se vuelve a encender. Se enciende en
+Ajustes —nunca se pide el permiso al abrir— y en Android los atajos del ícono llevan directo a
+pegar un aviso o a capturar un gasto.
+
+Y aquí va lo que casi ninguna app dice: **con la app cerrada, esto no te despierta.** Ningún
+sitio web puede hacerlo de forma fiable —Periodic Background Sync no existe en iOS y en
+Chromium pide app instalada y uso frecuente—, así que el canal que de verdad llega con la app
+cerrada es el correo diario del puente. Está escrito así en Ajustes, en vez de prometer de más.
+
 Lo que hay que decir antes de que alguien se ilusione: **el correo no cubre todo tu dinero.**
 Nu manda correo de las transferencias que envías, pero no de las compras con tarjeta. HSBC solo
 avisa de operaciones arriba de $1,500, así que los gastos chicos no llegan. Banorte, Santander,
@@ -175,9 +187,10 @@ alguien afloje uno.
 
 ```
 motor/       cálculo puro, sin DOM: dinero, ciclos, presupuesto, ahorro, metas, fijos, deudas,
-             lectura de avisos, bandeja, aprendizaje, recurrentes, tendencia y fusión
+             lectura de avisos, bandeja, aprendizaje, recurrentes, tendencia, fusión y qué
+             merece un recordatorio
 almacen/     persistencia detrás de 4 métodos, con adaptadores intercambiables
-interfaz/    plantilla, estilos, render y el logo
+interfaz/    plantilla, estilos, render, avisos del sistema y el logo
 pruebas/     node --test: ejemplos, corpus de avisos e invariantes sobre entrada generada
 herramientas/armar.mjs (build), humo.mjs (navegador) y logo.mjs (íconos)
 puente/      el script de Google Apps Script que lee el correo, con sus instrucciones

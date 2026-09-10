@@ -26,6 +26,10 @@ import {
 import { montosFrecuentes } from "../motor/rapido.js";
 import { reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla } from "../motor/aprendizaje.js";
 import { marcaDe } from "../motor/lectura.js";
+import { recordatoriosDeHoy } from "../motor/recordatorios.js";
+import {
+  estadoDeAvisos, encenderAvisos, apagarAvisos, avisarDe, ponerGlobo, ESPERA_ENTRE_REVISIONES,
+} from "./avisos.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
@@ -963,6 +967,28 @@ function vistaAjustes() {
         ? `<div class="rotulo aviso-linea" style="margin-top:8px">Último intento ${esc(haceCuanto(bitacora.sello))}: ${esc(bitacora.error)}</div>`
         : `<div class="rotulo" style="margin-top:8px">Última vez que trajo: ${esc(haceCuanto(bitacora.sello))}.</div>`;
 
+  // Los avisos del sistema. Lo que dice esta tarjeta es tan importante como lo que hace: si
+  // promete avisar con la app cerrada, miente, y quien confíe en eso va a pagar un recargo.
+  const avisos = estadoDeAvisos();
+  const seccionAvisos = `<div class="titulo-seccion">Que te avise</div>
+    <div class="tarjeta">
+      <div class="rotulo">Un aviso cuando venga un pago fijo, y cuando lleves varios correos
+        sin confirmar. Nada más: una app que avisa de todo se apaga a los tres días.</div>
+      <div class="fila"><div class="crece">
+        <div class="nombre">${avisos.encendidos ? "Encendidos" : "Apagados"}</div>
+        <div class="sub">${avisos.negados
+          ? "bloqueados en este navegador; se cambia desde sus ajustes"
+          : avisos.soportados ? "mientras tengas la app abierta o la abras" : "este navegador no sabe mandarlos"}</div>
+      </div>
+      ${avisos.soportados && !avisos.negados
+        ? `<button class="boton chico ${avisos.encendidos ? "tenue" : ""}"
+             data-accion="${avisos.encendidos ? "apagar-avisos" : "encender-avisos"}">${avisos.encendidos ? "Apagar" : "Encender"}</button>`
+        : ""}</div>
+      <div class="rotulo aviso-linea" style="margin-top:8px">Con la app cerrada esto no te
+        despierta: ningún sitio web puede hacerlo de forma fiable. Para eso está el correo
+        diario del puente, aquí abajo.</div>
+    </div>`;
+
   const seccionPuente = hayPuente
     ? `<div class="titulo-seccion">Traer de mi correo</div>
        <div class="tarjeta">
@@ -1042,6 +1068,7 @@ function vistaAjustes() {
         <button class="boton chico tenue" data-accion="cambiar-tema">Cambiar</button></div>
     </div>
 
+    ${seccionAvisos}
     ${seccionPuente}
     ${loAprendido}
 
@@ -1245,13 +1272,30 @@ async function tirarLoViejo() {
  */
 async function atenderCompartido() {
   let texto = "";
+  let atajo = "";
   try {
     const params = new URLSearchParams(location.search);
     texto = [params.get("texto"), params.get("titulo"), params.get("enlace")].filter(Boolean).join("\n").trim();
-    if (texto) history.replaceState(null, "", location.pathname);
+    atajo = params.get("atajo") || "";
+    if (texto || atajo) history.replaceState(null, "", location.pathname);
   } catch (e) {
     return; // en un contexto sin acceso a la dirección esto simplemente no aplica
   }
+
+  // Los atajos de Android: dejar apretado el ícono y caer donde se iba a caer de todos modos,
+  // dos toques antes. No traen datos, solo dicen a dónde ibas.
+  if (!texto && atajo) {
+    if (atajo === "pegar") {
+      app.vista = "bandeja";
+      render();
+      const caja = document.getElementById("aviso");
+      if (caja) caja.focus();
+    } else if (atajo === "rapido") {
+      hojaMovimiento();
+    }
+    return;
+  }
+
   if (!texto) return;
 
   app.vista = "bandeja";
@@ -1296,6 +1340,7 @@ async function guardar(datos) {
   }
   render();
   dejarResumenEnElPuente();
+  revisarRecordatorios();
 }
 
 /**
@@ -1326,6 +1371,21 @@ function dejarResumenEnElPuente() {
     });
   } catch (e) {
     // Que el correo diario no se actualice no puede interrumpir a nadie.
+  }
+}
+
+/**
+ * Mira si hay algo que recordarle a esta persona, y pinta el globo del ícono.
+ *
+ * Qué merece un aviso lo decide el motor (motor/recordatorios.js); aquí solo se entrega. Y no
+ * lanza nunca: que un aviso no salga no puede tumbar nada.
+ */
+async function revisarRecordatorios() {
+  try {
+    ponerGlobo(resumenBandeja(app.datos).pendientes);
+    await avisarDe(recordatoriosDeHoy(app.datos, app.hoy), app.hoy);
+  } catch (e) {
+    // Un recordatorio que no sale no es un problema de nadie.
   }
 }
 
@@ -1536,6 +1596,18 @@ const acciones = {
     // antes sería escribir un mensaje para que se borre solo.
     await guardar(aplicarRegla(app.datos, p.clave, p.categoriaId));
     app.aviso = `${p.cuantos} ${p.cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(p.categoriaId)}.`;
+    render();
+  },
+
+  async "encender-avisos"() {
+    const { ok, motivo } = await encenderAvisos();
+    if (!ok) app.aviso = motivo;
+    else await revisarRecordatorios();
+    render();
+  },
+
+  "apagar-avisos"() {
+    apagarAvisos();
     render();
   },
 
@@ -2294,6 +2366,11 @@ export async function arrancar() {
   // Que la bandeja se llene sola. Va después de pintar y de atender lo compartido: nada de
   // esto debe hacer esperar a la pantalla.
   traerDelPuenteEnSilencio();
+  revisarRecordatorios();
+
+  // En un celular la app se deja abierta días. Si sigue ahí cuando cambie el día o venza algo,
+  // que lo diga en vez de esperar a que alguien la mire.
+  setInterval(revisarRecordatorios, ESPERA_ENTRE_REVISIONES);
 
   // En un celular la app no se cierra, se deja. Volver a ella días después tiene que traer lo
   // que llegó mientras tanto; el freno de `tocaTraer` es lo que evita que esto sea una

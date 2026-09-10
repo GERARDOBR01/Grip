@@ -42,11 +42,13 @@ const MODULOS = [
   "motor/recurrentes.js",
   "motor/tendencia.js",
   "motor/bandeja.js",
+  "motor/recordatorios.js", // después de fijos y bandeja: lee de los dos
   "almacen/archivo.js",
   "almacen/local.js",
   "almacen/almacen.js",
   { ruta: "almacen/anfitrion-claude.js", opcional: true }, // borrarlo no rompe nada
   { ruta: "almacen/puente-correo.js", opcional: true },    // tampoco
+  "interfaz/avisos.js",
   "interfaz/ui.js",
 ];
 
@@ -232,6 +234,25 @@ const manifiesto = {
     method: "GET",
     params: { title: "titulo", text: "texto", url: "enlace" },
   },
+  // Dejar apretado el ícono en Android lleva directo a lo que se hace a diario, sin pasar por
+  // la pantalla de Hoy. Son las dos únicas cosas que se hacen a diario; una lista más larga
+  // sería un menú, y un menú no ahorra nada.
+  shortcuts: [
+    {
+      name: "Pegar un aviso",
+      short_name: "Pegar",
+      description: "Pega el correo del banco y cae leído en la bandeja",
+      url: "./?atajo=pegar",
+      icons: [{ src: "./icono-192.png", sizes: "192x192" }],
+    },
+    {
+      name: "Gasto rápido",
+      short_name: "Gasto",
+      description: "Captura un gasto en efectivo",
+      url: "./?atajo=rapido",
+      icons: [{ src: "./icono-192.png", sizes: "192x192" }],
+    },
+  ],
 };
 
 const hospedada = `<!doctype html>
