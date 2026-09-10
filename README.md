@@ -2,7 +2,8 @@
 
 App de finanzas personales para quien no tiene tiempo de llevarlas. Le pegas el aviso de tu
 banco y ella saca el monto, la fecha y el comercio; tú confirmas de un toque. Y aprende: si
-corriges una categoría una vez, no vuelve a preguntar.
+corriges una categoría una vez, no vuelve a preguntar — ni por los cargos que vienen, ni por
+los que ya estaban, que se ofrece a arreglar de un toque.
 
 Contesta lo que importa a diario: a dónde se va el dinero, cuánto puedes gastar hoy sin
 quedarte corto, y si una meta de ahorro de verdad alcanza o no.

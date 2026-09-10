@@ -445,6 +445,58 @@ const trasDeshacer = await lote.$$eval(".tarjeta.entrada", (n) => n.length);
 revisar("y otro toque los devuelve enteros", trasDeshacer === 6, `${trasDeshacer} tarjetas`);
 await contextoLote.close();
 
+// ── Corregir una vez, no veinte ─────────────────────────────────────────────────
+//
+// Aprender hacia adelante dejaba media promesa cumplida: el siguiente cargo de OXXO llegaba
+// bien y los cinco de antes se quedaban donde estaban, así que el presupuesto seguía mintiendo
+// hasta tocarlos uno por uno — el trabajo que la app dice que te quita. Ahora se OFRECE
+// arreglarlos, con el número por delante. Nunca solo: esto reescribe historial.
+
+const contextoAtras = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const atras = await contextoAtras.newPage();
+await atras.goto(`http://127.0.0.1:${puerto}/index.html`);
+await atras.waitForSelector(".tarjeta");
+await atras.click('[data-vista="bandeja"]');
+await atras.waitForSelector("#aviso");
+
+// Cinco cargos del mismo lugar, aceptados con la categoría que trae por defecto.
+for (let i = 0; i < 5; i++) {
+  await atras.fill("#aviso", `Banorte: Compra por $${60 + i}.00 MXN en OXXO CENTRO el 0${i + 1}/09/2026 con tu tarjeta terminación 4821.`);
+  await atras.click('[data-accion="leer-aviso"]');
+  await atras.waitForTimeout(120);
+}
+await atras.click('[data-accion="aceptar-tanda"]');
+await atras.waitForTimeout(500);
+
+// El sexto se corrige a mano: se le pone otra categoría antes de aceptar.
+await atras.fill("#aviso", "Banorte: Compra por $99.00 MXN en OXXO CENTRO el 06/09/2026 con tu tarjeta terminación 4821.");
+await atras.click('[data-accion="leer-aviso"]');
+await atras.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+// Las categorías son fichas, no un desplegable: aceptar tiene que ser un toque. Se elige la
+// primera que NO sea la que ya viene puesta.
+const otraFicha = await atras.$('.tarjeta.entrada .chip[aria-pressed="false"]');
+if (otraFicha) {
+  await otraFicha.click();
+  await atras.waitForTimeout(250);
+  await atras.click('.tarjeta.entrada [data-accion="aceptar-entrada"]');
+  await atras.waitForTimeout(600);
+
+  const texto = await atras.textContent("body");
+  const ofrecido = (texto.match(/También tienes \d+ cargos?/) || ["no salió el ofrecimiento"])[0];
+  revisar("corregir una vez ofrece arreglar los cargos viejos del mismo lugar",
+    texto.includes("También tienes 5 cargos"), ofrecido);
+
+  await atras.click('[data-accion="aplicar-hacia-atras"]');
+  await atras.waitForTimeout(600);
+  const despues = await atras.textContent("body");
+  revisar("y un toque los pasa todos, diciendo cuántos movió",
+    despues.includes("5 movimientos pasaron") && !despues.includes("También tienes 5 cargos"));
+} else {
+  revisar("corregir una vez ofrece arreglar los cargos viejos del mismo lugar", false,
+    "no encontré una ficha de categoría distinta a la puesta");
+}
+await contextoAtras.close();
+
 // ── Un banco que nadie programó ─────────────────────────────────────────────────
 //
 // Ocho de los once bancos de la tabla nunca han enseñado su formato, y las plantillas cambian

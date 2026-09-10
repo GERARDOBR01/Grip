@@ -21,10 +21,11 @@ import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
 import {
   recibirAviso, pendientes, ilegibles, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja,
   impactoPendiente, purgarBandeja, aceptarTanda, deshacerTanda, deConfianzaAlta,
-  absorberAvisos, ventanaDeAvisos, tocaTraer,
+  absorberAvisos, ventanaDeAvisos, tocaTraer, entradaPorId,
 } from "../motor/bandeja.js";
 import { montosFrecuentes } from "../motor/rapido.js";
-import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
+import { reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla } from "../motor/aprendizaje.js";
+import { marcaDe } from "../motor/lectura.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
@@ -41,6 +42,9 @@ const app = {
   aviso: null,
   bloqueado: false,
   filtro: { texto: "", tipo: "" },
+  // Un ofrecimiento pendiente de contestar: `{ clave, categoriaId, comercio, cuantos }`.
+  // Vive solo en la pantalla. Ignorarlo y cerrar la app no cambia nada, que es la idea.
+  propuesta: null,
   // Lo que la persona eligió en la bandeja antes de aceptar, por entrada. Vive solo en la
   // pantalla: si cierra la app sin aceptar, no queda rastro de una decisión a medias.
   eleccion: {},
@@ -85,6 +89,46 @@ function haceCuanto(sello, ahora = Date.now()) {
   if (horas < 24) return `hace ${horas} h`;
   const dias = Math.floor(horas / 24);
   return dias === 1 ? "ayer" : `hace ${dias} días`;
+}
+
+/** El nombre visible de una categoría, o su id si alguien la borró y quedó huérfana. */
+function nombreCategoria(id) {
+  const encontrada = categoriaPorId(app.datos, id);
+  return encontrada ? encontrada.nombre : id;
+}
+
+/**
+ * Mira si corregir este comercio deja cargos pasados sin corregir, y prepara el ofrecimiento.
+ *
+ * Aprender hacia adelante deja media promesa cumplida: el siguiente OXXO llega bien y los
+ * veinte de antes se quedan en «Otros», así que el presupuesto sigue mintiendo hasta que los
+ * tocas uno por uno — el trabajo que la app dijo que te iba a quitar.
+ */
+function proponerHaciaAtras(datos, comercio, categoriaId) {
+  const clave = marcaDe(comercio);
+  if (!clave || !categoriaId) return null;
+  const cuantos = movimientosDeLaMarca(datos, clave, categoriaId).length;
+  return cuantos ? { clave, categoriaId, comercio, cuantos } : null;
+}
+
+/**
+ * El ofrecimiento, con el número por delante y sin bloquear nada.
+ *
+ * Nunca se aplica solo: esto reescribe historial, y una app que cambia tus números pasados
+ * sin decírtelo pierde la autoridad que la hace útil. Y no se queda insistiendo: se contesta
+ * una vez, o se ignora y desaparece al siguiente movimiento.
+ */
+function bannerPropuesta() {
+  const p = app.propuesta;
+  if (!p) return "";
+  return `<div class="aviso">
+    <b>También tienes ${p.cuantos} ${p.cuantos === 1 ? "cargo" : "cargos"} de ${esc(p.comercio)}</b>
+    en otra categoría. ¿${p.cuantos === 1 ? "Lo paso" : "Los paso"} a ${esc(nombreCategoria(p.categoriaId))}?
+    <div class="acciones">
+      <button class="boton chico" data-accion="aplicar-hacia-atras">Sí, ${p.cuantos === 1 ? "pásalo" : "pásalos"}</button>
+      <button class="boton chico tenue" data-accion="descartar-propuesta">Déjalos como están</button>
+    </div>
+  </div>`;
 }
 
 function monto(centavos, opciones) {
@@ -154,6 +198,7 @@ function render() {
     <main class="envoltura">
       ${app.aviso ? `<div class="aviso ${app.bloqueado ? "malo" : ""}">${esc(app.aviso)}
         <div class="acciones"><button class="boton chico tenue" data-accion="cerrar-aviso">Entendido</button></div></div>` : ""}
+      ${bannerPropuesta()}
       ${vistaActual()}
       <div class="pie">Tus datos viven en este dispositivo${sincronizado ? " y en tu cuenta" : ""}. Nunca en el repositorio.</div>
     </main>
@@ -967,6 +1012,15 @@ function vistaAjustes() {
            return `<div class="fila">
              <div class="crece"><div class="nombre">${esc(r.clave)}</div>
                <div class="sub">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div></div>
+             ${(() => {
+               // Solo si de verdad quedó historial viejo detrás. Un botón que no hace nada es
+               // peor que no tener botón.
+               const atrasados = movimientosDeLaMarca(app.datos, r.clave, r.categoriaId).length;
+               return atrasados
+                 ? `<button class="boton chico tenue" data-accion="aplicar-regla-atras"
+                      data-clave="${esc(r.clave)}" data-categoria="${esc(r.categoriaId)}">Aplicar a ${atrasados}</button>`
+                 : "";
+             })()}
              <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
            </div>`;
          }).join("")}
@@ -1451,17 +1505,55 @@ const acciones = {
   },
 
   async "aceptar-entrada"(el, reemplazar = false) {
+    app.propuesta = null; // el ofrecimiento anterior ya no viene al caso
     const id = el.dataset.id;
     const cambios = app.eleccion[id] !== undefined ? { categoria: app.eleccion[id] } : {};
     if (reemplazar) cambios.reemplazar = true;
-    const { datos, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
+    const entrada = entradaPorId(app.datos, id);
+    const { datos, movimiento, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
     if (error) {
       app.aviso = error;
       return render();
     }
     const { [id]: quitada, ...resto } = app.eleccion;
     app.eleccion = resto;
+
+    // Aceptar acaba de enseñarle una categoría a este comercio. Si hay cargos viejos suyos en
+    // otra parte, se OFRECE arreglarlos — no se hace. Y se ofrece después de guardar, para
+    // que aceptar siga costando un toque.
+    app.propuesta = movimiento
+      ? proponerHaciaAtras(datos, (entrada && entrada.comercio) || movimiento.nota, movimiento.categoria)
+      : null;
+
     await guardar(datos);
+  },
+
+  async "aplicar-hacia-atras"() {
+    const p = app.propuesta;
+    if (!p) return;
+    app.propuesta = null;
+    // El aviso va DESPUÉS de guardar: `guardar` lo limpia al terminar bien, así que ponerlo
+    // antes sería escribir un mensaje para que se borre solo.
+    await guardar(aplicarRegla(app.datos, p.clave, p.categoriaId));
+    app.aviso = `${p.cuantos} ${p.cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(p.categoriaId)}.`;
+    render();
+  },
+
+  "descartar-propuesta"() {
+    app.propuesta = null;
+    render();
+  },
+
+  // Lo mismo, desde la lista de reglas de Ajustes: para lo que se aprendió hace meses y dejó
+  // historial viejo detrás.
+  async "aplicar-regla-atras"(el) {
+    const clave = el.dataset.clave;
+    const categoriaId = el.dataset.categoria;
+    const cuantos = movimientosDeLaMarca(app.datos, clave, categoriaId).length;
+    if (!cuantos) return;
+    await guardar(aplicarRegla(app.datos, clave, categoriaId));
+    app.aviso = `${cuantos} ${cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(categoriaId)}.`;
+    render();
   },
 
   "editar-entrada"(el) {

@@ -96,3 +96,53 @@ export function olvidar(datos, clave) {
 export function reglasAprendidas(datos) {
   return [...(datos.reglas || [])].sort((a, b) => b.veces - a.veces || (a.clave < b.clave ? -1 : 1));
 }
+
+// ── Hacia atrás ────────────────────────────────────────────────────────────
+//
+// Aprender hacia adelante deja media promesa cumplida. Corriges OXXO a Súper y el siguiente
+// cargo ya llega bien, pero los veinte de antes se quedan en «Otros» y el presupuesto sigue
+// mintiendo hasta que los tocas uno por uno — que es exactamente el trabajo que la app dijo
+// que te iba a quitar.
+//
+// Lo que NO hace: aplicarse sola. Esto reescribe historial, y una app que cambia tus números
+// pasados sin decírtelo pierde la autoridad que la hace útil. Se ofrece, con el número por
+// delante, y decides tú.
+
+/**
+ * Los movimientos pasados de este comercio que la regla cambiaría, del más nuevo al más viejo.
+ * Los que ya están en esa categoría no salen: no hay nada que hacerles.
+ */
+export function movimientosDeLaMarca(datos, clave, categoriaId = null) {
+  if (!clave) return [];
+  const encontrados = [];
+  for (const [mes, lista] of Object.entries(datos.movimientos || {})) {
+    for (const m of lista) {
+      if (marcaDe(m.nota) !== clave) continue;
+      if (categoriaId && m.categoria === categoriaId) continue;
+      encontrados.push({ ...m, mes });
+    }
+  }
+  return encontrados.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+}
+
+/**
+ * Aplica la regla a lo ya capturado. Devuelve datos nuevos; no muta lo recibido.
+ *
+ * Solo toca la categoría. El monto, la fecha y la nota son lo que pasó, y eso no se corrige
+ * desde aquí ni desde ningún otro lado que no seas tú escribiéndolo.
+ */
+export function aplicarRegla(datos, clave, categoriaId) {
+  if (!clave || !categoriaId) return datos;
+
+  const movimientos = {};
+  let tocados = 0;
+  for (const [mes, lista] of Object.entries(datos.movimientos || {})) {
+    movimientos[mes] = lista.map((m) => {
+      if (marcaDe(m.nota) !== clave || m.categoria === categoriaId) return m;
+      tocados++;
+      return { ...m, categoria: categoriaId };
+    });
+  }
+
+  return tocados ? { ...datos, movimientos } : datos;
+}
