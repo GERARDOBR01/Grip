@@ -301,3 +301,19 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 }
 .tecla:active { transform: scale(.96); background: var(--borde); }
 @media (prefers-reduced-motion: reduce) { .tecla { transition: none; } }
+
+/* --- La pantalla de rescate ---
+   Se pinta cuando dibujar tronó, así que no puede depender de nada de arriba que pudiera ser
+   justo lo que falló. Poca cosa a propósito: un título, una explicación y el botón que se
+   lleva los datos. */
+.rescate { padding-top: 40px; max-width: 520px; }
+.rescate h1 { font-size: 20px; letter-spacing: -.02em; margin: 0 0 10px; }
+.rescate p { color: var(--tinta-2); line-height: 1.6; margin: 0 0 18px; }
+.rescate .acciones { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.rescate details { color: var(--tinta-3); font-size: 12px; }
+.rescate summary { cursor: pointer; padding: 6px 0; }
+.rescate pre {
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--superficie-2); border: 1px solid var(--borde); border-radius: 10px;
+  padding: 12px; font-size: 11px; line-height: 1.5; max-height: 240px; overflow: auto;
+}

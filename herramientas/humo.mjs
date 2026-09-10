@@ -1068,6 +1068,57 @@ revisar("y un token equivocado lo dice, no falla en silencio",
 puente.close();
 servidor.close();
 
+// ── La red de seguridad: que la pantalla pueda morir, pero nunca llevándose los datos ──
+//
+// Se prueba rompiendo el dibujado a propósito, y vale la pena hacerlo en un navegador de verdad:
+// lo que se comprueba es que el DOM quede en un estado del que se pueda salir, y eso no se
+// puede fingir en una prueba de motor.
+{
+  const roto = await contexto.newPage();
+  const erroresRoto = [];
+  roto.on("pageerror", (e) => erroresRoto.push(e.message));
+  await roto.goto(ARCHIVO);
+  await roto.waitForSelector(".barra");
+
+  // El envenenamiento hace fallar UNA escritura, la primera. La segunda —la de la pantalla de
+  // rescate— tiene que poder escribirse: si no, no se estaría probando el rescate, se estaría
+  // probando un navegador roto.
+  await roto.evaluate(() => {
+    const raiz = document.getElementById("raiz");
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+    let primera = true;
+    Object.defineProperty(raiz, "innerHTML", {
+      configurable: true,
+      get() { return original.get.call(this); },
+      set(valor) {
+        if (primera) {
+          primera = false;
+          throw new Error("plantilla envenenada a propósito");
+        }
+        original.set.call(this, valor);
+      },
+    });
+  });
+
+  await roto.click('[data-vista="ajustes"]');
+  await roto.waitForSelector(".rescate", { timeout: 4000 }).catch(() => {});
+
+  revisar("una excepción al dibujar deja pantalla de rescate, no una app en blanco",
+    (await roto.locator(".rescate").count()) === 1);
+  revisar("y con el botón que se lleva tus datos",
+    (await roto.locator('.rescate [data-accion="rescate-respaldo"]').count()) === 1);
+  revisar("dice qué se rompió, en vez de callárselo",
+    (await roto.textContent(".rescate")).includes("envenenada a propósito"));
+  revisar("y el fallo no se escapa a la consola sin dueño", erroresRoto.length === 0, erroresRoto.join(" | "));
+
+  // Y se puede volver: el rescate no es una vía muerta.
+  await roto.click('[data-accion="rescate-reintentar"]');
+  await roto.waitForSelector(".barra", { timeout: 4000 }).catch(() => {});
+  revisar("intentar de nuevo devuelve la app", (await roto.locator(".barra").count()) === 1);
+
+  await roto.close();
+}
+
 // La promesa que no se toca, comprobada al final: el archivo suelto no depende de nada.
 revisar("el archivo autónomo no arrastra manifest ni service worker", (await pagina.locator('link[rel="manifest"]').count()) === 0);
 revisar(

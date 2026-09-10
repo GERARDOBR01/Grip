@@ -52,6 +52,9 @@ const app = {
   hora: horaAhora(),
   aviso: null,
   bloqueado: false,
+  // Se enciende cuando dibujar tronó y quedó puesta la pantalla de rescate. Mientras esté
+  // encendida no se repinta nada: repintar borraría el único botón que te saca los datos.
+  rescatada: false,
   filtro: { texto: "", tipo: "" },
   // Un ofrecimiento pendiente de contestar: `{ clave, categoriaId, comercio, cuantos }`.
   // Vive solo en la pantalla. Ignorarlo y cerrar la app no cambia nada, que es la idea.
@@ -189,7 +192,68 @@ function vacio(texto) {
 
 // --- Render ---
 
+/**
+ * Dibuja, y si dibujar truena, rescata.
+ *
+ * Toda la pantalla se pinta de una sola pasada, así que una excepción a mitad de camino deja
+ * una app en blanco, muda, con los datos dentro y sin forma de sacarlos. Eso es lo que esto
+ * evita: pase lo que pase, siempre hay una pantalla que explica qué se rompió y un botón que
+ * baja el respaldo. Perder una tarde de captura porque una plantilla tenía un fallo sería el
+ * peor final posible para una app que se define por no perder datos.
+ */
 function render() {
+  if (app.rescatada) return; // la pantalla de rescate se queda: repintar la borraría
+  try {
+    dibujar();
+  } catch (e) {
+    rescatar(e, "dibujando la pantalla");
+  }
+}
+
+/**
+ * La pantalla de rescate. Sin plantillas, sin motor y sin tocar nada de lo que pudo romperse:
+ * lo único que tiene que funcionar aquí es el botón que se lleva tus datos.
+ */
+function rescatar(error, donde) {
+  if (app.rescatada) return;
+  app.rescatada = true;
+
+  const raiz = document.getElementById("raiz");
+  if (!raiz) return;
+
+  raiz.innerHTML = `<main class="envoltura rescate">
+      <h1>Se rompió algo al ${esc(donde)}</h1>
+      <p>Tus datos siguen guardados en este dispositivo — lo que falló es la pantalla, no el
+         almacenamiento. Aun así, bájate el respaldo antes de nada: es tuyo y abre en cualquier lado.</p>
+      <div class="acciones">
+        <button class="boton" data-accion="rescate-respaldo">Descargar respaldo</button>
+        <button class="boton tenue" data-accion="rescate-reintentar">Intentar de nuevo</button>
+      </div>
+      <details><summary>Qué pasó exactamente</summary>
+        <pre>${esc((error && error.stack) || (error && error.message) || String(error))}</pre></details>
+    </main>`;
+}
+
+/**
+ * Baja el respaldo sin pasar por nada que pudiera estar roto: ni `guardar`, ni el anfitrión, ni
+ * el exportador si es él quien falló. Un enlace y un Blob, que es lo que siempre funciona.
+ */
+function respaldoDeEmergencia() {
+  let texto;
+  try {
+    texto = exportar(app.datos);
+  } catch (e) {
+    texto = JSON.stringify(app.datos ?? null, null, 2);
+  }
+  const enlace = document.createElement("a");
+  enlace.href = URL.createObjectURL(new Blob([texto], { type: "application/json" }));
+  enlace.download = nombreDeRespaldo(app.hoy);
+  document.body.appendChild(enlace);
+  enlace.click();
+  enlace.remove();
+}
+
+function dibujar() {
   const raiz = document.getElementById("raiz");
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
@@ -2303,6 +2367,15 @@ const acciones = {
     await guardar(eliminarMovimiento(app.datos, el.dataset.id));
   },
 
+  "rescate-respaldo"() {
+    respaldoDeEmergencia();
+  },
+
+  "rescate-reintentar"() {
+    app.rescatada = false;
+    render();
+  },
+
   async exportar() {
     const texto = exportar(app.datos);
     const nombre = nombreDeRespaldo(app.hoy);
@@ -2723,7 +2796,35 @@ function hojaDeuda(deuda) {
 
 // --- Arranque ---
 
+/**
+ * Lo que no se cazó en ningún try: se dice, una vez, y sin tumbar la pantalla.
+ *
+ * Aquí caen los fallos de fondo —una promesa que nadie esperó, un manejador de evento que
+ * lanzó—. Un fallo así casi nunca justifica la pantalla de rescate (la app sigue usable), pero
+ * tragárselo tampoco: la regla de esta app es que nada falla en silencio. Se avisa UNA vez por
+ * sesión y no se vuelve a mencionar; un banner que reaparece en cada intento fallido del puente
+ * enseña a ignorar los avisos, que es peor que no darlos.
+ */
+function ponerRedDeSeguridad() {
+  let yaAvisado = false;
+  const contar = (motivo) => {
+    if (yaAvisado || app.rescatada) return;
+    yaAvisado = true;
+    app.aviso = `Algo falló en segundo plano: ${motivo}. Lo capturado no se pierde, pero si se repite, baja un respaldo.`;
+    render();
+  };
+
+  addEventListener("error", (e) => contar((e.error && e.error.message) || e.message || "error sin mensaje"));
+  addEventListener("unhandledrejection", (e) => {
+    const razon = e.reason;
+    contar((razon && razon.message) || String(razon || "una promesa rechazada"));
+  });
+}
+
+
 export async function arrancar() {
+  ponerRedDeSeguridad();
+
   try {
     const tema = localStorage.getItem("finanzas:tema");
     if (tema && tema !== "sistema") document.documentElement.dataset.tema = tema;
@@ -2830,11 +2931,24 @@ export async function arrancar() {
   });
 
   // Si otro dispositivo escribe, esta pantalla se entera.
-  app.almacen.suscribir(async () => {
-    const fresco = await app.almacen.cargar();
-    app.datos = fresco.datos;
-    render();
-  });
+  //
+  // Con guarda, y no por prolijidad: veinte líneas más arriba este mismo arranque ya admite
+  // que `app.almacen` puede quedar en null, y aquí se usaba directo. Cuando abrir el almacén
+  // fallaba, esta línea lanzaba y se llevaba por delante lo que viene DESPUÉS — el temporizador
+  // que cambia de día y el que revisa los recordatorios— sin que nada lo dijera. Justo el
+  // aparato donde el almacenamiento va mal es donde más falta hace que lo demás siga vivo.
+  if (app.almacen && typeof app.almacen.suscribir === "function") {
+    app.almacen.suscribir(async () => {
+      try {
+        const fresco = await app.almacen.cargar();
+        app.datos = fresco.datos;
+        render();
+      } catch (e) {
+        app.aviso = `Otro dispositivo escribió, pero no se pudo leer lo nuevo: ${e.message}`;
+        render();
+      }
+    });
+  }
 
   // Si la app queda abierta y cambia el día, el ciclo se recalcula solo. Y de paso se refresca
   // la hora, que es lo que hace que a las 2 de la tarde te ofrezca los tacos: sin esto, una app
