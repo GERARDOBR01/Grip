@@ -348,6 +348,54 @@ await instalada.reload().catch(() => {});
 revisar("y una vez instalada, abre SIN CONEXIÓN", await instalada.locator(".barra").isVisible().catch(() => false));
 await contexto.setOffline(false);
 
+// Caché primero, y se comprueba de la única forma que no miente: contando lo que sale a la red.
+// Antes iba a la red primero y solo caía a la caché si fallaba, así que con señal mala había
+// que esperar a que el navegador se rindiera —con la pantalla en blanco— para servir lo que
+// llevaba guardado desde el principio.
+{
+  let salidasALaRed = 0;
+  const contar = () => { salidasALaRed++; };
+  instalada.on("request", contar);
+  await instalada.reload();
+  await instalada.waitForSelector(".barra", { timeout: 8000 });
+  await instalada.waitForTimeout(600);
+  instalada.off("request", contar);
+
+  // El navegador siempre revisa sw.js y el documento de navegación; lo que no puede haber es
+  // una petición por cada trozo de la app.
+  revisar("abrir la app va a la caché primero, no a la red", salidasALaRed <= 4, `${salidasALaRed} peticiones`);
+}
+
+// Las tres cachés viven separadas, y el motor de OCR tiene la suya con su propio sello: son
+// 4 MB que no cambian casi nunca y que antes se volvían a bajar enteros con cada versión de la
+// app — cuatro megas del plan de datos de alguien por arreglar una palabra en un texto.
+const reparto = await instalada.evaluate(async () => {
+  // Se pide un trozo del motor. La caché del motor no se llena al instalar a propósito —nadie
+  // debe bajar 4 MB por si acaso— así que nace aquí, la primera vez que se usa.
+  await fetch("./ocr/lib.js");
+  const llaves = await caches.keys();
+  const deVersion = llaves.find((n) => /^grip-[0-9a-f]{8}$/.test(n));
+  const deMotor = llaves.find((n) => n.startsWith("grip-motor-"));
+
+  const estaEn = async (nombre, ruta) => {
+    if (!nombre) return false;
+    const cache = await caches.open(nombre);
+    return Boolean(await cache.match(new URL(ruta, location.href).href));
+  };
+
+  return {
+    llaves,
+    motorEnLoSuyo: await estaEn(deMotor, "./ocr/lib.js"),
+    motorEnLaDeVersion: await estaEn(deVersion, "./ocr/lib.js"),
+    appEnLaDeVersion: await estaEn(deVersion, "./index.html"),
+  };
+});
+
+revisar("el motor de OCR se guarda en su propia caché y no en la de la versión",
+  reparto.motorEnLoSuyo && !reparto.motorEnLaDeVersion,
+  reparto.llaves.join(", "));
+revisar("y la app sigue en la suya, que es la que se tira al actualizar", reparto.appEnLaDeVersion);
+
 // ── La bandeja no crece para siempre ────────────────────────────────────────────
 //
 // Este es el defecto que ya se coló una vez: la función de purga existía, tenía su prueba,
