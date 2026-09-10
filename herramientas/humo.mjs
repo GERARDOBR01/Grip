@@ -62,11 +62,13 @@ await pagina.waitForSelector(".velo", { state: "detached" });
 const trasIngreso = (await pagina.textContent(".cifra")).trim();
 revisar("con el ingreso capturado aparece el disponible", trasIngreso === "$8,000.00", trasIngreso);
 
-// 4. Capturar un gasto: + → monto → categoría → guardar
+// 4. Capturar un gasto en efectivo: + → teclear → categoría → guardar.
+// El botón grande abre el teclado propio, que es el camino de nueve de cada diez capturas.
 await pagina.click('[data-accion="capturar"]');
-await pagina.fill('[data-clave="monto"]', "450.50");
-await pagina.click('.chips [data-valor="super"]');
-await pagina.click('button[type="submit"]');
+await pagina.waitForSelector(".teclado");
+for (const tecla of ["4", "5", "0", ".", "5", "0"]) await pagina.click(`[data-tecla="${tecla}"]`);
+await pagina.click('[data-categoria-teclado="super"]');
+await pagina.click("#teclado-guardar");
 await pagina.waitForSelector(".velo", { state: "detached" });
 const trasGasto = (await pagina.textContent(".cifra")).trim();
 revisar("el gasto se descuenta del disponible", trasGasto === "$7,549.50", trasGasto);
@@ -119,6 +121,8 @@ const cifra = async () => {
   return Number(texto.replace(/[^\d.]/g, "")) * (texto.includes("−") ? -1 : 1);
 };
 await pagina.click('[data-accion="capturar"]');
+await pagina.waitForSelector("#teclado-completo");
+await pagina.click("#teclado-completo");
 await pagina.click('[data-clave="tipo"] [data-valor="ingreso"]');
 await pagina.waitForTimeout(120);
 revisar("un ingreso no pide categoría", (await pagina.locator('[data-clave="categoria"]').count()) === 0);
@@ -128,6 +132,8 @@ await pagina.waitForSelector(".velo", { state: "detached" });
 
 const antesApartar = await cifra();
 await pagina.click('[data-accion="capturar"]');
+await pagina.waitForSelector("#teclado-completo");
+await pagina.click("#teclado-completo");
 await pagina.click('[data-clave="tipo"] [data-valor="ahorro"]');
 await pagina.waitForTimeout(120);
 await pagina.fill('[data-clave="monto"]', "200");
@@ -135,6 +141,8 @@ await pagina.click('button[type="submit"]');
 await pagina.waitForSelector(".velo", { state: "detached" });
 const apartado = await cifra();
 await pagina.click('[data-accion="capturar"]');
+await pagina.waitForSelector("#teclado-completo");
+await pagina.click("#teclado-completo");
 await pagina.click('[data-clave="tipo"] [data-valor="retiro"]');
 await pagina.waitForTimeout(120);
 await pagina.fill('[data-clave="monto"]', "50");
@@ -555,6 +563,59 @@ await contextoOCR.close();
 } else {
   console.log("  · el lector de imágenes no está: se salta. La app corre sin él, que es lo que se promete.");
 }
+
+// ── El teclado de efectivo ──────────────────────────────────────────────────────
+//
+// El 78% de los pagos en México son en efectivo y anotarlos costaba seis pasos. Aquí se
+// comprueba que el teclado propio guarde un gasto SIN tocar el teclado del sistema, y que
+// tocar un monto de los de siempre lo guarde de un toque.
+
+const contextoTeclado = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const teclado = await contextoTeclado.newPage();
+await teclado.goto(`http://127.0.0.1:${puerto}/index.html`);
+await teclado.waitForSelector(".barra", { timeout: 8000 });
+
+await teclado.click('[data-accion="capturar"]');
+await teclado.waitForSelector(".teclado", { timeout: 8000 });
+revisar("el botón grande abre el teclado propio, no un formulario",
+  (await teclado.locator(".tecla").count()) === 12, `${await teclado.locator(".tecla").count()} teclas`);
+
+// $128, tecleado. Sin campos de texto: si hubiera uno, saldría el teclado del sistema.
+for (const tecla of ["1", "2", "8"]) await teclado.click(`[data-tecla="${tecla}"]`);
+revisar("lo tecleado se ve en grande mientras lo escribes",
+  (await teclado.textContent(".teclado-cifra")).trim() === "$128.00",
+  (await teclado.textContent(".teclado-cifra")).trim());
+
+const sinCampos = await teclado.evaluate(() =>
+  document.querySelectorAll(".hoja input, .hoja textarea").length === 0);
+revisar("y no hay ni un campo de texto: nunca sale el teclado del sistema", sinCampos);
+
+await teclado.click("#teclado-guardar");
+await teclado.waitForTimeout(600);
+revisar("guardar deja el gasto en los movimientos",
+  (await teclado.textContent("body")).includes("128.00"));
+
+// Y el camino de dos segundos: repetir un monto que ya gastaste.
+await teclado.click('[data-accion="capturar"]');
+await teclado.waitForSelector(".teclado", { timeout: 8000 });
+for (const tecla of ["1", "2", "8"]) await teclado.click(`[data-tecla="${tecla}"]`);
+await teclado.click("#teclado-guardar");
+await teclado.waitForTimeout(600);
+
+await teclado.click('[data-accion="capturar"]');
+await teclado.waitForSelector(".teclado", { timeout: 8000 });
+const hayRepetir = await teclado.locator("[data-repetir]").count();
+revisar("con el hábito ya formado, ofrece repetirlo de un toque", hayRepetir > 0, `${hayRepetir} sugerencias`);
+
+if (hayRepetir) {
+  await teclado.click("[data-repetir]");
+  await teclado.waitForTimeout(600);
+  const veces = (await teclado.textContent("body")).match(/128\.00/g) || [];
+  revisar("y ese toque guarda: tres gastos de $128 en el historial", veces.length >= 3,
+    `${veces.length} apariciones`);
+}
+
+await contextoTeclado.close();
 
 // ── Sube tu recibo de nómina ────────────────────────────────────────────────────
 //

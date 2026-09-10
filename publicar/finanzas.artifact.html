@@ -285,6 +285,25 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
    las cerradas haría ver una caída donde solo hay tiempo que no ha pasado. */
 .tendencia rect.encurso { opacity: .4; }
 .tendencia .etiqueta { fill: var(--tinta-3); font-size: 9px; font-family: inherit; }
+
+/* El teclado de efectivo. Teclas grandes a propósito: esto se usa con una mano, de pie y con
+   prisa, que es exactamente cuando se gasta el efectivo. */
+.teclado-cifra {
+  font-size: 46px; font-weight: 650; letter-spacing: -.03em; text-align: center;
+  font-variant-numeric: tabular-nums; padding: 6px 0 12px; line-height: 1.1;
+}
+.teclado-cifra.vacia { color: var(--tinta-3); }
+.teclado {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px;
+}
+.tecla {
+  font: inherit; font-size: 22px; font-weight: 550; padding: 14px 0;
+  background: var(--superficie-2); color: var(--tinta);
+  border: 1px solid var(--borde); border-radius: 12px; cursor: pointer;
+  font-variant-numeric: tabular-nums; transition: transform .06s ease, background .12s ease;
+}
+.tecla:active { transform: scale(.96); background: var(--borde); }
+@media (prefers-reduced-motion: reduce) { .tecla { transition: none; } }
 </style>
 <div id="raiz"></div>
 <div id="hojas"></div>
@@ -5540,6 +5559,16 @@ function bannerPropuesta() {
   </div>`;
 }
 
+/**
+ * Un golpecito al guardar. No un zumbido: 12 milisegundos, lo justo para que la mano sepa que
+ * pasó algo sin tener que mirar la pantalla. Donde no exista, no hace nada y nadie se entera.
+ */
+function vibrar(ms = 12) {
+  try {
+    if (globalThis.navigator && navigator.vibrate) navigator.vibrate(ms);
+  } catch (e) {}
+}
+
 function monto(centavos, opciones) {
   return centavos === null || centavos === undefined ? "—" : formatear(centavos, opciones);
 }
@@ -6750,7 +6779,7 @@ async function atenderCompartido() {
       const caja = document.getElementById("aviso");
       if (caja) caja.focus();
     } else if (atajo === "rapido") {
-      hojaMovimiento();
+      hojaTeclado();
     }
     return;
   }
@@ -6893,7 +6922,8 @@ async function aplicarIntencion(intencion) {
   if (intencion.accion === "anotar") {
     // Con respuesta escrita en la sombra viene el texto; sin ella, viene vacío y se abre la
     // captura en blanco, que es exactamente a lo que ibas.
-    hojaMovimiento(intencion.texto ? { valores: { monto: primerNumero(intencion.texto), nota: intencion.texto } } : {});
+    if (intencion.texto) hojaMovimiento({ valores: { monto: primerNumero(intencion.texto), nota: intencion.texto } });
+    else hojaTeclado();
   }
 }
 
@@ -7100,6 +7130,12 @@ const acciones = {
   },
 
   capturar() {
+    // El botón grande abre el teclado, no el formulario: nueve de cada diez capturas son un
+    // gasto en efectivo. Lo demás (ingresos, apartar, retirar) sigue a un toque de distancia.
+    hojaTeclado();
+  },
+
+  "capturar-completo"() {
     hojaMovimiento();
   },
 
@@ -7759,6 +7795,133 @@ const TIPOS_CAPTURA = [
  * ya tecleaste. También sirve para CORREGIR un movimiento: conserva su id, así que editar
  * no es borrar y volver a capturar.
  */
+/**
+ * El teclado de efectivo. La pantalla donde se juega si esta app sirve o estorba.
+ *
+ * El 78% de los pagos en México son en efectivo, y anotarlos costaba seis pasos: abrir, tocar
+ * `+`, tocar el campo, escribir con el teclado del sistema, elegir categoría, guardar. Seis
+ * pasos para $50 de tacos, y la investigación de abandono dice exactamente eso — la gente deja
+ * de registrar porque el hueco entre gastar y anotar es demasiado ancho.
+ *
+ * Aquí son dos toques cuando el monto ya lo conoce, y teclear-tocar-guardar cuando no.
+ *
+ * El teclado es propio y no el del sistema a propósito: el del sistema tarda en aparecer, tapa
+ * media pantalla y trae teclas que aquí no sirven de nada.
+ */
+function hojaTeclado() {
+  const contenedor = document.getElementById("hojas");
+  const sugeridos = montosFrecuentes(app.datos, app.hoy, 3, app.hora);
+  const categorias = categoriasACalce(sugeridos.length ? sugeridos[0].categoriaId : "");
+
+  let tecleado = "";
+  let elegida = (sugeridos[0] && sugeridos[0].categoriaId) || (categorias[0] && categorias[0].valor) || "otros";
+
+  const centavos = () => aCentavos(tecleado || "0") || 0;
+
+  contenedor.innerHTML = `<div class="velo" data-velo="1"><div class="hoja">
+    <div class="teclado-cifra" id="teclado-cifra">${monto(0)}</div>
+    ${sugeridos.length ? `<div class="rotulo">Lo de siempre, a esta hora</div>
+      <div class="chips apretados">${sugeridos.map((f) => {
+        const categoria = categoriaPorId(app.datos, f.categoriaId);
+        return `<button type="button" class="chip" data-repetir="${f.monto}"
+          data-categoria="${esc(f.categoriaId || "otros")}"
+          title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
+      }).join("")}</div>` : ""}
+    <div class="rotulo" style="margin-top:10px">En qué</div>
+    <div class="chips apretados" id="teclado-categorias">${categorias.map((c) => `
+      <button type="button" class="chip" aria-pressed="${c.valor === elegida}"
+        data-categoria-teclado="${esc(c.valor)}">${esc(c.etiqueta)}</button>`).join("")}</div>
+    <div class="teclado">
+      ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button type="button" class="tecla" data-tecla="${n}">${n}</button>`).join("")}
+      <button type="button" class="tecla" data-tecla=".">.</button>
+      <button type="button" class="tecla" data-tecla="0">0</button>
+      <button type="button" class="tecla" data-tecla="borrar" aria-label="Borrar">⌫</button>
+    </div>
+    <div class="acciones">
+      <button type="button" class="boton tenue" data-accion="cerrar-hoja">Cancelar</button>
+      <button type="button" class="boton" id="teclado-guardar">Guardar</button>
+    </div>
+    <!-- El teclado solo hace gastos, que son nueve de cada diez capturas. Lo demás vive aquí,
+         a un toque, y no escondido: sin esta línea, capturar un ingreso o un apartado se
+         volvería imposible desde el botón grande. -->
+    <button type="button" class="boton tenue chico" id="teclado-completo"
+      style="width:100%;margin-top:10px">Ingreso, apartar o retirar</button>
+  </div></div>`;
+
+  cerrarHoja = () => {
+    contenedor.innerHTML = "";
+    cerrarHoja = null;
+  };
+
+  const pantalla = document.getElementById("teclado-cifra");
+  const pintar = () => {
+    pantalla.textContent = monto(centavos());
+    pantalla.classList.toggle("vacia", !tecleado);
+  };
+
+  const guardar1 = async (cuanto, categoria) => {
+    if (!cuanto || cuanto <= 0) return;
+    const { datos, error } = agregarMovimiento(app.datos, {
+      fecha: app.hoy, hora: app.hora, monto: cuanto, tipo: TIPOS.GASTO,
+      categoria: categoria || "otros", nota: "",
+    });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    cerrarHoja();
+    vibrar();
+    await guardar(datos);
+  };
+
+  contenedor.querySelector(".velo").addEventListener("click", (e) => {
+    if (e.target.dataset.velo) cerrarHoja();
+  });
+
+  contenedor.querySelector(".hoja").addEventListener("click", async (e) => {
+    const boton = e.target.closest("button");
+    if (!boton) return;
+
+    // Un monto de los de siempre: un toque y ya está guardado. Ése es el camino de dos segundos.
+    if (boton.dataset.repetir) {
+      return guardar1(Number(boton.dataset.repetir), boton.dataset.categoria);
+    }
+
+    if (boton.dataset.categoriaTeclado) {
+      elegida = boton.dataset.categoriaTeclado;
+      for (const chip of document.querySelectorAll("#teclado-categorias .chip")) {
+        chip.setAttribute("aria-pressed", String(chip.dataset.categoriaTeclado === elegida));
+      }
+      return;
+    }
+
+    const tecla = boton.dataset.tecla;
+    if (tecla) {
+      if (tecla === "borrar") tecleado = tecleado.slice(0, -1);
+      else if (tecla === ".") {
+        if (!tecleado.includes(".")) tecleado = `${tecleado || "0"}.`;
+      } else if (!/\.\d\d$/.test(tecleado)) {
+        // Se cortan los centavos en dos dígitos: nadie paga $50.123 y dejarlo crecer solo
+        // produce montos absurdos por un dedo torpe.
+        tecleado += tecla;
+      }
+      return pintar();
+    }
+
+    if (boton.id === "teclado-completo") {
+      // Se conserva lo tecleado: llegar aquí después de escribir el monto y perderlo sería
+      // castigar a alguien por haber empezado por el camino corto.
+      const llevaba = tecleado;
+      cerrarHoja();
+      return hojaMovimiento(llevaba ? { valores: { monto: llevaba } } : {});
+    }
+
+    if (boton.id === "teclado-guardar") await guardar1(centavos(), elegida);
+  });
+
+  pintar();
+}
+
 function hojaMovimiento(config = {}) {
   const { movimiento = null, valores = {}, entradaId = null } = config;
   const tipo = config.tipo || TIPOS.GASTO;

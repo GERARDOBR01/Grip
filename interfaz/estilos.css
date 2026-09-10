@@ -282,3 +282,22 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
    las cerradas haría ver una caída donde solo hay tiempo que no ha pasado. */
 .tendencia rect.encurso { opacity: .4; }
 .tendencia .etiqueta { fill: var(--tinta-3); font-size: 9px; font-family: inherit; }
+
+/* El teclado de efectivo. Teclas grandes a propósito: esto se usa con una mano, de pie y con
+   prisa, que es exactamente cuando se gasta el efectivo. */
+.teclado-cifra {
+  font-size: 46px; font-weight: 650; letter-spacing: -.03em; text-align: center;
+  font-variant-numeric: tabular-nums; padding: 6px 0 12px; line-height: 1.1;
+}
+.teclado-cifra.vacia { color: var(--tinta-3); }
+.teclado {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px;
+}
+.tecla {
+  font: inherit; font-size: 22px; font-weight: 550; padding: 14px 0;
+  background: var(--superficie-2); color: var(--tinta);
+  border: 1px solid var(--borde); border-radius: 12px; cursor: pointer;
+  font-variant-numeric: tabular-nums; transition: transform .06s ease, background .12s ease;
+}
+.tecla:active { transform: scale(.96); background: var(--borde); }
+@media (prefers-reduced-motion: reduce) { .tecla { transition: none; } }
