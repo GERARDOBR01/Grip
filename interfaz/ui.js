@@ -8,7 +8,7 @@
 // un cero disfrazado de dato.
 
 import { formatear, aCentavos } from "../motor/dinero.js";
-import { hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
+import { horaAhora, hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
   ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
@@ -46,6 +46,9 @@ const app = {
   almacen: null,
   vista: "hoy",
   hoy: hoyISO(),
+  // La hora del reloj, para que las sugerencias de efectivo sepan si son las 2 de la tarde o
+  // las 9 de la mañana. Se refresca con el mismo intervalo que ya vigila el cambio de día.
+  hora: horaAhora(),
   aviso: null,
   bloqueado: false,
   filtro: { texto: "", tipo: "" },
@@ -345,7 +348,7 @@ function vistaHoy() {
   // no entra, los números mienten hacia abajo. Los montos salen de SU historial —la gente
   // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
   // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
-  const frecuentes = montosFrecuentes(datos, hoy);
+  const frecuentes = montosFrecuentes(datos, hoy, 3, app.hora);
   const rapido = frecuentes.length
     ? `<div class="tarjeta">
         <div class="rotulo">Lo de siempre, en efectivo</div>
@@ -1929,6 +1932,7 @@ const acciones = {
 
     const { datos, error } = agregarMovimiento(app.datos, {
       fecha: app.hoy,
+      hora: app.hora,
       monto: centavos,
       tipo: TIPOS.GASTO,
       categoria: el.dataset.categoria || "otros",
@@ -2425,6 +2429,9 @@ function hojaMovimiento(config = {}) {
       const { datos, error } = agregarMovimiento(base, {
         id: editando ? movimiento.id : undefined,
         fecha: v.fecha,
+        // Editar algo viejo NO le inventa una hora: la que tenía, o ninguna. Lo nuevo sí la
+        // lleva, y es lo que hace que en dos semanas la app sepa a qué hora gastas.
+        hora: editando ? movimiento.hora : app.hora,
         monto: v.monto,
         tipo: v.tipo || tipo,
         categoria: (v.tipo || tipo) === TIPOS.GASTO ? v.categoria || "otros" : null,
@@ -2667,12 +2674,15 @@ export async function arrancar() {
     render();
   });
 
-  // Si la app queda abierta y cambia el día, el ciclo se recalcula solo.
+  // Si la app queda abierta y cambia el día, el ciclo se recalcula solo. Y de paso se refresca
+  // la hora, que es lo que hace que a las 2 de la tarde te ofrezca los tacos: sin esto, una app
+  // abierta desde la mañana seguiría sugiriendo el café a media tarde.
   setInterval(() => {
     const ahora = hoyISO();
-    if (ahora !== app.hoy) {
-      app.hoy = ahora;
-      render();
-    }
+    const reloj = horaAhora();
+    const cambioDia = ahora !== app.hoy;
+    app.hoy = ahora;
+    app.hora = reloj;
+    if (cambioDia) render();
   }, 60000);
 }

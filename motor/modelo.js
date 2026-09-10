@@ -8,7 +8,7 @@
 // datos dentro de dos años sin perder un solo movimiento (ver migraciones.js).
 
 import { aCentavos } from "./dinero.js";
-import { hoyISO, mesDe, esISO } from "./ciclo.js";
+import { hoyISO, mesDe, esISO, horaValida } from "./ciclo.js";
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
 export const VERSION_DATOS = 4;
@@ -237,6 +237,10 @@ export function normalizarMovimiento(m) {
   return {
     id: m.id || idNuevo("mov"),
     fecha: m.fecha,
+    // La hora, solo de lo que se capture de aquí en adelante. Lo viejo se queda en "" y no se
+    // inventa: no existe. Sirve para que a las 2 de la tarde te ofrezca los tacos y a las 9 el
+    // café, así que empieza a pagar a las dos semanas de uso y hasta entonces no estorba.
+    hora: horaValida(m.hora),
     monto: Math.abs(monto), // el signo lo da el tipo, no el número
     tipo,
     categoria: m.categoria ? String(m.categoria) : tipo === TIPOS.GASTO ? "otros" : null,
