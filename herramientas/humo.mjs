@@ -559,6 +559,11 @@ const guardoLaImagen = await ocr.evaluate(() =>
   JSON.stringify(window.localStorage).includes("data:image"));
 revisar("y la imagen no se guarda en ningún lado", !guardoLaImagen);
 
+// La captura larga de Android —la que se hace deslizando, angosta y altísima— pedía un lienzo
+// por encima de lo que da Safari en móvil y se rompía justo en el caso más común. Ahora manda
+// el área. La aritmética que lo arregla se prueba exacta en pruebas/lector-imagen.test.js:
+// comprobarla aquí sería tardar treinta segundos de OCR en saber lo que se sabe al instante.
+
 await contextoOCR.close();
 } else {
   console.log("  · el lector de imágenes no está: se salta. La app corre sin él, que es lo que se promete.");

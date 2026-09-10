@@ -5497,6 +5497,32 @@ const ANCHO_MINIMO = 1000;
 /** Y arriba de esto no se gana precisión, solo segundos de espera. */
 const ANCHO_MAXIMO = 2200;
 
+/**
+ * El techo de PÍXELES, que es el que de verdad protege.
+ *
+ * Un lienzo se reserva entero en memoria —cuatro bytes por píxel— y los navegadores tienen su
+ * propio tope: Safari en móvil no da lienzos de más de 16.7 millones de píxeles y falla sin
+ * decir por qué. El ancho solo no basta para quedarse por debajo: una captura larga de Android
+ * —de esas que se hacen deslizando, 1080 de ancho por 12000 de alto— es angosta y aun así pide
+ * casi 13 millones. O sea que el caso que más se rompía era justo el más común.
+ */
+const AREA_MAXIMA = 8_000_000;
+
+/**
+ * Por debajo de esta reducción, el texto de la captura ya no se lee — ni el OCR ni nadie.
+ * Llegado ese punto no se entrega una lectura mala haciéndola pasar por buena: se dice que la
+ * imagen es demasiado grande y qué hacer al respecto.
+ */
+const ESCALA_MINIMA_UTIL = 0.45;
+
+/**
+ * Lo que se espera antes de dar por colgado el motor.
+ *
+ * Sin plazo, un worker que se traba deja «leyendo…» para siempre y la única salida es cerrar
+ * la app. Es de sobra para la primera vez, que es la lenta: son 4 MB de motor que arrancar.
+ */
+const PLAZO_MS = 60000;
+
 // El motor pesa 4 MB y tarda en arrancar: se carga UNA vez y se queda para las siguientes.
 let motorEnCurso = null;
 
@@ -5562,6 +5588,37 @@ function umbralDeOtsu(histograma, total) {
 }
 
 /**
+ * Cuánto hay que escalar esta imagen antes de leerla, o `null` si no hay escala que sirva.
+ *
+ * Va aparte porque es aritmética y punto: así se prueba exacta y al instante, sin arrancar
+ * cuatro megas de motor para comprobar una división. Dos reglas, y la segunda manda:
+ *
+ *   1. Por ANCHO: se amplía lo angosto —una captura recortada sale borrosa si no— y se reduce
+ *      lo enorme. La versión anterior de esta cuenta solo sabía ampliar: `ANCHO_MAXIMO` estaba
+ *      escrito pero no se aplicaba nunca, así que una foto de 4000 px se procesaba entera,
+ *      lenta y sin ganar una letra.
+ *   2. Por ÁREA, que es la que de verdad protege. Una captura de las que se hacen deslizando
+ *      —1080 de ancho, 12000 de alto— pasa el filtro de ancho sin despeinarse y aun así pide
+ *      casi 13 millones de píxeles, por encima de lo que da un lienzo en Safari móvil.
+ *
+ * Y si para caber hubiera que encoger tanto que las letras dejen de leerse, devuelve `null`
+ * en vez de una escala inservible: más vale pedir que recorte la captura que entregarle una
+ * lectura inventada. Es la regla 2 del proyecto aplicada a los píxeles.
+ */
+function escalaPara(ancho, alto) {
+  if (!(ancho > 0) || !(alto > 0)) return null;
+
+  let escala = 1;
+  if (ancho < ANCHO_MINIMO) escala = ANCHO_MINIMO / ancho;
+  else if (ancho > ANCHO_MAXIMO) escala = ANCHO_MAXIMO / ancho;
+
+  const area = ancho * alto * escala * escala;
+  if (area > AREA_MAXIMA) escala *= Math.sqrt(AREA_MAXIMA / area);
+
+  return escala < ESCALA_MINIMA_UTIL ? null : escala;
+}
+
+/**
  * Deja la imagen como al OCR le gusta: gris, del tamaño adecuado y en blanco y negro.
  *
  * Y siempre con la tinta oscura sobre fondo claro. Media México trae el teléfono en modo
@@ -5571,10 +5628,15 @@ function umbralDeOtsu(histograma, total) {
 async function prepararImagen(archivo) {
   const mapa = await createImageBitmap(archivo);
 
-  const escala = Math.min(
-    Math.max(ANCHO_MINIMO / mapa.width, 1),
-    Math.max(ANCHO_MAXIMO / mapa.width, 1),
-  );
+  const escala = escalaPara(mapa.width, mapa.height);
+  if (escala === null) {
+    mapa.close();
+    throw new Error(
+      "esa captura es demasiado grande para leerla entera. Recórtala a la parte del aviso " +
+      "—el monto y el comercio— y vuelve a intentarlo.",
+    );
+  }
+
   const ancho = Math.round(mapa.width * escala);
   const alto = Math.round(mapa.height * escala);
 
@@ -5633,16 +5695,31 @@ async function leerImagen(archivo, alAvanzar = () => {}) {
   }
 
   let cliente = null;
+  let seColgo = false;
+
   try {
-    alAvanzar("preparando");
-    const imagen = await prepararImagen(archivo);
+    const trabajo = (async () => {
+      alAvanzar("preparando");
+      const imagen = await prepararImagen(archivo);
 
-    alAvanzar("arrancando");
-    cliente = await arrancarMotor();
+      alAvanzar("arrancando");
+      cliente = await arrancarMotor();
 
-    alAvanzar("leyendo");
-    await cliente.loadImage(imagen);
-    const texto = await cliente.getText();
+      alAvanzar("leyendo");
+      await cliente.loadImage(imagen);
+      return await cliente.getText();
+    })();
+
+    // El plazo corre contra TODO el trabajo, no contra un paso. Un worker de wasm que se traba
+    // no lanza ni contesta: se queda callado, y sin esto la pantalla se queda en «leyendo…»
+    // hasta que alguien cierra la app. Un botón que no vuelve nunca es peor que uno que falla.
+    const texto = await Promise.race([
+      trabajo,
+      new Promise((_, romper) => setTimeout(() => {
+        seColgo = true;
+        romper(new Error("el lector tardó demasiado y se canceló"));
+      }, PLAZO_MS)),
+    ]);
 
     // Se suelta la imagen del motor en cuanto se leyó: el wasm no devuelve memoria al sistema
     // y una captura de 2200px no es poca cosa.
@@ -5650,8 +5727,28 @@ async function leerImagen(archivo, alAvanzar = () => {}) {
 
     return { texto: String(texto || "").trim(), error: null };
   } catch (e) {
+    await soltarMotor(cliente, seColgo);
     return { texto: "", error: `No pude leer la imagen: ${e.message}` };
   }
+}
+
+/**
+ * Deja el motor en un estado del que se pueda volver a intentar.
+ *
+ * Si solo falló la lectura, basta con soltar la imagen: el motor sigue bueno y arrancarlo otra
+ * vez cuesta 4 MB y varios segundos. Si se COLGÓ, no: ese worker ya no contesta y guardarlo
+ * significa que el siguiente intento también se cuelgue. Se tira y el próximo arranca limpio.
+ */
+async function soltarMotor(cliente, seColgo) {
+  if (!cliente) return;
+  try {
+    if (seColgo) {
+      motorEnCurso = null;
+      if (typeof cliente.destroy === "function") await cliente.destroy();
+    } else {
+      await cliente.clearImage();
+    }
+  } catch (e) {}
 }
 
 // ═══ interfaz/ui.js ═══
