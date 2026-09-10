@@ -39,6 +39,7 @@ const MODULOS = [
   "motor/rapido.js",
   "motor/lectura.js",
   "motor/aprendizaje.js",
+  "motor/nomina.js",
   "motor/recurrentes.js",
   "motor/tendencia.js",
   "motor/bandeja.js",

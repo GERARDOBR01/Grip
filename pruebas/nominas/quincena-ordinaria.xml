@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+                  xmlns:nomina12="http://www.sat.gob.mx/nomina12"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  Version="4.0" Serie="N" Folio="1042"
+                  Fecha="2026-09-15T12:04:31" Moneda="MXN"
+                  SubTotal="9800.00" Descuento="1800.00" Total="8000.00"
+                  TipoDeComprobante="N" Exportacion="01" LugarExpedicion="64000">
+  <cfdi:Emisor Rfc="XAXX010101000" Nombre="EMPRESA DE PRUEBA SA DE CV" RegimenFiscal="601"/>
+  <cfdi:Receptor Rfc="XEXX010101000" Nombre="NOMBRE APELLIDO APELLIDO"
+                 DomicilioFiscalReceptor="64000" RegimenFiscalReceptor="605" UsoCFDI="CN01"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="84111505" Cantidad="1" ClaveUnidad="ACT"
+                   Descripcion="Pago de nómina" ValorUnitario="9800.00" Importe="9800.00"
+                   Descuento="1800.00" ObjetoImp="01"/>
+  </cfdi:Conceptos>
+  <cfdi:Complemento>
+    <nomina12:Nomina Version="1.2" TipoNomina="O"
+                     FechaPago="2026-09-15" FechaInicialPago="2026-09-01" FechaFinalPago="2026-09-15"
+                     NumDiasPagados="15" TotalPercepciones="9800.00" TotalDeducciones="1800.00">
+      <nomina12:Percepciones TotalSueldos="9800.00" TotalGravado="9800.00" TotalExento="0.00"/>
+      <nomina12:Deducciones TotalOtrasDeducciones="600.00" TotalImpuestosRetenidos="1200.00"/>
+    </nomina12:Nomina>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

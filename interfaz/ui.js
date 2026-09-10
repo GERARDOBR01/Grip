@@ -24,6 +24,7 @@ import {
   absorberAvisos, ventanaDeAvisos, tocaTraer, entradaPorId,
 } from "../motor/bandeja.js";
 import { montosFrecuentes } from "../motor/rapido.js";
+import { leerNomina, corteDeNomina } from "../motor/nomina.js";
 import { reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla } from "../motor/aprendizaje.js";
 import { marcaDe } from "../motor/lectura.js";
 import { recordatoriosDeHoy, avisoDeEntrada, barraDeHoy } from "../motor/recordatorios.js";
@@ -1067,8 +1068,12 @@ function vistaAjustes() {
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
-        <div class="sub">lo que entra cada 15 días</div></div>
+        <div class="sub">lo que entra cada vez que te pagan</div></div>
         <button class="boton chico tenue" data-accion="editar-ingreso">${monto(perfil.ingresoQuincenal)}</button></div>
+      <div class="fila"><div class="crece"><div class="nombre">Sube tu recibo de nómina</div>
+        <div class="sub">el XML del SAT: pone el neto exacto y de paso tus días de corte</div></div>
+        <button class="boton chico" data-accion="subir-nomina">Subir</button>
+        <input id="nomina" type="file" accept="text/xml,application/xml,.xml" hidden data-accion-archivo="nomina"></div>
       <div class="fila"><div class="crece"><div class="nombre">Días de corte</div>
         <div class="sub">${perfil.cortes.length ? `quincenal (día ${perfil.cortes.join(", ")} y fin de mes)` : "mensual"}</div></div>
         <button class="boton chico tenue" data-accion="editar-cortes">Cambiar</button></div>
@@ -1507,6 +1512,61 @@ async function atenderLaSombra() {
 }
 
 /**
+ * Toma el ingreso del recibo de nómina, que es el dato exacto y no una estimación tecleada.
+ *
+ * Nunca lo aplica solo: el ingreso es el número del que cuelgan todos los demás, así que se
+ * enseña lo que se leyó y lo confirmas. Y si el recibo trae un corte que se deduce limpio, se
+ * ofrece aparte — cambiarle los ciclos a alguien sin avisar le movería todo el historial.
+ */
+async function aplicarNomina(archivo) {
+  if (!archivo) return;
+
+  let texto = "";
+  try {
+    texto = await archivo.text();
+  } catch (e) {
+    app.aviso = "No pude abrir ese archivo.";
+    return render();
+  }
+
+  const { nomina, veredicto: leido } = leerNomina(texto);
+  if (!nomina) {
+    app.aviso = `${leido.motivo}${leido.datos && leido.datos.falta ? ` Falta ${leido.datos.falta}.` : ""}`;
+    return render();
+  }
+
+  const corte = corteDeNomina(nomina);
+  const yaTieneEseCorte = corte !== null && app.datos.perfil.cortes.includes(corte);
+
+  abrirHoja({
+    titulo: "Tu recibo de nómina",
+    textoGuardar: "Usar estos datos",
+    extra: `<div class="rotulo" style="margin:0 0 10px;line-height:1.7">
+      Neto del periodo <b>${esc(nomina.inicio)} al ${esc(nomina.fin)}</b>:
+      <b>${monto(nomina.neto)}</b><br>
+      Percepciones ${monto(nomina.percepciones)} · deducciones ${monto(nomina.deducciones)}<br>
+      ${!nomina.ordinaria
+        ? `<span class="marca AJUSTADO">OJO</span> Es una nómina extraordinaria (aguinaldo, PTU o
+           finiquito). Es dinero de verdad, pero no es lo que entra cada quincena: si la usas
+           como ingreso, el disponible de todo el ciclo se infla.`
+        : corte === null
+          ? "El periodo no cae dentro de un solo mes, así que de aquí no puedo deducir tus días de corte. Ésos los pones tú."
+          : yaTieneEseCorte
+            ? `Y coincide con tu corte del día ${corte}, que ya tenías puesto.`
+            : `Y dice que tu quincena corta el día <b>${corte}</b>: lo pongo también.`}
+    </div>`,
+    campos: [],
+    async alGuardar() {
+      const perfil = { ...app.datos.perfil, ingresoQuincenal: nomina.neto };
+      if (corte !== null && !yaTieneEseCorte) perfil.cortes = [corte];
+      await guardar({ ...app.datos, perfil });
+      app.aviso = `Ingreso puesto en ${monto(nomina.neto)}, del recibo del ${nomina.fechaPago}.`;
+      return null;
+    },
+  });
+}
+
+/**
  * Lee una captura de pantalla y la mete a la bandeja.
  *
  * El OCR convierte píxeles en TEXTO y ahí se acaba su trabajo: el monto, la fecha y el comercio
@@ -1769,6 +1829,11 @@ const acciones = {
     await guardar(aplicarRegla(app.datos, p.clave, p.categoriaId));
     app.aviso = `${p.cuantos} ${p.cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(p.categoriaId)}.`;
     render();
+  },
+
+  "subir-nomina"() {
+    const campo = document.getElementById("nomina");
+    if (campo) campo.click();
   },
 
   "elegir-captura"() {
@@ -2516,10 +2581,13 @@ export async function arrancar() {
   // Elegir una captura desde el botón. Va por `change` y no por `input`: un campo de archivo
   // no avisa de otra forma.
   document.addEventListener("change", (e) => {
-    if (e.target.dataset.accionArchivo !== "captura") return;
+    const cual = e.target.dataset.accionArchivo;
+    if (cual !== "captura" && cual !== "nomina") return;
     const archivo = e.target.files && e.target.files[0];
-    e.target.value = ""; // que elegir la misma imagen dos veces vuelva a disparar
-    if (archivo) leerCaptura(archivo);
+    e.target.value = ""; // que elegir el mismo archivo dos veces vuelva a disparar
+    if (!archivo) return;
+    if (cual === "captura") leerCaptura(archivo);
+    else aplicarNomina(archivo);
   });
 
   // Y pegar la captura directamente en la caja, que es lo que hace cualquiera después de

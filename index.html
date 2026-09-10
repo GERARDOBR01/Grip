@@ -301,7 +301,7 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 </style>
 </head>
 <body>
-<!-- Armado desde finanzas/, versión b59091cb. No editar a mano: se regenera con armar.mjs. -->
+<!-- Armado desde finanzas/, versión 146f85ce. No editar a mano: se regenera con armar.mjs. -->
 <div id="raiz"></div>
 <div id="hojas"></div>
 <noscript>
@@ -3054,6 +3054,141 @@ function aplicarRegla(datos, clave, categoriaId) {
   return tocados ? { ...datos, movimientos } : datos;
 }
 
+// ═══ motor/nomina.js ═══
+// El recibo de nómina — el dato exacto, sin teclear y sin adivinar.
+//
+// El ingreso es el número del que cuelgan todos los demás: sin él, el disponible es "—" y la
+// app no puede contestar nada. Y hasta hoy se tecleaba a mano, "más o menos lo que gano",
+// que es justo la clase de dato que envejece mal y desalinea todo lo que toca.
+//
+// En México el recibo de nómina no es un papel: es un CFDI que tu patrón está OBLIGADO a
+// timbrar cada vez que te paga, y que puedes bajar tú mismo de sat.gob.mx hasta cinco años
+// atrás. Trae el neto exacto, y de regalo las fechas del periodo pagado — con eso la app
+// configura sola tu quincena, que es de lo poco que todavía se tecleaba.
+//
+// ── Por qué esto NO usa un parser de XML ──
+//
+// Todo lo que hace falta son atributos de dos elementos. Leerlos así deja este archivo en el
+// motor: sin DOM, sin navegador, y con pruebas que corren en cualquier lado — que es la regla
+// de la casa. Un DOMParser habría obligado a sacarlo a la interfaz y a probarlo a ciegas.
+//
+// El prefijo del espacio de nombres se busca flojo (`cfdi:` y `nomina12:` son la costumbre,
+// no una obligación del estándar), pero el nombre del elemento se exige exacto.
+
+
+
+
+/** La etiqueta de apertura de un elemento, sin importar con qué prefijo venga. */
+function etiqueta(xml, nombre) {
+  const patron = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${nombre}\\b[^>]*>`, "i");
+  const encontrada = xml.match(patron);
+  return encontrada ? encontrada[0] : "";
+}
+
+/** Un atributo de esa etiqueta, o "" si no viene. */
+function atributo(etiquetaTexto, nombre) {
+  const encontrado = etiquetaTexto.match(new RegExp(`\\b${nombre}\\s*=\\s*"([^"]*)"`, "i"));
+  return encontrado ? encontrado[1] : "";
+}
+
+function centavosDe(texto) {
+  const valor = aCentavos(texto);
+  return valor === null ? null : Math.abs(valor);
+}
+
+/** El CFDI trae la fecha como "2026-09-15" o "2026-09-15T08:00:55". Nos quedamos con el día. */
+function soloFecha(texto) {
+  const dia = String(texto || "").slice(0, 10);
+  return esISO(dia) ? dia : "";
+}
+
+/**
+ * Lee un CFDI de nómina. Devuelve `{ nomina, veredicto }`; `nomina` es null si no se pudo.
+ *
+ * NUNCA lanza: un archivo que no es lo que dice ser tiene que dar una respuesta, no un error
+ * en la consola que nadie ve.
+ */
+function leerNomina(xml) {
+  const texto = String(xml || "");
+
+  const comprobante = etiqueta(texto, "Comprobante");
+  const nomina = etiqueta(texto, "Nomina");
+
+  if (!comprobante || !nomina) {
+    return {
+      nomina: null,
+      veredicto: veredicto(ESTADOS.SIN_DATOS_SUFICIENTES, SEVERIDADES.INFO,
+        "Esto no parece un recibo de nómina del SAT.",
+        { falta: "el XML del CFDI, no el PDF" }),
+    };
+  }
+
+  // El neto es el `Total` del comprobante: percepciones más otros pagos, menos deducciones.
+  // Es lo que de verdad te depositan, y por eso es el que manda.
+  const neto = centavosDe(atributo(comprobante, "Total"));
+  const percepciones = centavosDe(atributo(nomina, "TotalPercepciones"));
+  const deducciones = centavosDe(atributo(nomina, "TotalDeducciones"));
+  const otrosPagos = centavosDe(atributo(nomina, "TotalOtrosPagos"));
+
+  if (neto === null || neto === 0) {
+    return {
+      nomina: null,
+      veredicto: veredicto(ESTADOS.SIN_DATOS_SUFICIENTES, SEVERIDADES.INFO,
+        "El recibo no trae el total que te pagaron.", { falta: "cuánto" }),
+    };
+  }
+
+  const inicio = soloFecha(atributo(nomina, "FechaInicialPago"));
+  const fin = soloFecha(atributo(nomina, "FechaFinalPago"));
+  const dias = Number(atributo(nomina, "NumDiasPagados")) || null;
+
+  // Extraordinaria es aguinaldo, PTU, finiquito: dinero de verdad, pero no es tu quincena.
+  // Tomarlo como ingreso recurrente inflaría el disponible de todo un ciclo.
+  const tipo = (atributo(nomina, "TipoNomina") || "O").toUpperCase();
+  const ordinaria = tipo === "O";
+
+  return {
+    nomina: {
+      neto,
+      percepciones,
+      deducciones,
+      otrosPagos: otrosPagos === null ? 0 : otrosPagos,
+      fechaPago: soloFecha(atributo(nomina, "FechaPago")) || fin,
+      inicio,
+      fin,
+      dias,
+      tipo,
+      ordinaria,
+    },
+    veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK,
+      ordinaria
+        ? "Recibo leído: el neto sale del comprobante, no de una estimación."
+        : "Recibo leído, pero es una nómina extraordinaria (aguinaldo, PTU o finiquito): no es tu ingreso de cada quincena.",
+      { fuente: "CFDI", tipo }),
+  };
+}
+
+/**
+ * El día de corte que se deduce del periodo pagado, o null si no se deduce limpio.
+ *
+ * Un periodo del 1 al 15 dice, sin ambigüedad, que tu quincena corta el 15. Uno del 9 al 24 no
+ * dice nada que esta app pueda usar: sus ciclos viven dentro del mes. Y un periodo que termina
+ * el último día del mes tampoco aporta, porque el fin de mes ya es frontera siempre.
+ *
+ * Devolver null es la respuesta correcta en esos casos, no un fallo: se pregunta en vez de
+ * inventar un corte que desalinearía todos los ciclos.
+ */
+function corteDeNomina(nomina) {
+  if (!nomina || !esISO(nomina.inicio) || !esISO(nomina.fin)) return null;
+
+  const desde = partes(nomina.inicio);
+  const hasta = partes(nomina.fin);
+  if (desde.anio !== hasta.anio || desde.mes !== hasta.mes) return null;
+  if (hasta.dia >= diasEnMes(hasta.anio, hasta.mes)) return null;
+
+  return hasta.dia;
+}
+
 // ═══ motor/recurrentes.js ═══
 // Recurrentes — encontrar las suscripciones que ya estás pagando.
 //
@@ -5171,6 +5306,7 @@ async function leerImagen(archivo, alAvanzar = () => {}) {
 
 
 
+
 const app = {
   // Los ids de lo último aceptado en lote, para poder revertirlo entero.
   ultimaTanda: null,
@@ -6200,8 +6336,12 @@ function vistaAjustes() {
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
-        <div class="sub">lo que entra cada 15 días</div></div>
+        <div class="sub">lo que entra cada vez que te pagan</div></div>
         <button class="boton chico tenue" data-accion="editar-ingreso">${monto(perfil.ingresoQuincenal)}</button></div>
+      <div class="fila"><div class="crece"><div class="nombre">Sube tu recibo de nómina</div>
+        <div class="sub">el XML del SAT: pone el neto exacto y de paso tus días de corte</div></div>
+        <button class="boton chico" data-accion="subir-nomina">Subir</button>
+        <input id="nomina" type="file" accept="text/xml,application/xml,.xml" hidden data-accion-archivo="nomina"></div>
       <div class="fila"><div class="crece"><div class="nombre">Días de corte</div>
         <div class="sub">${perfil.cortes.length ? `quincenal (día ${perfil.cortes.join(", ")} y fin de mes)` : "mensual"}</div></div>
         <button class="boton chico tenue" data-accion="editar-cortes">Cambiar</button></div>
@@ -6640,6 +6780,61 @@ async function atenderLaSombra() {
 }
 
 /**
+ * Toma el ingreso del recibo de nómina, que es el dato exacto y no una estimación tecleada.
+ *
+ * Nunca lo aplica solo: el ingreso es el número del que cuelgan todos los demás, así que se
+ * enseña lo que se leyó y lo confirmas. Y si el recibo trae un corte que se deduce limpio, se
+ * ofrece aparte — cambiarle los ciclos a alguien sin avisar le movería todo el historial.
+ */
+async function aplicarNomina(archivo) {
+  if (!archivo) return;
+
+  let texto = "";
+  try {
+    texto = await archivo.text();
+  } catch (e) {
+    app.aviso = "No pude abrir ese archivo.";
+    return render();
+  }
+
+  const { nomina, veredicto: leido } = leerNomina(texto);
+  if (!nomina) {
+    app.aviso = `${leido.motivo}${leido.datos && leido.datos.falta ? ` Falta ${leido.datos.falta}.` : ""}`;
+    return render();
+  }
+
+  const corte = corteDeNomina(nomina);
+  const yaTieneEseCorte = corte !== null && app.datos.perfil.cortes.includes(corte);
+
+  abrirHoja({
+    titulo: "Tu recibo de nómina",
+    textoGuardar: "Usar estos datos",
+    extra: `<div class="rotulo" style="margin:0 0 10px;line-height:1.7">
+      Neto del periodo <b>${esc(nomina.inicio)} al ${esc(nomina.fin)}</b>:
+      <b>${monto(nomina.neto)}</b><br>
+      Percepciones ${monto(nomina.percepciones)} · deducciones ${monto(nomina.deducciones)}<br>
+      ${!nomina.ordinaria
+        ? `<span class="marca AJUSTADO">OJO</span> Es una nómina extraordinaria (aguinaldo, PTU o
+           finiquito). Es dinero de verdad, pero no es lo que entra cada quincena: si la usas
+           como ingreso, el disponible de todo el ciclo se infla.`
+        : corte === null
+          ? "El periodo no cae dentro de un solo mes, así que de aquí no puedo deducir tus días de corte. Ésos los pones tú."
+          : yaTieneEseCorte
+            ? `Y coincide con tu corte del día ${corte}, que ya tenías puesto.`
+            : `Y dice que tu quincena corta el día <b>${corte}</b>: lo pongo también.`}
+    </div>`,
+    campos: [],
+    async alGuardar() {
+      const perfil = { ...app.datos.perfil, ingresoQuincenal: nomina.neto };
+      if (corte !== null && !yaTieneEseCorte) perfil.cortes = [corte];
+      await guardar({ ...app.datos, perfil });
+      app.aviso = `Ingreso puesto en ${monto(nomina.neto)}, del recibo del ${nomina.fechaPago}.`;
+      return null;
+    },
+  });
+}
+
+/**
  * Lee una captura de pantalla y la mete a la bandeja.
  *
  * El OCR convierte píxeles en TEXTO y ahí se acaba su trabajo: el monto, la fecha y el comercio
@@ -6902,6 +7097,11 @@ const acciones = {
     await guardar(aplicarRegla(app.datos, p.clave, p.categoriaId));
     app.aviso = `${p.cuantos} ${p.cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(p.categoriaId)}.`;
     render();
+  },
+
+  "subir-nomina"() {
+    const campo = document.getElementById("nomina");
+    if (campo) campo.click();
   },
 
   "elegir-captura"() {
@@ -7649,10 +7849,13 @@ async function arrancar() {
   // Elegir una captura desde el botón. Va por `change` y no por `input`: un campo de archivo
   // no avisa de otra forma.
   document.addEventListener("change", (e) => {
-    if (e.target.dataset.accionArchivo !== "captura") return;
+    const cual = e.target.dataset.accionArchivo;
+    if (cual !== "captura" && cual !== "nomina") return;
     const archivo = e.target.files && e.target.files[0];
-    e.target.value = ""; // que elegir la misma imagen dos veces vuelva a disparar
-    if (archivo) leerCaptura(archivo);
+    e.target.value = ""; // que elegir el mismo archivo dos veces vuelva a disparar
+    if (!archivo) return;
+    if (cual === "captura") leerCaptura(archivo);
+    else aplicarNomina(archivo);
   });
 
   // Y pegar la captura directamente en la caja, que es lo que hace cualquiera después de

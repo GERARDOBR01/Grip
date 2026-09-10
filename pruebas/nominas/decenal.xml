@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Pago decenal: menos común que la quincena, pero existe. Sirve además para comprobar que el
+     corte sale del recibo y no de lo que la app ya tenía puesto. -->
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+                  xmlns:nomina12="http://www.sat.gob.mx/nomina12"
+                  Version="4.0" Fecha="2026-09-10T10:00:00" Moneda="MXN"
+                  SubTotal="4200.00" Descuento="700.00" Total="3500.00" TipoDeComprobante="N">
+  <cfdi:Complemento>
+    <nomina12:Nomina Version="1.2" TipoNomina="O"
+                     FechaPago="2026-09-10" FechaInicialPago="2026-09-01" FechaFinalPago="2026-09-10"
+                     NumDiasPagados="10" TotalPercepciones="4200.00" TotalDeducciones="700.00"/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

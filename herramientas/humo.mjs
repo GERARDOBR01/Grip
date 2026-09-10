@@ -556,6 +556,49 @@ await contextoOCR.close();
   console.log("  · el lector de imágenes no está: se salta. La app corre sin él, que es lo que se promete.");
 }
 
+// ── Sube tu recibo de nómina ────────────────────────────────────────────────────
+//
+// El ingreso es el número del que cuelgan todos los demás, y hasta hoy se tecleaba a ojo. Del
+// CFDI sale exacto — y de regalo los días de corte, que es de lo poco que quedaba a mano.
+// Nunca se aplica solo: se enseña lo leído y se confirma.
+
+const contextoNomina = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const nomina = await contextoNomina.newPage();
+await nomina.goto(`http://127.0.0.1:${puerto}/index.html`);
+await nomina.waitForSelector(".barra", { timeout: 8000 });
+await nomina.click('[data-vista="ajustes"]');
+await nomina.waitForSelector('[data-accion="subir-nomina"]');
+
+await nomina.setInputFiles("#nomina", join(RAIZ, "pruebas/nominas/decenal.xml"));
+await nomina.waitForSelector(".hoja, [data-accion=\"guardar-hoja\"]", { timeout: 8000 }).catch(() => {});
+await nomina.waitForTimeout(400);
+
+const loLeido = await nomina.textContent("body");
+revisar(
+  "el recibo se lee y se ENSEÑA antes de aplicarlo",
+  loLeido.includes("$3,500.00") && loLeido.includes("corta el día"),
+  loLeido.includes("$3,500.00") ? "" : "no salió el neto",
+);
+
+// Confirmar: y solo entonces cambia el perfil.
+const botonGuardar = await nomina.$('.hoja .boton:not(.tenue), [data-accion="guardar-hoja"]');
+if (botonGuardar) await botonGuardar.click();
+await nomina.waitForTimeout(600);
+
+const perfil = await nomina.evaluate(() => {
+  const filas = [...document.querySelectorAll(".fila")].map((f) => f.innerText);
+  return filas.join(" | ");
+});
+// El corte del recibo es 10, y la app venía con 15 puesto por defecto: si sale 10, salió del
+// recibo. Comprobarlo con un recibo que corta el 15 no habría probado nada.
+revisar(
+  "y al confirmarlo pone el ingreso exacto Y los días de corte del recibo",
+  perfil.includes("$3,500.00") && /d[íi]a 10\b/.test(perfil) && !/d[íi]a 15\b/.test(perfil),
+  perfil.split(" | ").filter((f) => /Ingreso|corte/i.test(f)).map((f) => f.replace(/\n/g, " ")).join(" · "),
+);
+
+await contextoNomina.close();
+
 // ── Compartir a la app desde Android ────────────────────────────────────────────
 //
 // El share_target pasó de GET a POST para poder recibir archivos, y ésa es la regresión más

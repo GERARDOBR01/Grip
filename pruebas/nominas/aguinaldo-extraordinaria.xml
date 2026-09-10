@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4"
+                  xmlns:nomina12="http://www.sat.gob.mx/nomina12"
+                  Version="4.0" Fecha="2026-12-15T09:00:00" Moneda="MXN"
+                  SubTotal="12000.00" Descuento="900.00" Total="11100.00" TipoDeComprobante="N">
+  <cfdi:Complemento>
+    <nomina12:Nomina Version="1.2" TipoNomina="E"
+                     FechaPago="2026-12-15" FechaInicialPago="2026-12-01" FechaFinalPago="2026-12-15"
+                     NumDiasPagados="15" TotalPercepciones="12000.00" TotalDeducciones="900.00"
+                     TotalOtrosPagos="0.00"/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>
