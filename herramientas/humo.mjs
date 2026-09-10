@@ -479,6 +479,131 @@ revisar("al abrir NO se pide permiso de avisos: eso se enciende en Ajustes",
   (await atajo.evaluate(() => window.__pidioPermiso)) === false);
 await contextoAtajo.close();
 
+// ── La sombra de notificaciones, que es donde vive la gente ─────────────────────
+//
+// La jugada del proyecto: aceptar un cargo desde la pantalla de bloqueo, sin abrir nada. Hoy
+// eso son cinco pasos —desbloquear, abrir, ir a Bandeja, buscarlo, Aceptar—; aquí es uno.
+//
+// Un navegador sin cabeza no concede permiso de notificaciones y no hay bandera que lo cambie,
+// así que las notificaciones se DOBLAN: se apunta lo que la app pidió publicar. Eso no debilita
+// la prueba, la afila — lo que importa no es que Chromium sepa pintar un aviso (eso es cosa
+// suya), sino que la app pida el aviso correcto y que el service worker haga lo correcto al
+// tocarlo. Las dos cosas se comprueban de verdad, y el manejador que se dispara es el mismo
+// que corre en tu teléfono.
+
+const contextoSombra = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const sombra = await contextoSombra.newPage();
+await sombra.addInitScript(() => {
+  try { localStorage.setItem("grip:avisos", JSON.stringify({ encendidos: true, mandados: {} })); } catch (e) {}
+  // El doble: permiso concedido del lado de la página, y showNotification apuntando en vez de
+  // pintando. Nada llega al navegador de verdad, así que nada depende de su permiso.
+  try { Object.defineProperty(Notification, "permission", { get: () => "granted" }); } catch (e) {}
+  window.__avisos = [];
+  const original = ServiceWorkerRegistration.prototype.showNotification;
+  ServiceWorkerRegistration.prototype.showNotification = function (titulo, opciones) {
+    window.__avisos.push({ titulo, ...(opciones || {}) });
+    return Promise.resolve();
+  };
+  window.__showNotificationReal = original;
+});
+await sombra.goto(`http://127.0.0.1:${puerto}/index.html`);
+await sombra.waitForSelector(".barra", { timeout: 8000 });
+await sombra.evaluate(async () => { await navigator.serviceWorker.ready; });
+
+// La barra: se publica sola al guardar, con su fecha, y con un tag fijo para no apilarse.
+await sombra.click('[data-vista="bandeja"]');
+await sombra.waitForSelector("#aviso");
+await sombra.fill("#aviso", "Banorte: Compra por $89.00 MXN en OXXO CENTRO el 09/09/2026 con tu tarjeta terminación 4821.");
+await sombra.click('[data-accion="leer-aviso"]');
+await sombra.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+await sombra.waitForTimeout(600);
+
+const barras = await sombra.evaluate(() => window.__avisos.filter((a) => a.tag === "grip:barra"));
+revisar(
+  "la barra se queda en la sombra, con su fecha y un botón para anotar",
+  barras.length > 0 &&
+    /al \d{4}-\d{2}-\d{2}/.test(barras[barras.length - 1].body || "") &&
+    (barras[barras.length - 1].actions || []).some((a) => a.action === "anotar") &&
+    barras.every((b) => b.tag === "grip:barra"),
+  barras.length ? `${barras[barras.length - 1].titulo} — ${barras[barras.length - 1].body}` : "no se publicó",
+);
+
+// Y ahora lo que de verdad importa: tocar «Aceptar» en la sombra.
+const idEntrada = await sombra.evaluate(() =>
+  document.querySelector('.tarjeta.entrada [data-accion="aceptar-entrada"]').dataset.id);
+
+/** Dispara la acción DENTRO del service worker, como si la hubieras tocado en la sombra. */
+async function tocarEnLaSombra(accion, entradaId) {
+  const [obrero] = contextoSombra.serviceWorkers();
+  if (!obrero) return false;
+  return obrero.evaluate(async ([accionTocada, id]) => {
+    const evento = new Event("notificationclick");
+    Object.defineProperty(evento, "notification", {
+      value: { data: { entradaId: id, acuse: "Aceptado" }, tag: `entrada:${id}`, close() {} },
+    });
+    Object.defineProperty(evento, "action", { value: accionTocada });
+    const esperas = [];
+    evento.waitUntil = (p) => esperas.push(p);
+    self.dispatchEvent(evento);
+    await Promise.all(esperas);
+    return true;
+  }, [accion, entradaId]);
+}
+
+// Camino 1: la app abierta. El service worker manda la intención directo y se ve al instante.
+revisar("el service worker escucha el toque", await tocarEnLaSombra("aceptar", idEntrada));
+await sombra.waitForTimeout(800);
+// A «Hoy» antes de mirar: aceptar no cambia de pantalla —sigues en Bandeja— y los movimientos
+// ya aceptados solo se listan en Hoy. Buscarlos en Bandeja sería buscarlos donde no van.
+await sombra.click('[data-vista="hoy"]');
+await sombra.waitForTimeout(200);
+const trasAceptar = await sombra.evaluate(() => ({
+  entradas: document.querySelectorAll(".tarjeta.entrada").length,
+  cuerpo: document.body.innerText,
+}));
+revisar(
+  "aceptar desde la sombra crea el movimiento, con la app abierta",
+  trasAceptar.entradas === 0 && trasAceptar.cuerpo.includes("OXXO CENTRO"),
+  `${trasAceptar.entradas} entradas siguen esperando`,
+);
+
+// Camino 2: la app CERRADA. La intención se encola en IndexedDB y se aplica al abrir.
+await sombra.click('[data-vista="bandeja"]');
+await sombra.waitForSelector("#aviso");
+await sombra.fill("#aviso", "Banorte: Compra por $47.00 MXN en FARMACIA SAN JORGE el 09/09/2026 con tu tarjeta terminación 4821.");
+await sombra.click('[data-accion="leer-aviso"]');
+await sombra.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+const idCerrada = await sombra.evaluate(() =>
+  document.querySelector('.tarjeta.entrada [data-accion="aceptar-entrada"]').dataset.id);
+
+await sombra.close(); // sin ninguna ventana abierta: la intención tiene que encolarse
+await tocarEnLaSombra("aceptar", idCerrada);
+
+const reabierta = await contextoSombra.newPage();
+await reabierta.goto(`http://127.0.0.1:${puerto}/index.html`);
+await reabierta.waitForSelector(".barra", { timeout: 8000 });
+await reabierta.waitForTimeout(1200);
+const trasReabrir = await reabierta.evaluate(() => ({
+  entradas: document.querySelectorAll(".tarjeta.entrada").length,
+  cuerpo: document.body.innerText,
+}));
+revisar(
+  "y con la app CERRADA se encola y se aplica al abrir",
+  trasReabrir.cuerpo.includes("FARMACIA SAN JORGE") && trasReabrir.entradas === 0,
+  `${trasReabrir.entradas} entradas siguen esperando`,
+);
+
+// La cola se vacía al drenarla: una intención aplicada dos veces sería un gasto duplicado, y
+// un gasto duplicado es peor que uno perdido porque el perdido lo notas.
+await reabierta.reload();
+await reabierta.waitForSelector(".barra", { timeout: 8000 });
+await reabierta.waitForTimeout(800);
+const dobles = await reabierta.evaluate(() =>
+  (document.body.innerText.match(/FARMACIA SAN JORGE/g) || []).length);
+revisar("y no se aplica dos veces al volver a abrir", dobles === 1, `${dobles} veces en pantalla`);
+
+await contextoSombra.close();
+
 // ── Corregir una vez, no veinte ─────────────────────────────────────────────────
 //
 // Aprender hacia adelante dejaba media promesa cumplida: el siguiente cargo de OXXO llegaba

@@ -257,9 +257,24 @@ export function deshacerTanda(datos, ids) {
   return (ids || []).reduce((acumulado, id) => deshacerEntrada(acumulado, id), datos);
 }
 
+/**
+ * ¿Esta entrada se puede aceptar sin mirarla? Es el permiso más delicado del proyecto: gobierna
+ * tanto el «aceptar todo» de la bandeja como el botón de aceptar en la notificación, donde ni
+ * siquiera estás viendo la app.
+ *
+ * Tres cosas lo impiden, y cada una por su motivo:
+ *   · confianza que no sea alta — el lector tuvo que suponer algo;
+ *   · que reemplace a otra — hay que decidir si se suma o se sustituye, y eso no lo decide una app;
+ *   · que parezca un traspaso entre tus propias cuentas — aceptarlo cuenta como gasto un dinero
+ *     que solo se movió de bolsillo, y la app mentiría hacia arriba.
+ */
+export function sinNadaQueRevisar(entrada) {
+  return Boolean(entrada) && entrada.confianza === "alta" && !entrada.reemplaza && !entrada.posibleTraspaso;
+}
+
 /** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */
 export function deConfianzaAlta(datos) {
-  return pendientes(datos).filter((e) => e.confianza === "alta" && !e.reemplaza);
+  return pendientes(datos).filter(sinNadaQueRevisar);
 }
 
 // ── Traer del correo ───────────────────────────────────────────────────────

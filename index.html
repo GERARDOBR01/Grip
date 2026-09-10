@@ -301,7 +301,7 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 </style>
 </head>
 <body>
-<!-- Armado desde finanzas/, versión 6dcb831a. No editar a mano: se regenera con armar.mjs. -->
+<!-- Armado desde finanzas/, versión 3b794181. No editar a mano: se regenera con armar.mjs. -->
 <div id="raiz"></div>
 <div id="hojas"></div>
 <noscript>
@@ -3609,9 +3609,24 @@ function deshacerTanda(datos, ids) {
   return (ids || []).reduce((acumulado, id) => deshacerEntrada(acumulado, id), datos);
 }
 
+/**
+ * ¿Esta entrada se puede aceptar sin mirarla? Es el permiso más delicado del proyecto: gobierna
+ * tanto el «aceptar todo» de la bandeja como el botón de aceptar en la notificación, donde ni
+ * siquiera estás viendo la app.
+ *
+ * Tres cosas lo impiden, y cada una por su motivo:
+ *   · confianza que no sea alta — el lector tuvo que suponer algo;
+ *   · que reemplace a otra — hay que decidir si se suma o se sustituye, y eso no lo decide una app;
+ *   · que parezca un traspaso entre tus propias cuentas — aceptarlo cuenta como gasto un dinero
+ *     que solo se movió de bolsillo, y la app mentiría hacia arriba.
+ */
+function sinNadaQueRevisar(entrada) {
+  return Boolean(entrada) && entrada.confianza === "alta" && !entrada.reemplaza && !entrada.posibleTraspaso;
+}
+
 /** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */
 function deConfianzaAlta(datos) {
-  return pendientes(datos).filter((e) => e.confianza === "alta" && !e.reemplaza);
+  return pendientes(datos).filter(sinNadaQueRevisar);
 }
 
 // ── Traer del correo ───────────────────────────────────────────────────────
@@ -3714,6 +3729,7 @@ function absorberAvisos(datos, avisos, iso = hoyISO()) {
 
 
 
+
 /** Cuántos avisos sin confirmar hacen falta para que valga la pena decirlo. */
 const AVISOS_PARA_MOLESTAR = 3;
 
@@ -3760,6 +3776,148 @@ function recordatoriosDeHoy(datos, iso = hoyISO()) {
   }
 
   return salida;
+}
+
+// ── La notificación como mesa de trabajo ───────────────────────────────────
+//
+// Aquí está la jugada del proyecto, y no es leer la notificación del banco —eso ninguna app
+// web puede hacerlo, y de todos modos la mitad de esas notificaciones ni traen el monto: «Nu ·
+// Retiraste dinero de tu Cajita» y ya. La jugada es que la notificación de GRIP sea donde
+// resuelves tu dinero, sin abrir nada.
+//
+// Aceptar un cargo hoy cuesta cinco pasos: desbloquear, abrir, ir a Bandeja, buscarlo, Aceptar.
+// Con un botón en la sombra es uno. Esto decide qué dice ese aviso y —lo que más importa— si
+// lleva botón de aceptar o no.
+
+/** El texto que ve alguien que NO va a abrir la app. Devuelve null si no hay nada que decir. */
+function avisoDeEntrada(datos, entrada) {
+  if (!entrada || entrada.estado !== ESTADOS_BANDEJA.PENDIENTE) return null;
+
+  const quien = entrada.comercio || (entrada.movimiento && entrada.movimiento.nota) || "Un movimiento";
+  const clave = `entrada:${entrada.id}`;
+
+  // Sin monto no hay nada que aceptar de un toque: lo que falta lo pones tú, mirando.
+  if (!entrada.movimiento || !entrada.movimiento.monto) {
+    return {
+      clave, entradaId: entrada.id, aceptable: false,
+      titulo: "Llegó un aviso que no supe leer",
+      cuerpo: `${quien} · dime cuánto y dónde`,
+      acuse: null,
+    };
+  }
+
+  const signo = entrada.movimiento.tipo === TIPOS.GASTO ? "−" : "+";
+  const cifra = `${signo}${formatear(entrada.movimiento.monto)}`;
+  const categoria = categoriaPorId(datos, entrada.movimiento.categoria);
+  const aceptable = sinNadaQueRevisar(entrada);
+
+  // El motivo va en el cuerpo cuando NO se puede aceptar de un toque. Un botón ausente sin
+  // explicación se lee como un error de la app; con el motivo, se lee como cuidado.
+  const porQueNo = entrada.posibleTraspaso
+    ? "parece movimiento entre tus cuentas"
+    : entrada.reemplaza
+      ? "puede ser el cargo final de uno que ya tienes"
+      : "tuve que suponer algo";
+
+  return {
+    clave,
+    entradaId: entrada.id,
+    aceptable,
+    titulo: `${quien} · ${cifra}`,
+    cuerpo: aceptable
+      ? [categoria ? categoria.nombre : null, "de tu correo"].filter(Boolean).join(" · ")
+      : `Ábrelo: ${porQueNo}`,
+    acuse: aceptable ? `Aceptado · ${quien} ${cifra}` : null,
+  };
+}
+
+/**
+ * La línea que se queda en la sombra: tu dinero, sin abrir la app.
+ *
+ * Va sellada con su fecha por la misma razón que el correo diario: si llevas dos días sin
+ * abrir, estos números son de hace dos días y decirlo cuesta una línea. Presentarlos como si
+ * fueran de ahora sería mentir en la pantalla de bloqueo, que es peor que no decir nada.
+ */
+function barraDeHoy(panel, iso = hoyISO()) {
+  if (!panel) return null;
+
+  // El sello va SIEMPRE, no solo cuando el número es viejo. El texto de una notificación se
+  // congela cuando se publica: nadie puede volver a redactarlo cuando tú lo lees, tres días
+  // después. Así que o lleva su fecha desde el principio, o miente en la pantalla de bloqueo
+  // el día que no abras la app. Es la misma regla del correo diario.
+  const sello = `al ${iso}`;
+
+  if (panel.disponible === null) {
+    return { titulo: "Grip", cuerpo: `Anota un gasto en dos segundos · ${sello}` };
+  }
+
+  return {
+    titulo: `Te quedan ${formatear(panel.disponible)}`,
+    cuerpo: panel.porDia === null
+      ? `Hasta el ${panel.ciclo.fin} · ${sello}`
+      : `${formatear(panel.porDia)} por día hasta el ${panel.ciclo.fin} · ${sello}`,
+  };
+}
+
+// ═══ almacen/intenciones.js ═══
+// La cola de intenciones — lo que decidiste en la sombra, esperando a que la app lo aplique.
+//
+// La otra mitad vive en el service worker (lo genera herramientas/armar.mjs). Él escribe, esto
+// lee y vacía, y son dos mitades a propósito: cada lado hace UNA cosa, así que no hay código
+// compartido que mantener en dos sitios ni riesgo de que se pisen.
+//
+// Va en su propia base de IndexedDB, aparte de tus datos. Una intención no es un movimiento:
+// es «dijiste que sí a esto». El movimiento lo crea el motor cuando la app la aplica, con las
+// mismas reglas de siempre. Si algo sale mal aquí, lo peor que pasa es que un cargo siga
+// esperando en la bandeja — nunca que se cuente dos veces ni que se pierda dinero.
+
+const BASE_INTENCIONES = "grip-intenciones";
+const COLA_INTENCIONES = "cola";
+
+function abrirCola() {
+  return new Promise((listo, falla) => {
+    let peticion;
+    try {
+      peticion = indexedDB.open(BASE_INTENCIONES, 1);
+    } catch (e) {
+      return falla(e); // hay navegadores donde tocar indexedDB ya lanza
+    }
+    peticion.onupgradeneeded = () => {
+      const base = peticion.result;
+      if (!base.objectStoreNames.contains(COLA_INTENCIONES)) base.createObjectStore(COLA_INTENCIONES, { autoIncrement: true });
+    };
+    peticion.onsuccess = () => listo(peticion.result);
+    peticion.onerror = () => falla(peticion.error || new Error("no se pudo abrir la cola"));
+  });
+}
+
+/**
+ * Saca todo lo que haya y deja la cola vacía, en UNA transacción.
+ *
+ * Leer y borrar juntos es deliberado: si se leyera primero y se borrara después, un cierre a
+ * media aplicación dejaría intenciones ya aplicadas listas para aplicarse otra vez. Un gasto
+ * duplicado es peor que uno perdido, porque el perdido lo notas.
+ *
+ * Nunca lanza: sin IndexedDB devuelve `[]` y la app sigue igual.
+ */
+async function drenarIntenciones() {
+  let base = null;
+  try {
+    base = await abrirCola();
+    return await new Promise((listo) => {
+      const trato = base.transaction(COLA_INTENCIONES, "readwrite");
+      const almacen = trato.objectStore(COLA_INTENCIONES);
+      const todas = almacen.getAll();
+      todas.onsuccess = () => almacen.clear();
+      trato.oncomplete = () => listo(todas.result || []);
+      trato.onerror = () => listo([]);
+      trato.onabort = () => listo([]);
+    });
+  } catch (e) {
+    return [];
+  } finally {
+    if (base) try { base.close(); } catch (e) {}
+  }
 }
 
 // ═══ almacen/archivo.js ═══
@@ -4621,6 +4779,23 @@ function podarMandados(mandados, iso) {
   return vivos;
 }
 
+/**
+ * El registro del service worker, o null.
+ *
+ * Los botones de la notificación SOLO existen a través del service worker: un `new
+ * Notification()` suelto no los admite, porque nadie recogería el toque. Así que donde no haya
+ * service worker —abierta desde el disco, por ejemplo— hay aviso pero no botones, y eso es una
+ * caída limpia, no un error.
+ */
+async function registro() {
+  try {
+    if (!globalThis.navigator || !navigator.serviceWorker) return null;
+    return await navigator.serviceWorker.ready;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function mostrarAviso(titulo, cuerpo) {
   const opciones = { body: cuerpo, icon: "./icono-192.png", badge: "./icono-192.png", tag: titulo };
   try {
@@ -4686,6 +4861,90 @@ function ponerGlobo(cuantos) {
 /** Cada cuánto conviene volver a mirar mientras la app siga abierta, en milisegundos. */
 const ESPERA_ENTRE_REVISIONES = MINUTOS_ENTRE_REVISIONES * 60000;
 
+// ── La sombra como mesa de trabajo ─────────────────────────────────────────
+//
+// Lo que se publica aquí no es «te informo»: es «resuélvelo desde aquí». El service worker
+// recoge el toque (lo genera herramientas/armar.mjs) y la app aplica la intención con el motor
+// de siempre.
+
+/**
+ * Publica el aviso de una entrada de la bandeja, con su botón de aceptar cuando toca.
+ *
+ * El `tag` es el id de la entrada: publicar dos veces la misma no apila dos avisos, la
+ * reemplaza. Sin eso, abrir la app tres veces dejaría tres avisos del mismo cargo.
+ */
+async function avisarDeEntrada(aviso) {
+  if (!aviso || !estadoDeAvisos().encendidos) return false;
+
+  const registrado = await registro();
+  if (!registrado || !registrado.showNotification) return false;
+
+  const acciones = aviso.aceptable
+    ? [{ action: "aceptar", title: "Aceptar" }, { action: "ver", title: "Ver" }]
+    : [{ action: "ver", title: "Ver" }];
+
+  try {
+    await registrado.showNotification(aviso.titulo, {
+      body: aviso.cuerpo,
+      icon: "./icono-192.png",
+      badge: "./icono-192.png",
+      tag: aviso.clave,
+      actions: acciones,
+      data: { entradaId: aviso.entradaId, acuse: aviso.acuse },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** El tag de la barra: fijo, para que se reemplace a sí misma en vez de acumularse. */
+const TAG_BARRA = "grip:barra";
+
+/**
+ * La barra que se queda en la sombra con tu número y un botón para anotar.
+ *
+ * Silenciosa a propósito: no vibra, no suena, no te llama. Está ahí para que la LEAS de reojo
+ * entre las demás notificaciones, no para interrumpirte. Es la app sin abrir la app.
+ */
+async function ponerBarra(barra) {
+  if (!barra || !estadoDeAvisos().encendidos) return false;
+
+  const registrado = await registro();
+  if (!registrado || !registrado.showNotification) return false;
+
+  try {
+    await registrado.showNotification(barra.titulo, {
+      body: barra.cuerpo,
+      icon: "./icono-192.png",
+      badge: "./icono-192.png",
+      tag: TAG_BARRA,
+      silent: true,
+      renotify: false,
+      requireInteraction: true, // que no se vaya sola: su gracia es quedarse
+      actions: [
+        // Donde el navegador ofrezca escribir en la sombra, se anota sin abrir nada. Donde no,
+        // `type` se ignora y queda un botón normal que abre el teclado. Las dos cosas sirven.
+        { action: "anotar", type: "text", title: "Anotar gasto", placeholder: "120 tacos" },
+        { action: "abrir", title: "Abrir" },
+      ],
+      data: { entradaId: null, acuse: null },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Quita la barra. Apagar los avisos tiene que quitarla de verdad, no solo dejar de moverla. */
+async function quitarBarra() {
+  const registrado = await registro();
+  if (!registrado || !registrado.getNotifications) return;
+  try {
+    for (const n of await registrado.getNotifications({ tag: TAG_BARRA })) n.close();
+  } catch (e) {}
+}
+
 // ═══ interfaz/ui.js ═══
 // Interfaz — render directo, sin framework y sin dependencias.
 //
@@ -4695,6 +4954,7 @@ const ESPERA_ENTRE_REVISIONES = MINUTOS_ENTRE_REVISIONES * 60000;
 // Regla de la pantalla: ningún número aparece sin su contexto. Si el motor devolvió
 // SIN_DATOS_SUFICIENTES, aquí se ve el hueco declarado con lo que falta capturar — nunca
 // un cero disfrazado de dato.
+
 
 
 
@@ -5964,7 +6224,10 @@ async function atenderCompartido() {
   // Los atajos de Android: dejar apretado el ícono y caer donde se iba a caer de todos modos,
   // dos toques antes. No traen datos, solo dicen a dónde ibas.
   if (!texto && atajo) {
-    if (atajo === "pegar") {
+    if (atajo === "bandeja") {
+      app.vista = "bandeja";
+      render();
+    } else if (atajo === "pegar") {
       app.vista = "bandeja";
       render();
       const caja = document.getElementById("aviso");
@@ -6063,8 +6326,73 @@ async function revisarRecordatorios() {
   try {
     ponerGlobo(resumenBandeja(app.datos).pendientes);
     await avisarDe(recordatoriosDeHoy(app.datos, app.hoy), app.hoy);
+    if (estadoDeAvisos().encendidos) await ponerBarra(barraDeHoy(panelHoy(app.datos, app.hoy), app.hoy));
+    else await quitarBarra();
   } catch (e) {
     // Un recordatorio que no sale no es un problema de nadie.
+  }
+}
+
+/**
+ * Publica en la sombra lo que acaba de caer a la bandeja, con su botón de aceptar.
+ *
+ * Es la mitad que convierte la bandeja de un trámite en un toque: llegó el cargo, lo aceptas
+ * desde la pantalla de bloqueo y nunca abriste la app. El `tag` por entrada evita que abrir la
+ * app tres veces deje tres avisos del mismo cargo.
+ */
+async function avisarDeLoQueLlego(entradasNuevas) {
+  if (!estadoDeAvisos().encendidos) return;
+  for (const entrada of entradasNuevas) {
+    try {
+      await avisarDeEntrada(avisoDeEntrada(app.datos, entrada));
+    } catch (e) {
+      // Que un aviso no salga no puede impedir que salgan los demás.
+    }
+  }
+}
+
+/**
+ * Aplica lo que la persona decidió en la sombra.
+ *
+ * El service worker no calcula nada: recoge la intención y llega aquí, donde se aplica con el
+ * mismo `aceptarEntrada` que usa el botón de la bandeja. Un solo camino, como con el puente.
+ */
+async function aplicarIntencion(intencion) {
+  if (!intencion) return;
+
+  if (intencion.accion === "aceptar" && intencion.entradaId) {
+    const { datos, error } = aceptarEntrada(app.datos, intencion.entradaId, {}, app.hoy);
+    // Que ya no esté no es un error que valga la pena contar: la aceptaste dos veces, o la
+    // aceptaste aquí después de aceptarla allá. El resultado es el mismo y es el correcto.
+    if (!error) await guardar(datos);
+    return;
+  }
+
+  if (intencion.accion === "ver") {
+    app.vista = "bandeja";
+    return render();
+  }
+
+  if (intencion.accion === "anotar") {
+    // Con respuesta escrita en la sombra viene el texto; sin ella, viene vacío y se abre la
+    // captura en blanco, que es exactamente a lo que ibas.
+    hojaMovimiento(intencion.texto ? { valores: { monto: primerNumero(intencion.texto), nota: intencion.texto } } : {});
+  }
+}
+
+/** El primer número de un texto suelto, como campo de monto. «120 tacos» → «120». */
+function primerNumero(texto) {
+  const encontrado = String(texto || "").match(/\d+(?:[.,]\d{1,2})?/);
+  return encontrado ? encontrado[0].replace(",", ".") : "";
+}
+
+/** Lo que quedó pendiente de la sombra mientras la app estaba cerrada. */
+async function atenderLaSombra() {
+  try {
+    for (const intencion of await drenarIntenciones()) await aplicarIntencion(intencion);
+  } catch (e) {
+    // Una intención que no se pudo aplicar deja el cargo esperando en la bandeja. Se pierde un
+    // toque, no un gasto.
   }
 }
 
@@ -6119,9 +6447,14 @@ async function traerDelPuenteEnSilencio() {
   if (!tocaTraer(previa ? previa.sello : 0)) return;
 
   try {
+    const antes = new Set((app.datos.bandeja || []).map((e) => e.id));
     const { datos, nuevos, sinLeer } = await irPorCorreo(config);
     if (nuevos + sinLeer === 0) return;
     await guardar(datos);
+
+    // Y ahora lo que importa: que aparezca en la sombra, con su botón. Va después de guardar
+    // —nunca antes— para que aceptar desde la notificación encuentre la entrada donde debe.
+    await avisarDeLoQueLlego((app.datos.bandeja || []).filter((e) => !antes.has(e.id)));
   } catch (e) {
     // `guardar` ya avisó y revirtió si fue el disco. Traer correo no puede tumbar la app.
   }
@@ -6285,8 +6618,9 @@ const acciones = {
     render();
   },
 
-  "apagar-avisos"() {
+  async "apagar-avisos"() {
     apagarAvisos();
+    await quitarBarra(); // dejar de moverla no basta: hay que bajarla
     render();
   },
 
@@ -7041,6 +7375,20 @@ async function arrancar() {
   await tirarLoViejo();
   render();
   await atenderCompartido();
+
+  // Lo primero: lo que decidiste en la sombra mientras esto estaba cerrado. Antes de traer
+  // nada nuevo, para que aceptar un cargo y que llegue otro no se pisen.
+  await atenderLaSombra();
+
+  // Con la app abierta, el service worker no encola: manda la intención directo y se ve al
+  // instante, que es como debe sentirse tocar un botón.
+  try {
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data && e.data.de === "grip" && e.data.intencion) aplicarIntencion(e.data.intencion);
+      });
+    }
+  } catch (e) {}
 
   // Que la bandeja se llene sola. Va después de pintar y de atender lo compartido: nada de
   // esto debe hacer esperar a la pantalla.

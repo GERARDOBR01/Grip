@@ -26,10 +26,12 @@ import {
 import { montosFrecuentes } from "../motor/rapido.js";
 import { reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla } from "../motor/aprendizaje.js";
 import { marcaDe } from "../motor/lectura.js";
-import { recordatoriosDeHoy } from "../motor/recordatorios.js";
+import { recordatoriosDeHoy, avisoDeEntrada, barraDeHoy } from "../motor/recordatorios.js";
 import {
   estadoDeAvisos, encenderAvisos, apagarAvisos, avisarDe, ponerGlobo, ESPERA_ENTRE_REVISIONES,
+  avisarDeEntrada, ponerBarra, quitarBarra,
 } from "./avisos.js";
+import { drenarIntenciones } from "../almacen/intenciones.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
@@ -1285,7 +1287,10 @@ async function atenderCompartido() {
   // Los atajos de Android: dejar apretado el ícono y caer donde se iba a caer de todos modos,
   // dos toques antes. No traen datos, solo dicen a dónde ibas.
   if (!texto && atajo) {
-    if (atajo === "pegar") {
+    if (atajo === "bandeja") {
+      app.vista = "bandeja";
+      render();
+    } else if (atajo === "pegar") {
       app.vista = "bandeja";
       render();
       const caja = document.getElementById("aviso");
@@ -1384,8 +1389,73 @@ async function revisarRecordatorios() {
   try {
     ponerGlobo(resumenBandeja(app.datos).pendientes);
     await avisarDe(recordatoriosDeHoy(app.datos, app.hoy), app.hoy);
+    if (estadoDeAvisos().encendidos) await ponerBarra(barraDeHoy(panelHoy(app.datos, app.hoy), app.hoy));
+    else await quitarBarra();
   } catch (e) {
     // Un recordatorio que no sale no es un problema de nadie.
+  }
+}
+
+/**
+ * Publica en la sombra lo que acaba de caer a la bandeja, con su botón de aceptar.
+ *
+ * Es la mitad que convierte la bandeja de un trámite en un toque: llegó el cargo, lo aceptas
+ * desde la pantalla de bloqueo y nunca abriste la app. El `tag` por entrada evita que abrir la
+ * app tres veces deje tres avisos del mismo cargo.
+ */
+async function avisarDeLoQueLlego(entradasNuevas) {
+  if (!estadoDeAvisos().encendidos) return;
+  for (const entrada of entradasNuevas) {
+    try {
+      await avisarDeEntrada(avisoDeEntrada(app.datos, entrada));
+    } catch (e) {
+      // Que un aviso no salga no puede impedir que salgan los demás.
+    }
+  }
+}
+
+/**
+ * Aplica lo que la persona decidió en la sombra.
+ *
+ * El service worker no calcula nada: recoge la intención y llega aquí, donde se aplica con el
+ * mismo `aceptarEntrada` que usa el botón de la bandeja. Un solo camino, como con el puente.
+ */
+async function aplicarIntencion(intencion) {
+  if (!intencion) return;
+
+  if (intencion.accion === "aceptar" && intencion.entradaId) {
+    const { datos, error } = aceptarEntrada(app.datos, intencion.entradaId, {}, app.hoy);
+    // Que ya no esté no es un error que valga la pena contar: la aceptaste dos veces, o la
+    // aceptaste aquí después de aceptarla allá. El resultado es el mismo y es el correcto.
+    if (!error) await guardar(datos);
+    return;
+  }
+
+  if (intencion.accion === "ver") {
+    app.vista = "bandeja";
+    return render();
+  }
+
+  if (intencion.accion === "anotar") {
+    // Con respuesta escrita en la sombra viene el texto; sin ella, viene vacío y se abre la
+    // captura en blanco, que es exactamente a lo que ibas.
+    hojaMovimiento(intencion.texto ? { valores: { monto: primerNumero(intencion.texto), nota: intencion.texto } } : {});
+  }
+}
+
+/** El primer número de un texto suelto, como campo de monto. «120 tacos» → «120». */
+function primerNumero(texto) {
+  const encontrado = String(texto || "").match(/\d+(?:[.,]\d{1,2})?/);
+  return encontrado ? encontrado[0].replace(",", ".") : "";
+}
+
+/** Lo que quedó pendiente de la sombra mientras la app estaba cerrada. */
+async function atenderLaSombra() {
+  try {
+    for (const intencion of await drenarIntenciones()) await aplicarIntencion(intencion);
+  } catch (e) {
+    // Una intención que no se pudo aplicar deja el cargo esperando en la bandeja. Se pierde un
+    // toque, no un gasto.
   }
 }
 
@@ -1440,9 +1510,14 @@ async function traerDelPuenteEnSilencio() {
   if (!tocaTraer(previa ? previa.sello : 0)) return;
 
   try {
+    const antes = new Set((app.datos.bandeja || []).map((e) => e.id));
     const { datos, nuevos, sinLeer } = await irPorCorreo(config);
     if (nuevos + sinLeer === 0) return;
     await guardar(datos);
+
+    // Y ahora lo que importa: que aparezca en la sombra, con su botón. Va después de guardar
+    // —nunca antes— para que aceptar desde la notificación encuentre la entrada donde debe.
+    await avisarDeLoQueLlego((app.datos.bandeja || []).filter((e) => !antes.has(e.id)));
   } catch (e) {
     // `guardar` ya avisó y revirtió si fue el disco. Traer correo no puede tumbar la app.
   }
@@ -1606,8 +1681,9 @@ const acciones = {
     render();
   },
 
-  "apagar-avisos"() {
+  async "apagar-avisos"() {
     apagarAvisos();
+    await quitarBarra(); // dejar de moverla no basta: hay que bajarla
     render();
   },
 
@@ -2362,6 +2438,20 @@ export async function arrancar() {
   await tirarLoViejo();
   render();
   await atenderCompartido();
+
+  // Lo primero: lo que decidiste en la sombra mientras esto estaba cerrado. Antes de traer
+  // nada nuevo, para que aceptar un cargo y que llegue otro no se pisen.
+  await atenderLaSombra();
+
+  // Con la app abierta, el service worker no encola: manda la intención directo y se ve al
+  // instante, que es como debe sentirse tocar un botón.
+  try {
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data && e.data.de === "grip" && e.data.intencion) aplicarIntencion(e.data.intencion);
+      });
+    }
+  } catch (e) {}
 
   // Que la bandeja se llene sola. Va después de pintar y de atender lo compartido: nada de
   // esto debe hacer esperar a la pantalla.
