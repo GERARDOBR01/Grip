@@ -1,0 +1,9 @@
+{
+  "banco": "santander",
+  "tipo": "ingreso",
+  "monto": 15000,
+  "fecha": "2026-09-07",
+  "comercio": "NUBANK",
+  "ultimos4": "1234",
+  "confianza": "alta"
+}

@@ -1,0 +1,9 @@
+{
+  "banco": "banamex",
+  "tipo": "gasto",
+  "monto": 10000,
+  "fecha": "2026-09-07",
+  "comercio": "LA GRAN PLAZA 2",
+  "ultimos4": "789",
+  "confianza": "alta"
+}

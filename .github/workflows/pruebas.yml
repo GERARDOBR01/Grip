@@ -1,0 +1,104 @@
+# Lo que antes dependía de que alguien se acordara.
+#
+# Dos cosas se comprueban en cada cambio, y son las dos que este proyecto no puede delegar en
+# la buena memoria de nadie:
+#
+#   · que las pruebas pasen —incluidas las guardas de arquitectura de independencia.test.js,
+#     que fallan si alguien nombra a Claude fuera de su adaptador o pide algo a la red fuera
+#     del puente—, y
+#   · que index.html corresponda a las fuentes. El armado es a mano, y un commit que toca
+#     motor/ sin rearmar publica una app vieja en GitHub Pages sin que nada chille.
+#
+# Lo segundo no solo se comprueba: se corrige. En un PR de este repositorio, si el armado
+# quedó viejo, el propio flujo lo rearma y lo commitea a la rama. Y no hay bucle: GitHub no
+# dispara flujos con los empujones hechos con GITHUB_TOKEN, a propósito.
+
+name: Pruebas
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Si llegan dos empujones seguidos a la misma rama, gana el último.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pruebas:
+    name: Pruebas
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Sin `npm ci` ni nada que instalar: el proyecto no tiene dependencias, y hay una prueba
+      # que falla el día que aparezca un package.json.
+      - name: node --test
+        run: node --test pruebas/*.test.js
+
+  armado:
+    name: Armado al día
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # En un PR se saca la RAMA, no el merge de prueba: para poder corregir el armado hay
+          # que tener a dónde empujarlo.
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          persist-credentials: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Rearmar
+        run: node herramientas/armar.mjs
+
+      - name: ¿Cambió algo?
+        id: revisar
+        run: |
+          if git diff --quiet; then
+            echo "viejo=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "viejo=si" >> "$GITHUB_OUTPUT"
+            git diff --stat
+          fi
+
+      # Un PR de este repositorio: se corrige solo. Es la parte que ahorra el viaje de ida y
+      # vuelta de "se te olvidó armar".
+      - name: Commitear el rearmado
+        if: >-
+          steps.revisar.outputs.viejo == 'si'
+          && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.actor != 'dependabot[bot]'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html finanzas.html sw.js manifest.webmanifest icono-180.png icono-192.png icono-512.png publicar/finanzas.artifact.html
+          git commit -m "Rearmar: lo publicado no correspondía a las fuentes" \
+                     -m "Salida generada por herramientas/armar.mjs. No se editó a mano."
+          git push
+          echo "::notice::El armado estaba viejo y se corrigió en esta rama."
+
+      # En main, o en un PR desde un fork, no se empuja nada: se dice qué correr.
+      - name: Falta rearmar
+        if: >-
+          steps.revisar.outputs.viejo == 'si'
+          && !(github.event_name == 'pull_request'
+               && github.event.pull_request.head.repo.full_name == github.repository
+               && github.actor != 'dependabot[bot]')
+        run: |
+          echo "::error::Lo publicado no corresponde a las fuentes. Corre 'node herramientas/armar.mjs' y commitea el resultado."
+          exit 1

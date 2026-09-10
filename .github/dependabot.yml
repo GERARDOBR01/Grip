@@ -1,0 +1,11 @@
+# La app no tiene dependencias —ese es el punto— pero el flujo de arriba sí usa actions con
+# versión, y esas envejecen igual que cualquier otra cosa. Esto las mantiene al día.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "Subir"
+    labels: []

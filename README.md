@@ -140,7 +140,7 @@ banco, en vez de prometer de más.
 ## Cómo se trabaja
 
 ```bash
-node --test pruebas/*.test.js      # 197 pruebas: sin red, sin API, sin gastar un peso
+node --test pruebas/*.test.js      # toda la suite: sin red, sin API, sin gastar un peso
 node herramientas/armar.mjs        # arma index.html y finanzas.html desde motor/ e interfaz/
 node herramientas/humo.mjs         # navegador real: disco, sin almacenamiento, e instalada
 node herramientas/logo.mjs         # solo si cambia el logo
