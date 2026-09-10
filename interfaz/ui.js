@@ -13,6 +13,7 @@ import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
   ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
 } from "../motor/modelo.js";
+import { claveDeTope } from "../motor/fusion.js";
 import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presupuesto.js";
 import { panelHoy, capacidadPorCiclo, estadoColchon, ahorroLibre } from "../motor/ahorro.js";
 import { resumenMetas, exigenciaTotal } from "../motor/metas.js";
@@ -2135,14 +2136,23 @@ const acciones = {
         // Un tope "solo este mes" no toca el catálogo: el histórico de los otros meses
         // queda exactamente como estaba.
         const presupuestos = { ...app.datos.presupuestos };
+        let datos = { ...app.datos, categorias, presupuestos };
         if (v.alcance === "mes") {
           const delMes = { ...(presupuestos[mes] || {}) };
-          if (v.tope === null) delete delMes[categoria.id];
-          else delMes[categoria.id] = v.tope;
+          if (v.tope === null) {
+            delete delMes[categoria.id];
+            // Quitar un tope necesita lápida, igual que borrar un movimiento: sin ella, el
+            // otro dispositivo —que todavía lo tiene— lo devuelve al unir, y el tope que
+            // quitaste reaparece solo.
+            datos = marcarBorrado(datos, claveDeTope(mes, categoria.id));
+          } else {
+            delMes[categoria.id] = v.tope;
+          }
           presupuestos[mes] = delMes;
+          datos = { ...datos, presupuestos };
         }
 
-        await guardar({ ...app.datos, categorias, presupuestos });
+        await guardar(datos);
       },
     });
   },

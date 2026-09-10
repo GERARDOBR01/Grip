@@ -9,6 +9,27 @@
 export const CENTAVOS = 100;
 
 /**
+ * El techo de un monto: cien mil millones de pesos, en centavos.
+ *
+ * No es un límite de producto, es la frontera de la aritmética. Arriba de 2^53 centavos los
+ * enteros de JavaScript dejan de ser exactos y empiezan a redondearse solos — o sea, justo el
+ * error de coma flotante que la regla de centavos enteros existe para no tener. Un número así
+ * no llega de nadie llevando su gasto: llega de un JSON editado a mano, de un respaldo de otra
+ * app o de un OCR que leyó de más. Se rechaza con `null`, que en este motor quiere decir "no
+ * hay dato", y no es lo mismo que cero.
+ *
+ * El tope está muy por debajo del límite exacto a propósito: deja margen para SUMAR miles de
+ * montos sin acercarse siquiera. Lo que se guarda tiene que aguantar la aritmética de después,
+ * no solo la de entrar.
+ */
+export const MONTO_MAXIMO = 100_000_000_000 * CENTAVOS;
+
+/** ¿Este entero de centavos es un monto con el que se puede hacer cuentas exactas? */
+export function montoUtilizable(centavos) {
+  return Number.isFinite(centavos) && Math.abs(centavos) <= MONTO_MAXIMO;
+}
+
+/**
  * Convierte lo que escribió una persona a centavos enteros.
  * Acepta "1,234.50", "$1234.5", "1234", 1234.5. Devuelve null si no es un monto —
  * null significa "no hay dato", que no es lo mismo que cero.
@@ -16,7 +37,8 @@ export const CENTAVOS = 100;
 export function aCentavos(entrada) {
   if (typeof entrada === "number") {
     if (!Number.isFinite(entrada)) return null;
-    return Math.round(entrada * CENTAVOS);
+    const centavos = Math.round(entrada * CENTAVOS);
+    return montoUtilizable(centavos) ? centavos : null;
   }
   if (typeof entrada !== "string") return null;
 
@@ -30,6 +52,7 @@ export function aCentavos(entrada) {
 
   let centavos = Number(enteros || "0") * CENTAVOS + Number(tres.slice(0, 2));
   if (Number(tres[2]) >= 5) centavos += 1;
+  if (!montoUtilizable(centavos)) return null;
 
   return negativo ? -centavos : centavos;
 }

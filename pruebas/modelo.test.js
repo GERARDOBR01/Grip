@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { datosVacios, normalizar, agregarMovimiento, eliminarMovimiento, movimientosEntre, VERSION_DATOS } from "../motor/modelo.js";
+import { datosVacios, normalizar, agregarMovimiento, eliminarMovimiento, movimientosEntre, normalizarMovimiento, TIPOS, VERSION_DATOS } from "../motor/modelo.js";
 import { migrar } from "../motor/migraciones.js";
 
 test("el documento vacío no inventa un solo monto", () => {
@@ -70,4 +70,33 @@ test("migrar se NIEGA a abrir datos de una versión más nueva", () => {
 test("migrar rechaza lo que no es un documento", () => {
   assert.equal(migrar(null).ok, false);
   assert.equal(migrar("hola").ok, false);
+});
+
+// --- Lo que no se puede creer, no entra ---
+//
+// Un movimiento con fecha imposible no es un movimiento raro: es una resta que va a mentir en
+// pantalla. `cicloDe("2026-02-31")` devolvía 16 días transcurridos de un ciclo de 13, y de esa
+// división sale el "te queda por día" que la app enseña en grande.
+
+test("una fecha que no existe en el calendario no entra como movimiento", () => {
+  for (const fecha of ["2026-02-31", "2026-13-01", "2026-00-10", "9999-99-99", "2025-02-29", "1899-12-31"]) {
+    assert.equal(normalizarMovimiento({ fecha, monto: 5000, tipo: TIPOS.GASTO }), null, `${fecha} debería rechazarse`);
+  }
+});
+
+test("el 29 de febrero de un año bisiesto sí existe", () => {
+  assert.ok(normalizarMovimiento({ fecha: "2024-02-29", monto: 5000, tipo: TIPOS.GASTO }));
+});
+
+test("un monto que ya no se puede sumar con exactitud no es un monto", () => {
+  // 2^53 centavos es donde los enteros de JavaScript dejan de ser exactos. Guardar algo así
+  // sería volver al error de coma flotante por la puerta de atrás.
+  assert.equal(normalizarMovimiento({ fecha: "2026-09-09", monto: 1e20, tipo: TIPOS.GASTO }), null);
+  assert.equal(normalizarMovimiento({ fecha: "2026-09-09", monto: "999999999999999999", tipo: TIPOS.GASTO }), null);
+  assert.ok(normalizarMovimiento({ fecha: "2026-09-09", monto: 999999999, tipo: TIPOS.GASTO }), "un monto normal sí pasa");
+});
+
+test("un ingreso absurdo en el perfil se queda en 'no hay dato', no en un número falso", () => {
+  const datos = normalizar({ ...datosVacios("2026-09-01"), perfil: { ingresoQuincenal: 1e19, cortes: [15] } });
+  assert.equal(datos.perfil.ingresoQuincenal, null);
 });

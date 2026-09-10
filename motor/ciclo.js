@@ -21,8 +21,22 @@ export function horaAhora(fecha = new Date()) {
   return `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * ¿Es una fecha de verdad, en formato "AAAA-MM-DD"?
+ *
+ * Comprueba el CALENDARIO, no solo la forma. Antes solo miraba la forma, y por ahí entraban
+ * `2026-02-31` y `9999-99-99` — de un JSON editado a mano, de un respaldo de otra app, de una
+ * fecha mal leída en una captura. No se quedaban quietos: `cicloDe("2026-02-31")` devolvía
+ * `diasRestantes: -2` sobre un ciclo de 13 días, y con eso "te queda por día" salía negativo;
+ * y un movimiento fechado en el 9999 se sentaba para siempre en lo alto de todas las listas.
+ *
+ * Un dato que no se puede creer se rechaza en la puerta, no se cuela y se administra después.
+ */
 export function esISO(iso) {
-  return typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso);
+  if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  const [anio, mes, dia] = iso.split("-").map(Number);
+  if (anio < 1900 || mes < 1 || mes > 12) return false;
+  return dia >= 1 && dia <= diasEnMes(anio, mes);
 }
 
 export function partes(iso) {
@@ -38,7 +52,6 @@ export function diasEnMes(anio, mes) {
   return new Date(anio, mes, 0).getDate();
 }
 
-/** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
 /**
  * La hora del reloj como "HH:MM", o "" si no es una hora válida.
  * Se guarda a propósito sin segundos ni zona: lo que importa es si gastas a las 2 de la tarde
@@ -62,6 +75,7 @@ export function diaDeSemana(iso) {
   return new Date(Date.UTC(anio, mes - 1, dia)).getUTCDay();
 }
 
+/** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
 export function mesDe(iso) {
   return iso.slice(0, 7);
 }
@@ -136,14 +150,19 @@ export function cicloDe(iso, cortes = [15]) {
   const inicio = armarISO(anio, mes, inicioDia);
   const fin = armarISO(anio, mes, finDia);
   const dias = finDia - inicioDia + 1;
-  const transcurridos = dia - inicioDia + 1;
+
+  // Cinturón además del tirante. `esISO` ya no deja pasar un 31 de febrero, pero `cicloDe`
+  // también se llama con fechas armadas al vuelo, y de lo que sale de aquí se dividen los
+  // números que la app enseña en grande. Un "te queda por día" negativo, o un ciclo donde van
+  // más días de los que tiene, no es un número raro: es una resta que miente en pantalla.
+  const transcurridos = Math.min(Math.max(dia - inicioDia + 1, 1), dias);
 
   return {
     inicio,
     fin,
     dias,
     diasTranscurridos: transcurridos,
-    diasRestantes: finDia - dia + 1,
+    diasRestantes: Math.min(Math.max(finDia - dia + 1, 1), dias),
     indice,
     total: limites.length + 1,
     etiqueta: limites.length === 0 ? "mes" : `quincena ${indice + 1}`,

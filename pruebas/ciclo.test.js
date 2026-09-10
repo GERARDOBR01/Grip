@@ -66,3 +66,14 @@ test("proximoPago y cicloSiguiente", () => {
   assert.equal(cicloSiguiente("2026-09-08").inicio, "2026-09-16");
   assert.equal(cicloSiguiente("2026-09-20").inicio, "2026-10-01");
 });
+
+test("el ciclo nunca reporta más días transcurridos de los que tiene, ni días negativos", () => {
+  // Cinturón además del tirante: `esISO` ya no deja pasar un 31 de febrero, pero de lo que
+  // sale de aquí se divide el número que la app enseña en grande, y ahí no puede haber restas
+  // que mientan aunque la fecha llegue armada al vuelo desde otro lado.
+  for (const iso of ["2026-02-31", "2026-01-40", "2026-06-00"]) {
+    const c = cicloDe(iso, [15]);
+    assert.ok(c.diasRestantes >= 1 && c.diasRestantes <= c.dias, `${iso}: restantes ${c.diasRestantes} de ${c.dias}`);
+    assert.ok(c.diasTranscurridos >= 1 && c.diasTranscurridos <= c.dias, `${iso}: van ${c.diasTranscurridos} de ${c.dias}`);
+  }
+});

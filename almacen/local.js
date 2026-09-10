@@ -96,6 +96,23 @@ function operar(bd, modo, accion) {
   });
 }
 
+/**
+ * Se entera de que una conexión dejó de servir.
+ *
+ * `versionchange` lo dispara otra pestaña que abre la base con una versión más nueva: hay que
+ * soltarla ahí mismo, porque si no, la otra pestaña se queda bloqueada esperando a ésta.
+ * `close` lo dispara el navegador cuando la cierra por su cuenta.
+ */
+function vigilar(bd, alCaer) {
+  try {
+    bd.onversionchange = () => {
+      try { bd.close(); } catch (e) {}
+      alCaer();
+    };
+    bd.onclose = alCaer;
+  } catch (e) {}
+}
+
 /** localStorage no basta con que exista: tiene que dejar escribir (modo privado, cuotas). */
 function localStorageUtilizable() {
   const ls = leerGlobal("localStorage");
@@ -140,6 +157,37 @@ export async function abrirLocal() {
 
   if (bd) {
     const persistente = await pedirPersistencia();
+
+    // La conexión se guarda en una caja, no en una constante, porque se puede caer: otra
+    // pestaña sube la versión de la base, el navegador desaloja el origen, el sistema cierra
+    // la conexión por inactividad. Antes se tomaba UNA vez al abrir la app, y a partir de esa
+    // caída todo guardado tronaba para siempre — con la app aparentemente viva, capturando
+    // gastos que ya no llegaban a ningún lado.
+    let conexion = bd;
+    vigilar(conexion, () => { conexion = null; });
+
+    /** Opera contra la base, y si la conexión se cayó, la vuelve a abrir y lo intenta otra vez. */
+    async function conConexion(modo, accion) {
+      if (!conexion) {
+        conexion = await abrirIndexedDB();
+        if (conexion) vigilar(conexion, () => { conexion = null; });
+      }
+      if (!conexion) throw new Error("Se perdió la conexión con el almacenamiento de este navegador.");
+
+      try {
+        return await operar(conexion, modo, accion);
+      } catch (e) {
+        // Un solo reintento, y solo tras soltar la conexión: si el segundo también falla, el
+        // problema no es la conexión —es espacio, permisos o disco— y eso hay que decirlo, no
+        // reintentarlo en un bucle.
+        try { conexion.close(); } catch (cerrar) {}
+        conexion = await abrirIndexedDB();
+        if (!conexion) throw e;
+        vigilar(conexion, () => { conexion = null; });
+        return await operar(conexion, modo, accion);
+      }
+    }
+
     return {
       tipo: "indexeddb",
       duradero: true,
@@ -149,16 +197,16 @@ export async function abrirLocal() {
       motivo: null,
       async cargar() {
         try {
-          return (await operar(bd, "readonly", (s) => s.get(LLAVE))) || null;
+          return (await conConexion("readonly", (s) => s.get(LLAVE))) || null;
         } catch (e) {
           return null;
         }
       },
       async guardar(datos) {
-        await operar(bd, "readwrite", (s) => s.put(datos, LLAVE));
+        await conConexion("readwrite", (s) => s.put(datos, LLAVE));
       },
       async borrar() {
-        await operar(bd, "readwrite", (s) => s.delete(LLAVE));
+        await conConexion("readwrite", (s) => s.delete(LLAVE));
       },
     };
   }

@@ -61,6 +61,41 @@ export async function abrirAlmacen(opciones = {}) {
     estado.motivo = motivo;
   }
 
+  /**
+   * Una sola fila para escribir, y en orden de llegada.
+   *
+   * Escribir es `await` dos veces: primero lo local, luego el espejo. Sin fila, dos guardados
+   * que se encabalgan —aceptar un cargo desde la sombra mientras se está guardando un gasto,
+   * que es exactamente lo que pasa cuando llega una notificación— pueden llegar al espejo al
+   * revés, porque el espejo va por la red y la red no respeta el orden en que se le habló. El
+   * documento viejo aterriza al último, gana por sello, y en la siguiente sincronización se
+   * traga el nuevo. No es teórico: es la forma en que un sistema con dos copias pierde datos.
+   *
+   * La fila no se rompe cuando un trabajo falla: el siguiente entra igual.
+   */
+  let fila = Promise.resolve();
+  function enFila(trabajo) {
+    const turno = fila.then(trabajo, trabajo);
+    fila = turno.then(() => {}, () => {});
+    return turno;
+  }
+
+  /**
+   * Traduce el fallo de un disco a algo con lo que alguien pueda hacer algo.
+   *
+   * Se mira el NOMBRE de la excepción, no su texto. Adivinar por el mensaje ("cuota", "space")
+   * traduce mal cualquier error que solo mencione la palabra, y un diagnóstico equivocado es
+   * peor que uno crudo: manda a borrar meses a quien tenía otro problema. Firefox usa su
+   * propio nombre para lo mismo, y por eso están los dos.
+   */
+  function explicar(error) {
+    const nombre = (error && error.name) || "";
+    if (nombre === "QuotaExceededError" || nombre === "NS_ERROR_DOM_QUOTA_REACHED") {
+      return "Ya no cabe más en este navegador. Descarga un respaldo y borra los meses que ya no consultes.";
+    }
+    return (error && error.message) || "el almacenamiento rechazó la escritura";
+  }
+
   return {
     estado: () => ({ ...estado }),
 
@@ -102,14 +137,25 @@ export async function abrirAlmacen(opciones = {}) {
       const unido = normalizar(fusionar(datosLocal, datosEspejo));
 
       // El que iba atrás se pone al día. `difieren` evita reescribir cuando ya decían lo mismo.
-      if (difieren(unido, datosLocal)) await local.guardar(unido);
-      if (espejo && difieren(unido, datosEspejo)) {
-        try {
-          await espejo.guardar(unido);
-        } catch (e) {
-          degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+      await enFila(async () => {
+        // Por la fila también, y no por prolijidad: abrir y guardar pueden encabalgarse —el
+        // espejo avisa de un cambio justo mientras se está capturando— y esta reescritura es
+        // un documento ENTERO. Fuera de orden, pisa lo que se acaba de guardar.
+        if (difieren(unido, datosLocal)) {
+          try {
+            await local.guardar(unido);
+          } catch (e) {
+            degradar(`No se pudo dejar la copia unida en este dispositivo: ${explicar(e)}`);
+          }
         }
-      }
+        if (espejo && difieren(unido, datosEspejo)) {
+          try {
+            await espejo.guardar(unido);
+          } catch (e) {
+            degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+          }
+        }
+      });
 
       // Un reloj adelantado hace que gane el aparato equivocado en todo lo escalar. No se
       // bloquea nada por eso —los movimientos ya se unen por id—, pero sí se dice.
@@ -135,18 +181,50 @@ export async function abrirAlmacen(opciones = {}) {
       }
 
       const sello = { ...normalizar(datos), actualizado: new Date().toISOString() };
-      await local.guardar(sello); // primero lo seguro
 
-      if (espejo) {
+      return enFila(async () => {
+        // Lo local primero, que es lo seguro. Pero que falle ya NO cancela el intento en el
+        // espejo: si el disco de este aparato está lleno y la cuenta sí acepta la escritura,
+        // el gasto está a salvo — y quedarse sin intentarlo habría sido perderlo por orgullo
+        // del orden. Se guarda donde se pueda, y se dice exactamente dónde quedó.
+        let falloLocal = null;
         try {
-          await espejo.guardar(sello);
-          estado.motivo = null;
-          estado.modo = MODOS.SINCRONIZADO;
+          await local.guardar(sello);
         } catch (e) {
-          degradar("Se guardó en este dispositivo, pero no se pudo sincronizar.");
+          falloLocal = e;
         }
-      }
-      return sello;
+
+        let enEspejo = false;
+        if (espejo) {
+          try {
+            await espejo.guardar(sello);
+            enEspejo = true;
+          } catch (e) {
+            enEspejo = false;
+          }
+        }
+
+        if (!falloLocal) {
+          if (espejo && enEspejo) {
+            estado.motivo = null;
+            estado.modo = MODOS.SINCRONIZADO;
+          } else if (espejo) {
+            degradar("Se guardó en este dispositivo, pero no se pudo sincronizar.");
+          }
+          return sello;
+        }
+
+        if (enEspejo) {
+          estado.modo = MODOS.SINCRONIZADO;
+          estado.motivo =
+            `No se pudo guardar en este dispositivo (${explicar(falloLocal)}), pero sí en tu cuenta: ` +
+            "lo capturado está a salvo y vuelve al abrir en cualquier lado.";
+          return sello;
+        }
+
+        // Ni aquí ni allá. Esto sí se lanza: la pantalla revierte y lo dice.
+        throw new Error(explicar(falloLocal));
+      });
     },
 
     suscribir(alCambiar) {
@@ -155,7 +233,7 @@ export async function abrirAlmacen(opciones = {}) {
     },
 
     async borrarTodo() {
-      await local.borrar();
+      await enFila(() => local.borrar());
       estado.bloqueado = false; // borrar es una decisión explícita: destraba la escritura
       estado.motivo = local.motivo || null;
     },

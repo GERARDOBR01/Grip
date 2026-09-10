@@ -320,7 +320,7 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 </style>
 </head>
 <body>
-<!-- Armado desde finanzas/, versión ddeba0cc. No editar a mano: se regenera con armar.mjs. -->
+<!-- Armado desde finanzas/, versión 0ab29c1f. No editar a mano: se regenera con armar.mjs. -->
 <div id="raiz"></div>
 <div id="hojas"></div>
 <noscript>
@@ -347,6 +347,27 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 const CENTAVOS = 100;
 
 /**
+ * El techo de un monto: cien mil millones de pesos, en centavos.
+ *
+ * No es un límite de producto, es la frontera de la aritmética. Arriba de 2^53 centavos los
+ * enteros de JavaScript dejan de ser exactos y empiezan a redondearse solos — o sea, justo el
+ * error de coma flotante que la regla de centavos enteros existe para no tener. Un número así
+ * no llega de nadie llevando su gasto: llega de un JSON editado a mano, de un respaldo de otra
+ * app o de un OCR que leyó de más. Se rechaza con `null`, que en este motor quiere decir "no
+ * hay dato", y no es lo mismo que cero.
+ *
+ * El tope está muy por debajo del límite exacto a propósito: deja margen para SUMAR miles de
+ * montos sin acercarse siquiera. Lo que se guarda tiene que aguantar la aritmética de después,
+ * no solo la de entrar.
+ */
+const MONTO_MAXIMO = 100_000_000_000 * CENTAVOS;
+
+/** ¿Este entero de centavos es un monto con el que se puede hacer cuentas exactas? */
+function montoUtilizable(centavos) {
+  return Number.isFinite(centavos) && Math.abs(centavos) <= MONTO_MAXIMO;
+}
+
+/**
  * Convierte lo que escribió una persona a centavos enteros.
  * Acepta "1,234.50", "$1234.5", "1234", 1234.5. Devuelve null si no es un monto —
  * null significa "no hay dato", que no es lo mismo que cero.
@@ -354,7 +375,8 @@ const CENTAVOS = 100;
 function aCentavos(entrada) {
   if (typeof entrada === "number") {
     if (!Number.isFinite(entrada)) return null;
-    return Math.round(entrada * CENTAVOS);
+    const centavos = Math.round(entrada * CENTAVOS);
+    return montoUtilizable(centavos) ? centavos : null;
   }
   if (typeof entrada !== "string") return null;
 
@@ -368,6 +390,7 @@ function aCentavos(entrada) {
 
   let centavos = Number(enteros || "0") * CENTAVOS + Number(tres.slice(0, 2));
   if (Number(tres[2]) >= 5) centavos += 1;
+  if (!montoUtilizable(centavos)) return null;
 
   return negativo ? -centavos : centavos;
 }
@@ -492,8 +515,22 @@ function horaAhora(fecha = new Date()) {
   return `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * ¿Es una fecha de verdad, en formato "AAAA-MM-DD"?
+ *
+ * Comprueba el CALENDARIO, no solo la forma. Antes solo miraba la forma, y por ahí entraban
+ * `2026-02-31` y `9999-99-99` — de un JSON editado a mano, de un respaldo de otra app, de una
+ * fecha mal leída en una captura. No se quedaban quietos: `cicloDe("2026-02-31")` devolvía
+ * `diasRestantes: -2` sobre un ciclo de 13 días, y con eso "te queda por día" salía negativo;
+ * y un movimiento fechado en el 9999 se sentaba para siempre en lo alto de todas las listas.
+ *
+ * Un dato que no se puede creer se rechaza en la puerta, no se cuela y se administra después.
+ */
 function esISO(iso) {
-  return typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso);
+  if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  const [anio, mes, dia] = iso.split("-").map(Number);
+  if (anio < 1900 || mes < 1 || mes > 12) return false;
+  return dia >= 1 && dia <= diasEnMes(anio, mes);
 }
 
 function partes(iso) {
@@ -509,7 +546,6 @@ function diasEnMes(anio, mes) {
   return new Date(anio, mes, 0).getDate();
 }
 
-/** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
 /**
  * La hora del reloj como "HH:MM", o "" si no es una hora válida.
  * Se guarda a propósito sin segundos ni zona: lo que importa es si gastas a las 2 de la tarde
@@ -533,6 +569,7 @@ function diaDeSemana(iso) {
   return new Date(Date.UTC(anio, mes - 1, dia)).getUTCDay();
 }
 
+/** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
 function mesDe(iso) {
   return iso.slice(0, 7);
 }
@@ -607,14 +644,19 @@ function cicloDe(iso, cortes = [15]) {
   const inicio = armarISO(anio, mes, inicioDia);
   const fin = armarISO(anio, mes, finDia);
   const dias = finDia - inicioDia + 1;
-  const transcurridos = dia - inicioDia + 1;
+
+  // Cinturón además del tirante. `esISO` ya no deja pasar un 31 de febrero, pero `cicloDe`
+  // también se llama con fechas armadas al vuelo, y de lo que sale de aquí se dividen los
+  // números que la app enseña en grande. Un "te queda por día" negativo, o un ciclo donde van
+  // más días de los que tiene, no es un número raro: es una resta que miente en pantalla.
+  const transcurridos = Math.min(Math.max(dia - inicioDia + 1, 1), dias);
 
   return {
     inicio,
     fin,
     dias,
     diasTranscurridos: transcurridos,
-    diasRestantes: finDia - dia + 1,
+    diasRestantes: Math.min(Math.max(finDia - dia + 1, 1), dias),
     indice,
     total: limites.length + 1,
     etiqueta: limites.length === 0 ? "mes" : `quincena ${indice + 1}`,
@@ -739,7 +781,12 @@ function idNuevo(prefijo = "m") {
 
 function entero(valor, porDefecto = null) {
   const n = typeof valor === "string" ? aCentavos(valor) : valor;
-  return Number.isFinite(n) ? Math.trunc(n) : porDefecto;
+  // El techo se aplica también aquí y no solo en `aCentavos`: por este camino entran los
+  // NÚMEROS de un JSON importado, que no pasan por el lector de texto. Un monto que ya no se
+  // puede sumar sin redondearse solo no es un monto: es la ausencia de uno.
+  if (!Number.isFinite(n)) return porDefecto;
+  const truncado = Math.trunc(n);
+  return montoUtilizable(truncado) ? truncado : porDefecto;
 }
 
 /**
@@ -1122,9 +1169,11 @@ function migrar(entrada) {
 // captura sin avisar es el peor fallo que puede tener esta app.
 //
 // La respuesta no necesita CRDTs ni dependencias, porque estos datos tienen la forma correcta:
-// los movimientos y las entradas de bandeja son registros con `id` propio. Unirlos por id no
-// pierde nada. Lo escalar —el perfil, los topes— sí se resuelve por el más reciente, que es lo
-// razonable cuando no hay forma de saber más.
+// casi todo lo que se edita son registros con `id` propio —movimientos, entradas de bandeja,
+// fijos, deudas, metas, categorías— y unirlos por id no pierde nada. Los topes de mes no tienen
+// id, pero sí una casilla estable (mes + categoría), que sirve igual. Solo lo verdaderamente
+// escalar —el perfil— se resuelve por el más reciente, que es lo razonable cuando no hay forma
+// de saber más.
 //
 // Borrar necesita LÁPIDAS. Sin ellas, borrar un movimiento en el celular lo resucitaría al
 // unirse con la copia vieja de la PC, que todavía lo tiene. Una lápida dice "esto se borró a
@@ -1214,11 +1263,48 @@ function fusionar(a, b) {
     fijos: unirPorId(viejo.fijos, nuevo.fijos).filter(vivo),
     deudas: unirPorId(viejo.deudas, nuevo.deudas).filter(vivo),
     metas: unirPorId(viejo.metas, nuevo.metas).filter(vivo),
+    // El catálogo también es una lista con id, y se quedó fuera de esta unión más tiempo del
+    // que debió: una categoría creada en el celular desaparecía en cuanto la PC guardaba
+    // después. Y no desaparecía sola — los movimientos que la usaban quedaban apuntando a una
+    // categoría que ya no existe.
+    categorias: unirPorId(viejo.categorias, nuevo.categorias).filter(vivo),
+    presupuestos: unirPresupuestos(viejo.presupuestos, nuevo.presupuestos, enterrados),
     // Las reglas aprendidas se llevan por clave, no por id: gana la más reciente de cada una.
     reglas: unirReglas(viejo.reglas, nuevo.reglas),
     borrados,
     actualizado: selloDe(nuevo),
   };
+}
+
+/**
+ * La lápida de un tope de mes. Los topes no son registros con `id` propio —son una casilla en
+ * un mapa— así que para poder BORRAR uno sin que el otro aparato lo reviva hay que darles un
+ * nombre estable. Éste es.
+ */
+function claveDeTope(mes, categoriaId) {
+  return `tope:${mes}:${categoriaId}`;
+}
+
+/**
+ * Une los topes por mes y por categoría, no por mes entero.
+ *
+ * La granularidad importa: los topes se editan de uno en uno, así que tomar el mapa del mes
+ * completo del documento más nuevo tiraba el tope que la otra pantalla acababa de poner en
+ * OTRA categoría del mismo mes. Ante la misma casilla en las dos copias gana la más reciente,
+ * que es lo único que se puede saber; y una casilla con lápida no vuelve.
+ */
+function unirPresupuestos(viejos, nuevos, enterrados = new Set()) {
+  const salida = {};
+  for (const fuente of [viejos || {}, nuevos || {}]) {
+    for (const [mes, topes] of Object.entries(fuente)) {
+      if (!topes || typeof topes !== "object") continue;
+      for (const [categoriaId, tope] of Object.entries(topes)) {
+        if (enterrados.has(claveDeTope(mes, categoriaId))) continue;
+        (salida[mes] = salida[mes] || {})[categoriaId] = tope;
+      }
+    }
+  }
+  return salida;
 }
 
 /** Las reglas se identifican por su comercio. Ante la misma clave, gana la que se usó al último. */
@@ -1244,12 +1330,12 @@ const TOLERANCIA_RELOJ_MIN = 5;
 /**
  * ¿Alguna de las dos copias viene sellada en el futuro?
  *
- * Al unir, lo escalar —el perfil, los topes— se toma de la copia con el sello más reciente.
- * Eso da por hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la
- * suposición que rompe cualquier sistema repartido: un celular diez minutos adelantado gana
- * SIEMPRE, aunque haya escrito antes.
+ * Al unir, lo escalar —el perfil— se toma de la copia con el sello más reciente. Eso da por
+ * hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la suposición que
+ * rompe cualquier sistema repartido: un celular diez minutos adelantado gana SIEMPRE, aunque
+ * haya escrito antes.
  *
- * Los movimientos ya no corren peligro —se unen por id y borrar exige lápida—, así que esto
+ * Lo que se une por id o por casilla ya no corre peligro —y borrar exige lápida—, así que esto
  * no bloquea nada: avisa, que es lo que se puede hacer con honestidad. Devuelve los minutos
  * de desfase, o `null` si los relojes van bien.
  */
@@ -4403,6 +4489,23 @@ function operar(bd, modo, accion) {
   });
 }
 
+/**
+ * Se entera de que una conexión dejó de servir.
+ *
+ * `versionchange` lo dispara otra pestaña que abre la base con una versión más nueva: hay que
+ * soltarla ahí mismo, porque si no, la otra pestaña se queda bloqueada esperando a ésta.
+ * `close` lo dispara el navegador cuando la cierra por su cuenta.
+ */
+function vigilar(bd, alCaer) {
+  try {
+    bd.onversionchange = () => {
+      try { bd.close(); } catch (e) {}
+      alCaer();
+    };
+    bd.onclose = alCaer;
+  } catch (e) {}
+}
+
 /** localStorage no basta con que exista: tiene que dejar escribir (modo privado, cuotas). */
 function localStorageUtilizable() {
   const ls = leerGlobal("localStorage");
@@ -4447,6 +4550,37 @@ async function abrirLocal() {
 
   if (bd) {
     const persistente = await pedirPersistencia();
+
+    // La conexión se guarda en una caja, no en una constante, porque se puede caer: otra
+    // pestaña sube la versión de la base, el navegador desaloja el origen, el sistema cierra
+    // la conexión por inactividad. Antes se tomaba UNA vez al abrir la app, y a partir de esa
+    // caída todo guardado tronaba para siempre — con la app aparentemente viva, capturando
+    // gastos que ya no llegaban a ningún lado.
+    let conexion = bd;
+    vigilar(conexion, () => { conexion = null; });
+
+    /** Opera contra la base, y si la conexión se cayó, la vuelve a abrir y lo intenta otra vez. */
+    async function conConexion(modo, accion) {
+      if (!conexion) {
+        conexion = await abrirIndexedDB();
+        if (conexion) vigilar(conexion, () => { conexion = null; });
+      }
+      if (!conexion) throw new Error("Se perdió la conexión con el almacenamiento de este navegador.");
+
+      try {
+        return await operar(conexion, modo, accion);
+      } catch (e) {
+        // Un solo reintento, y solo tras soltar la conexión: si el segundo también falla, el
+        // problema no es la conexión —es espacio, permisos o disco— y eso hay que decirlo, no
+        // reintentarlo en un bucle.
+        try { conexion.close(); } catch (cerrar) {}
+        conexion = await abrirIndexedDB();
+        if (!conexion) throw e;
+        vigilar(conexion, () => { conexion = null; });
+        return await operar(conexion, modo, accion);
+      }
+    }
+
     return {
       tipo: "indexeddb",
       duradero: true,
@@ -4456,16 +4590,16 @@ async function abrirLocal() {
       motivo: null,
       async cargar() {
         try {
-          return (await operar(bd, "readonly", (s) => s.get(LLAVE))) || null;
+          return (await conConexion("readonly", (s) => s.get(LLAVE))) || null;
         } catch (e) {
           return null;
         }
       },
       async guardar(datos) {
-        await operar(bd, "readwrite", (s) => s.put(datos, LLAVE));
+        await conConexion("readwrite", (s) => s.put(datos, LLAVE));
       },
       async borrar() {
-        await operar(bd, "readwrite", (s) => s.delete(LLAVE));
+        await conConexion("readwrite", (s) => s.delete(LLAVE));
       },
     };
   }
@@ -4562,6 +4696,41 @@ async function abrirAlmacen(opciones = {}) {
     estado.motivo = motivo;
   }
 
+  /**
+   * Una sola fila para escribir, y en orden de llegada.
+   *
+   * Escribir es `await` dos veces: primero lo local, luego el espejo. Sin fila, dos guardados
+   * que se encabalgan —aceptar un cargo desde la sombra mientras se está guardando un gasto,
+   * que es exactamente lo que pasa cuando llega una notificación— pueden llegar al espejo al
+   * revés, porque el espejo va por la red y la red no respeta el orden en que se le habló. El
+   * documento viejo aterriza al último, gana por sello, y en la siguiente sincronización se
+   * traga el nuevo. No es teórico: es la forma en que un sistema con dos copias pierde datos.
+   *
+   * La fila no se rompe cuando un trabajo falla: el siguiente entra igual.
+   */
+  let fila = Promise.resolve();
+  function enFila(trabajo) {
+    const turno = fila.then(trabajo, trabajo);
+    fila = turno.then(() => {}, () => {});
+    return turno;
+  }
+
+  /**
+   * Traduce el fallo de un disco a algo con lo que alguien pueda hacer algo.
+   *
+   * Se mira el NOMBRE de la excepción, no su texto. Adivinar por el mensaje ("cuota", "space")
+   * traduce mal cualquier error que solo mencione la palabra, y un diagnóstico equivocado es
+   * peor que uno crudo: manda a borrar meses a quien tenía otro problema. Firefox usa su
+   * propio nombre para lo mismo, y por eso están los dos.
+   */
+  function explicar(error) {
+    const nombre = (error && error.name) || "";
+    if (nombre === "QuotaExceededError" || nombre === "NS_ERROR_DOM_QUOTA_REACHED") {
+      return "Ya no cabe más en este navegador. Descarga un respaldo y borra los meses que ya no consultes.";
+    }
+    return (error && error.message) || "el almacenamiento rechazó la escritura";
+  }
+
   return {
     estado: () => ({ ...estado }),
 
@@ -4603,14 +4772,25 @@ async function abrirAlmacen(opciones = {}) {
       const unido = normalizar(fusionar(datosLocal, datosEspejo));
 
       // El que iba atrás se pone al día. `difieren` evita reescribir cuando ya decían lo mismo.
-      if (difieren(unido, datosLocal)) await local.guardar(unido);
-      if (espejo && difieren(unido, datosEspejo)) {
-        try {
-          await espejo.guardar(unido);
-        } catch (e) {
-          degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+      await enFila(async () => {
+        // Por la fila también, y no por prolijidad: abrir y guardar pueden encabalgarse —el
+        // espejo avisa de un cambio justo mientras se está capturando— y esta reescritura es
+        // un documento ENTERO. Fuera de orden, pisa lo que se acaba de guardar.
+        if (difieren(unido, datosLocal)) {
+          try {
+            await local.guardar(unido);
+          } catch (e) {
+            degradar(`No se pudo dejar la copia unida en este dispositivo: ${explicar(e)}`);
+          }
         }
-      }
+        if (espejo && difieren(unido, datosEspejo)) {
+          try {
+            await espejo.guardar(unido);
+          } catch (e) {
+            degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+          }
+        }
+      });
 
       // Un reloj adelantado hace que gane el aparato equivocado en todo lo escalar. No se
       // bloquea nada por eso —los movimientos ya se unen por id—, pero sí se dice.
@@ -4636,18 +4816,50 @@ async function abrirAlmacen(opciones = {}) {
       }
 
       const sello = { ...normalizar(datos), actualizado: new Date().toISOString() };
-      await local.guardar(sello); // primero lo seguro
 
-      if (espejo) {
+      return enFila(async () => {
+        // Lo local primero, que es lo seguro. Pero que falle ya NO cancela el intento en el
+        // espejo: si el disco de este aparato está lleno y la cuenta sí acepta la escritura,
+        // el gasto está a salvo — y quedarse sin intentarlo habría sido perderlo por orgullo
+        // del orden. Se guarda donde se pueda, y se dice exactamente dónde quedó.
+        let falloLocal = null;
         try {
-          await espejo.guardar(sello);
-          estado.motivo = null;
-          estado.modo = MODOS.SINCRONIZADO;
+          await local.guardar(sello);
         } catch (e) {
-          degradar("Se guardó en este dispositivo, pero no se pudo sincronizar.");
+          falloLocal = e;
         }
-      }
-      return sello;
+
+        let enEspejo = false;
+        if (espejo) {
+          try {
+            await espejo.guardar(sello);
+            enEspejo = true;
+          } catch (e) {
+            enEspejo = false;
+          }
+        }
+
+        if (!falloLocal) {
+          if (espejo && enEspejo) {
+            estado.motivo = null;
+            estado.modo = MODOS.SINCRONIZADO;
+          } else if (espejo) {
+            degradar("Se guardó en este dispositivo, pero no se pudo sincronizar.");
+          }
+          return sello;
+        }
+
+        if (enEspejo) {
+          estado.modo = MODOS.SINCRONIZADO;
+          estado.motivo =
+            `No se pudo guardar en este dispositivo (${explicar(falloLocal)}), pero sí en tu cuenta: ` +
+            "lo capturado está a salvo y vuelve al abrir en cualquier lado.";
+          return sello;
+        }
+
+        // Ni aquí ni allá. Esto sí se lanza: la pantalla revierte y lo dice.
+        throw new Error(explicar(falloLocal));
+      });
     },
 
     suscribir(alCambiar) {
@@ -4656,7 +4868,7 @@ async function abrirAlmacen(opciones = {}) {
     },
 
     async borrarTodo() {
-      await local.borrar();
+      await enFila(() => local.borrar());
       estado.bloqueado = false; // borrar es una decisión explícita: destraba la escritura
       estado.motivo = local.motivo || null;
     },
@@ -5451,6 +5663,7 @@ async function leerImagen(archivo, alAvanzar = () => {}) {
 // Regla de la pantalla: ningún número aparece sin su contexto. Si el motor devolvió
 // SIN_DATOS_SUFICIENTES, aquí se ve el hueco declarado con lo que falta capturar — nunca
 // un cero disfrazado de dato.
+
 
 
 
@@ -7569,14 +7782,23 @@ const acciones = {
         // Un tope "solo este mes" no toca el catálogo: el histórico de los otros meses
         // queda exactamente como estaba.
         const presupuestos = { ...app.datos.presupuestos };
+        let datos = { ...app.datos, categorias, presupuestos };
         if (v.alcance === "mes") {
           const delMes = { ...(presupuestos[mes] || {}) };
-          if (v.tope === null) delete delMes[categoria.id];
-          else delMes[categoria.id] = v.tope;
+          if (v.tope === null) {
+            delete delMes[categoria.id];
+            // Quitar un tope necesita lápida, igual que borrar un movimiento: sin ella, el
+            // otro dispositivo —que todavía lo tiene— lo devuelve al unir, y el tope que
+            // quitaste reaparece solo.
+            datos = marcarBorrado(datos, claveDeTope(mes, categoria.id));
+          } else {
+            delMes[categoria.id] = v.tope;
+          }
           presupuestos[mes] = delMes;
+          datos = { ...datos, presupuestos };
         }
 
-        await guardar({ ...app.datos, categorias, presupuestos });
+        await guardar(datos);
       },
     });
   },

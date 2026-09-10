@@ -7,7 +7,7 @@
 // El documento lleva `version` a propósito: es lo que permite cambiar la forma de los
 // datos dentro de dos años sin perder un solo movimiento (ver migraciones.js).
 
-import { aCentavos } from "./dinero.js";
+import { aCentavos, montoUtilizable } from "./dinero.js";
 import { hoyISO, mesDe, esISO, horaValida } from "./ciclo.js";
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
@@ -76,7 +76,12 @@ export function idNuevo(prefijo = "m") {
 
 function entero(valor, porDefecto = null) {
   const n = typeof valor === "string" ? aCentavos(valor) : valor;
-  return Number.isFinite(n) ? Math.trunc(n) : porDefecto;
+  // El techo se aplica también aquí y no solo en `aCentavos`: por este camino entran los
+  // NÚMEROS de un JSON importado, que no pasan por el lector de texto. Un monto que ya no se
+  // puede sumar sin redondearse solo no es un monto: es la ausencia de uno.
+  if (!Number.isFinite(n)) return porDefecto;
+  const truncado = Math.trunc(n);
+  return montoUtilizable(truncado) ? truncado : porDefecto;
 }
 
 /**
