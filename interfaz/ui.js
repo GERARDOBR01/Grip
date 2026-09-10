@@ -21,6 +21,7 @@ import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
 import {
   recibirAviso, pendientes, ilegibles, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja,
   impactoPendiente, purgarBandeja, aceptarTanda, deshacerTanda, deConfianzaAlta,
+  absorberAvisos, ventanaDeAvisos, tocaTraer,
 } from "../motor/bandeja.js";
 import { montosFrecuentes } from "../motor/rapido.js";
 import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
@@ -68,6 +69,22 @@ const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
 
 function esc(valor) {
   return String(valor ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+/**
+ * «hace 2 h», «ayer», «hace 3 días». Para decir cuándo pasó algo sin obligar a leer una fecha.
+ * Redondea hacia abajo a propósito: «hace 2 h» siendo dos horas y media es honesto; «hace 3 h»
+ * cuando llevan dos y media, no.
+ */
+function haceCuanto(sello, ahora = Date.now()) {
+  const minutos = Math.floor((ahora - sello) / 60000);
+  if (!Number.isFinite(minutos) || minutos < 0) return "hace un momento";
+  if (minutos < 2) return "hace un momento";
+  if (minutos < 60) return `hace ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `hace ${horas} h`;
+  const dias = Math.floor(horas / 24);
+  return dias === 1 ? "ayer" : `hace ${dias} días`;
 }
 
 function monto(centavos, opciones) {
@@ -889,6 +906,18 @@ function vistaAjustes() {
   // undefined, la sección no se pinta, y la app no se entera de que faltaba nada.
   const hayPuente = typeof traerAvisos === "function" && typeof configuracionDelPuente === "function";
   const puente = hayPuente ? configuracionDelPuente() : null;
+
+  // Ahora que el correo se trae solo, aquí es donde se rinden cuentas: si el puente lleva
+  // días caído, la app no interrumpe por eso, pero tampoco puede callárselo.
+  const bitacora = hayPuente && typeof ultimaTraida === "function" ? ultimaTraida() : null;
+  const lineaTraida = !puente || !puente.url
+    ? ""
+    : !bitacora || !bitacora.sello
+      ? `<div class="rotulo" style="margin-top:8px">Todavía no ha traído nada. Se trae solo al abrir la app.</div>`
+      : bitacora.error
+        ? `<div class="rotulo aviso-linea" style="margin-top:8px">Último intento ${esc(haceCuanto(bitacora.sello))}: ${esc(bitacora.error)}</div>`
+        : `<div class="rotulo" style="margin-top:8px">Última vez que trajo: ${esc(haceCuanto(bitacora.sello))}.</div>`;
+
   const seccionPuente = hayPuente
     ? `<div class="titulo-seccion">Traer de mi correo</div>
        <div class="tarjeta">
@@ -904,6 +933,7 @@ function vistaAjustes() {
              <button class="boton" data-accion="traer-del-puente">Traer ahora</button>
              <button class="boton tenue" data-accion="probar-puente">Probar puente</button>
            </div>` : ""}
+         ${lineaTraida}
          <details style="margin-top:10px">
            <summary class="rotulo" style="cursor:pointer">Cómo encenderlo, paso a paso</summary>
            <ol class="rotulo" style="padding-left:18px;line-height:1.7">
@@ -916,8 +946,8 @@ function vistaAjustes() {
              <li>Dale a <b>Probar puente</b>: si algo falla, te digo exactamente qué mover.</li>
            </ol>
            <div class="rotulo">Para el correo diario, en el editor: elige la función
-             <code>enviarResumenDiario</code>, ejecútala una vez para dar permiso, y en
-             <b>Activadores</b> ponle un temporizador diario. Para apagarlo, borra el activador.</div>
+             <code>instalar</code> y ejecútala una vez. Ella sola pide los permisos y deja el
+             activador diario puesto. Para apagarlo, corre <code>desinstalar</code>.</div>
          </details>
          <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
@@ -1245,6 +1275,65 @@ function dejarResumenEnElPuente() {
   }
 }
 
+/**
+ * Va por los avisos del correo y los mete a la bandeja.
+ *
+ * Es el ÚNICO camino que hay para eso: lo recorre el botón «Traer ahora» de Ajustes y lo
+ * recorre la app sola al abrirse. Lo que cambia entre los dos es lo que hacen con el
+ * resultado, no cómo lo consiguen — dos caminos se habrían separado a la primera.
+ *
+ * Nunca lanza: devuelve `{ datos, nuevos, repetidos, sinLeer, revisados, error }`.
+ */
+async function irPorCorreo(config) {
+  const previa = typeof ultimaTraida === "function" ? ultimaTraida() : null;
+  const dias = ventanaDeAvisos(previa ? previa.dia : "", app.hoy);
+  const quieto = { datos: app.datos, nuevos: 0, repetidos: 0, sinLeer: 0, revisados: 0 };
+
+  const { avisos, error } = await traerAvisos({ url: config.url, token: config.token, dias });
+  if (error) {
+    if (typeof anotarTraida === "function") anotarTraida({ exito: false, error });
+    return { ...quieto, error };
+  }
+
+  const absorbido = absorberAvisos(app.datos, avisos, app.hoy);
+  if (typeof anotarTraida === "function") anotarTraida({ exito: true, dia: app.hoy });
+  return { ...absorbido, revisados: avisos.length, error: null };
+}
+
+/**
+ * Lo mismo, pero sin que nadie lo pida y sin que se note.
+ *
+ * «Que capture sola» decía el README, y hasta hoy dependía de que te acordaras de apretar un
+ * botón escondido en Ajustes. Lo que decide si esto ayuda o estorba son las tres reglas de
+ * silencio de aquí abajo:
+ *
+ *   · No cambia de pantalla. El botón sí salta a la bandeja, y está bien: lo apretaste tú.
+ *     Hacerlo solo sería quitarle la pantalla a alguien a media captura.
+ *   · Si no hay nada nuevo, no dice nada ni vuelve a pintar. Ni un «revisé 12 correos».
+ *   · Si falla, tampoco interrumpe: el motivo queda anotado y se enseña en Ajustes, junto al
+ *     puente. Un puente caído no es una emergencia que valga una alerta en la cara.
+ *
+ * Cuando SÍ trajo algo, no hace falta anunciarlo: el banner de la bandeja ya está pintado.
+ */
+async function traerDelPuenteEnSilencio() {
+  // El puente se descubre, no se importa: si alguien borró el adaptador, aquí no pasa nada.
+  if (typeof traerAvisos !== "function" || typeof configuracionDelPuente !== "function") return;
+
+  const config = configuracionDelPuente();
+  if (!config.url || !config.token) return;
+
+  const previa = typeof ultimaTraida === "function" ? ultimaTraida() : null;
+  if (!tocaTraer(previa ? previa.sello : 0)) return;
+
+  try {
+    const { datos, nuevos, sinLeer } = await irPorCorreo(config);
+    if (nuevos + sinLeer === 0) return;
+    await guardar(datos);
+  } catch (e) {
+    // `guardar` ya avisó y revirtió si fue el disco. Traer correo no puede tumbar la app.
+  }
+}
+
 const acciones = {
   ir(el) {
     app.vista = el.dataset.vista;
@@ -1313,40 +1402,23 @@ const acciones = {
     el.disabled = true;
     el.textContent = "Buscando…";
 
-    const { avisos, error } = await traerAvisos({ url: config.url, token: config.token, dias: 3 });
+    const { datos, nuevos, repetidos, sinLeer, revisados, error } = await irPorCorreo(config);
     if (error) {
       app.aviso = error;
       return render();
     }
 
-    // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
-    // parpadeando y multiplicaría las escrituras por nada.
-    let datos = app.datos;
-    let nuevos = 0, repetidos = 0, sinLeer = 0;
-    for (const aviso of avisos) {
-      const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
-      const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
-
-      // Lo que importa es si hubo ENTRADA, no si hubo error. Un aviso que no se pudo leer
-      // ahora deja entrada igual, esperando que digas cuánto y dónde; antes se contaba como
-      // "ilegible" y el correo se tiraba aquí mismo, con el gasto adentro.
-      if (!paso.entrada) {
-        repetidos++;
-        continue;
-      }
-      datos = paso.datos;
-      if (paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE) sinLeer++;
-      else nuevos++;
-    }
-
     const total = nuevos + sinLeer;
+    // Lo apretaste tú: se te enseña la bandeja y se te dice qué pasó, aunque no haya nada.
+    // La traída automática hace lo contrario, y por eso son dos caminos distintos aquí y uno
+    // solo en el motor.
     app.vista = "bandeja";
     app.aviso = total
       ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.` +
         (sinLeer ? ` ${sinLeer} que no supe leer y ${sinLeer === 1 ? "espera" : "esperan"} tus datos.` : "") +
         (repetidos ? ` ${repetidos} ya los tenías.` : "")
-      : avisos.length
-        ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
+      : revisados
+        ? `Revisé ${revisados} ${revisados === 1 ? "correo" : "correos"} y no hay nada nuevo.`
         : "No encontré avisos de tus bancos en los últimos días.";
 
     if (total) await guardar(datos);
@@ -2126,6 +2198,17 @@ export async function arrancar() {
   await tirarLoViejo();
   render();
   await atenderCompartido();
+
+  // Que la bandeja se llene sola. Va después de pintar y de atender lo compartido: nada de
+  // esto debe hacer esperar a la pantalla.
+  traerDelPuenteEnSilencio();
+
+  // En un celular la app no se cierra, se deja. Volver a ella días después tiene que traer lo
+  // que llegó mientras tanto; el freno de `tocaTraer` es lo que evita que esto sea una
+  // petición cada vez que cambias de pestaña.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") traerDelPuenteEnSilencio();
+  });
 
   // Si otro dispositivo escribe, esta pantalla se entera.
   app.almacen.suscribir(async () => {

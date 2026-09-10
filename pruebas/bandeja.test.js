@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   recibirAviso, pendientes, aceptarEntrada, descartarEntrada, deshacerEntrada,
   resumenBandeja, purgarBandeja, impactoPendiente,
+  absorberAvisos, ventanaDeAvisos, tocaTraer, DIAS_POR_DEFECTO, HORAS_ENTRE_TRAIDAS,
 } from "../motor/bandeja.js";
 import { sugerirCategoria, recordar, olvidar, categoriaMasUsada, reglasAprendidas } from "../motor/aprendizaje.js";
 import { ESTADOS_BANDEJA, TIPOS } from "../motor/modelo.js";
@@ -240,5 +241,81 @@ test("un comercio distinto o una fecha lejana NO se confunden con una liquidaci�
   ]) {
     const { entrada } = recibirAviso(base, texto, "x@banorte.com", "correo", HOY);
     assert.equal(entrada.reemplaza, null, `no debería proponer reemplazo: ${texto}`);
+  }
+});
+
+// ── Traer del correo, sin que nadie lo pida ────────────────────────────────
+//
+// Lo que se prueba aquí no es que el correo llegue —eso vive del otro lado, en Apps Script—
+// sino las dos decisiones que hacen que traerlo solo ayude en vez de estorbar: cuánto correo
+// pedir para no perderse nada, y cuándo abstenerse de preguntar.
+
+const HORA = 3600000;
+
+test("nunca traído: se piden los días de siempre, no medio año", () => {
+  assert.equal(ventanaDeAvisos("", HOY), DIAS_POR_DEFECTO);
+  assert.equal(ventanaDeAvisos(null, HOY), DIAS_POR_DEFECTO);
+});
+
+test("volver de vacaciones no deja correo afuera", () => {
+  // Nueve días fuera: se piden diez, con el día de traslape. Pedir tres —lo que pedía el
+  // botón— habría perdido seis días de avisos sin decir nada.
+  assert.equal(ventanaDeAvisos("2026-08-31", HOY), 10);
+});
+
+test("aunque hayas abierto la app hace un rato, se piden los días mínimos", () => {
+  // Traído hoy mismo: pedir 1 día dejaría fuera un aviso de anoche que ya estaba cuando se
+  // trajo. El mínimo cuesta unos cuantos repetidos, y los repetidos no cuestan nada.
+  assert.equal(ventanaDeAvisos(HOY, HOY), DIAS_POR_DEFECTO);
+});
+
+test("un hueco enorme se topa: pedirle a Gmail seis meses no trae seis meses", () => {
+  assert.equal(ventanaDeAvisos("2024-01-01", HOY), 30);
+  assert.equal(ventanaDeAvisos("2024-01-01", HOY, 15), 15);
+});
+
+test("una fecha del futuro no produce una ventana negativa", () => {
+  assert.equal(ventanaDeAvisos("2027-01-01", HOY), DIAS_POR_DEFECTO);
+});
+
+test("no se le pregunta al correo veinte veces al día", () => {
+  const ahora = Date.now();
+  assert.equal(tocaTraer(0, ahora), true, "nunca traído: adelante");
+  assert.equal(tocaTraer(ahora - HORA, ahora), false, "hace una hora: todavía no");
+  assert.equal(tocaTraer(ahora - HORAS_ENTRE_TRAIDAS * HORA, ahora), true);
+  assert.equal(tocaTraer(ahora - 48 * HORA, ahora), true);
+});
+
+test("un reloj adelantado no congela la traída", () => {
+  const ahora = Date.now();
+  assert.equal(tocaTraer(ahora + 72 * HORA, ahora), true);
+});
+
+test("absorber avisos los mete todos y devuelve la cuenta de cada cosa", () => {
+  const avisos = [
+    { asunto: "Compra", texto: AVISO, remitente: "alertas@banco.com" },
+    { asunto: "Compra", texto: AVISO, remitente: "alertas@banco.com" }, // el mismo, otra vez
+    { asunto: "Promoción", texto: "Aprovecha nuestra promoción de fin de mes", remitente: "promos@banco.com" },
+  ];
+  const { datos, nuevos, repetidos } = absorberAvisos(datosDePrueba(), avisos, HOY);
+
+  assert.equal(nuevos, 1, "el mismo aviso dos veces es un solo movimiento");
+  assert.equal(repetidos, 1);
+  assert.equal(pendientes(datos).length, 1, "una promoción no produce un movimiento");
+});
+
+test("absorber no muta lo que recibe", () => {
+  const antes = datosDePrueba();
+  const copia = JSON.stringify(antes);
+  absorberAvisos(antes, [{ texto: AVISO, remitente: "alertas@banco.com" }], HOY);
+  assert.equal(JSON.stringify(antes), copia);
+});
+
+test("absorber sin avisos no rompe ni inventa nada", () => {
+  const datos = datosDePrueba();
+  for (const vacio of [[], null, undefined]) {
+    const paso = absorberAvisos(datos, vacio, HOY);
+    assert.equal(paso.nuevos, 0);
+    assert.equal(paso.datos, datos);
   }
 });

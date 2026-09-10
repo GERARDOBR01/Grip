@@ -516,26 +516,53 @@ await new Promise((listo) => puente.listen(0, "127.0.0.1", listo));
 const puertoPuente = puente.address().port;
 
 if (HAY_PUENTE) {
-await instalada.evaluate((direccion) => {
-  localStorage.setItem("grip:puente", JSON.stringify({ url: direccion, token: "llave-de-prueba" }));
-}, `http://127.0.0.1:${puertoPuente}/exec`);
-await instalada.reload();
-await instalada.waitForSelector(".barra");
-await instalada.click('[data-vista="ajustes"]');
-await instalada.waitForSelector('[data-accion="traer-del-puente"]');
 // Esta página comparte origen con las anteriores, así que ya hay cosas en la bandeja: lo que
 // se mide es cuánto CRECE. Y se cuenta por el contador de la barra, no por tarjetas pintadas
 // — la lista tiene tope, así que contar tarjetas daría siempre el mismo número.
 const contador = async () => Number((await instalada.locator(".globo").textContent().catch(() => "0")) || 0);
+const esperarA = async (condicion, limite = 8000) => {
+  const hasta = Date.now() + limite;
+  while (Date.now() < hasta) {
+    if (await condicion()) return true;
+    await instalada.waitForTimeout(150);
+  }
+  return false;
+};
+
+// El contador se lee sobre una página ya recargada: las pantallas anteriores dejaron cosas en
+// la bandeja y el número de esta pestaña está viejo.
 await instalada.reload();
 await instalada.waitForSelector(".barra", { timeout: 8000 });
 const antes = await contador();
-await instalada.click('[data-vista="ajustes"]');
-await instalada.click('[data-accion="traer-del-puente"]');
-await instalada.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
 
-const traidas = (await contador()) - antes;
-revisar("el puente trae los dos avisos y caen leídos en la bandeja", traidas === 2, `${traidas} nuevas`);
+// La promesa: configurado el puente, la bandeja se llena SOLA. Aquí no se aprieta nada — se
+// configura, se recarga, y se espera. Si esto deja de pasar, «que capture sola» era un decir.
+await instalada.evaluate((direccion) => {
+  localStorage.removeItem("grip:puente:ultima"); // como si nunca se hubiera traído
+  localStorage.setItem("grip:puente", JSON.stringify({ url: direccion, token: "llave-de-prueba" }));
+}, `http://127.0.0.1:${puertoPuente}/exec`);
+await instalada.reload();
+await instalada.waitForSelector(".barra", { timeout: 8000 });
+
+const llegaronSolos = await esperarA(async () => (await contador()) - antes === 2);
+revisar("sin tocar nada, la bandeja se llena sola al abrir",
+  llegaronSolos, `${(await contador()) - antes} nuevas`);
+
+// Y no se pregunta otra vez en cada recarga: eso sería una llamada a Apps Script por vistazo.
+await instalada.reload();
+await instalada.waitForSelector(".barra", { timeout: 8000 });
+await instalada.waitForTimeout(600);
+revisar("y no vuelve a preguntar en cada recarga", (await contador()) - antes === 2,
+  `${(await contador()) - antes} tras recargar`);
+
+// El botón sigue ahí para quien no quiera esperar, y lo que ya trajo no lo trae dos veces.
+await instalada.click('[data-vista="ajustes"]');
+await instalada.waitForSelector('[data-accion="traer-del-puente"]');
+await instalada.click('[data-accion="traer-del-puente"]');
+await instalada.waitForSelector(".aviso", { timeout: 8000 });
+revisar("«Traer ahora» sigue funcionando y no duplica lo ya traído",
+  (await contador()) - antes === 2 && (await instalada.textContent(".aviso")).includes("no hay nada nuevo"),
+  await instalada.textContent(".aviso"));
 revisar(
   "sin petición de permiso previa: por eso se manda como text/plain",
   !huboPreflight,

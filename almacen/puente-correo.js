@@ -14,6 +14,9 @@
 // pasa. El contenido sigue siendo JSON; lo que cambia es la etiqueta.
 
 const CLAVE = "grip:puente";
+// La bitácora va en su propia llave, aparte de la configuración: cambiar el token no debe
+// borrar la memoria de hasta dónde se había leído.
+const CLAVE_BITACORA = "grip:puente:ultima";
 const ESPERA_MAXIMA = 15000;
 
 /** localStorage puede LANZAR con solo tocarlo (iframes sin permiso). Nunca se accede pelón. */
@@ -48,6 +51,48 @@ export function guardarConfiguracionDelPuente({ url, token }) {
   try {
     if (!url && !token) almacen.removeItem(CLAVE);
     else almacen.setItem(CLAVE, JSON.stringify({ url: String(url || "").trim(), token: String(token || "").trim() }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Cuándo se trajo por última vez y cómo fue: `{ dia, sello, error }` o null.
+ *
+ * `dia` es hasta dónde se leyó con ÉXITO —de ahí sale la ventana de la próxima traída—, y
+ * `sello` es cuándo se intentó, con error o sin él, que es lo que decide si toca volver a
+ * intentar. Son dos cosas distintas a propósito: si el puente lleva tres días caído, no hay
+ * que reintentar cada minuto, pero cuando por fin conteste tiene que traer los tres días.
+ */
+export function ultimaTraida() {
+  const almacen = almacenLocal();
+  if (!almacen) return null;
+  try {
+    const crudo = almacen.getItem(CLAVE_BITACORA);
+    if (!crudo) return null;
+    const guardado = JSON.parse(crudo);
+    return {
+      dia: guardado.dia || "",
+      sello: Number(guardado.sello) || 0,
+      error: guardado.error || "",
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Anota el intento. En un fallo, `dia` NO avanza: el hueco sigue pendiente de leerse. */
+export function anotarTraida({ exito, dia = "", error = "" } = {}) {
+  const almacen = almacenLocal();
+  if (!almacen) return false;
+  const previa = ultimaTraida();
+  try {
+    almacen.setItem(CLAVE_BITACORA, JSON.stringify({
+      dia: exito ? dia : (previa ? previa.dia : ""),
+      sello: Date.now(),
+      error: exito ? "" : String(error || ""),
+    }));
     return true;
   } catch (e) {
     return false;

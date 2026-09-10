@@ -14,13 +14,32 @@ Es opcional y borrable: la app funciona igual sin él.
 ## Instalarlo
 
 Está escrito paso a paso en el encabezado de `Codigo.gs`. Son ~10 minutos y no hay que
-programar nada: pegar, cambiar dos líneas, y desplegar.
+programar nada: pegar, cambiar dos líneas, desplegar, y correr `instalar` una vez.
+
+## Trae solo
+
+Una vez configurado en Ajustes, **Grip va por el correo sola** cada vez que la abres, sin que
+aprietes nada. El botón «Traer ahora» se queda para cuando no quieras esperar.
+
+Pide los días que hagan falta para cubrir el hueco desde la última vez, no tres fijos: volver
+de una semana fuera no deja avisos afuera. Y no pregunta más de una vez cada tres horas, porque
+en un celular la app se deja abierta y se vuelve a mirar veinte veces al día — sin ese freno,
+cada vistazo sería una llamada a Apps Script, que tiene cuota.
+
+Si el puente está caído, **no te interrumpe**: el motivo y la hora del último intento quedan en
+Ajustes, debajo de la tarjeta del puente.
 
 ## El correo diario
 
 El mismo script puede mandarte una línea al día: *"Te quedan $2,340 para esta quincena. Son
-$180 por día hasta el 15."* Se enciende con un activador de tiempo y gasta 1 de los 100
-correos diarios que da una cuenta gratis.
+$180 por día hasta el 15."* Gasta 1 de los 100 correos diarios que da una cuenta gratis.
+
+Se enciende corriendo la función **`instalar`** una vez desde el editor: ella deja el activador
+diario puesto —a las 8 de la mañana, hora de la Ciudad de México— y correrla dos veces no deja
+dos activadores. Para apagarlo, `desinstalar`.
+
+Y es, hoy por hoy, **el único canal que funciona con la app cerrada**. Un PWA no puede
+despertarse solo de forma fiable; el correo sí llega.
 
 Con una salvedad que vale la pena entender: **el script no conoce tus números**, viven en tu
 navegador. Lo que manda es el último resumen que Grip le dejó al guardar. Por eso va sellado

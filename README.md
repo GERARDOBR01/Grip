@@ -129,7 +129,9 @@ Tres formas de llenar la bandeja, todas contra el mismo lector:
    leída. Es la única vía para bancos que solo notifican dentro de su app.
 3. **El puente.** Un [Apps Script](puente/) en tu propia cuenta de Google que busca los
    avisos de tus bancos y se los pasa a la app. Gratis, sin servidor, y lo borras cuando
-   quieras.
+   quieras. Configurado una vez, **la app va por ellos sola cada vez que la abres**: pide los
+   días que hagan falta desde la última, así que volver de vacaciones no deja correo afuera. Si
+   el puente está caído no te interrumpe — lo dice en Ajustes y ya.
 
 Lo que hay que decir antes de que alguien se ilusione: **el correo no cubre todo tu dinero.**
 Nu manda correo de las transferencias que envías, pero no de las compras con tarjeta. HSBC solo
