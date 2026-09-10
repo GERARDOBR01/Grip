@@ -4,9 +4,10 @@ import {
   recibirAviso, pendientes, aceptarEntrada, descartarEntrada, deshacerEntrada,
   resumenBandeja, purgarBandeja, impactoPendiente,
   absorberAvisos, ventanaDeAvisos, tocaTraer, DIAS_POR_DEFECTO, HORAS_ENTRE_TRAIDAS,
+  sinNadaQueRevisar, deConfianzaAlta,
 } from "../motor/bandeja.js";
 import { sugerirCategoria, recordar, olvidar, categoriaMasUsada, reglasAprendidas } from "../motor/aprendizaje.js";
-import { ESTADOS_BANDEJA, TIPOS } from "../motor/modelo.js";
+import { ESTADOS_BANDEJA, TIPOS, ORIGENES } from "../motor/modelo.js";
 import { migrar } from "../motor/migraciones.js";
 import { ESTADOS } from "../motor/veredicto.js";
 import { datosDePrueba, conMovimientos } from "./ayuda.js";
@@ -318,4 +319,33 @@ test("absorber sin avisos no rompe ni inventa nada", () => {
     assert.equal(paso.nuevos, 0);
     assert.equal(paso.datos, datos);
   }
+});
+
+// ── Lo que salió de una captura de pantalla ────────────────────────────────
+//
+// Un OCR puede leer $89.00 donde decía $8,900.00. Ese error no se nota al aceptarlo: se nota a
+// fin de quincena, cuando ya no sabes de dónde salió. Por eso una entrada que viene de una
+// imagen no se acepta sin mirarla, y estas pruebas son lo que impide que alguien lo "mejore".
+
+test("una entrada de imagen NUNCA se acepta sin mirarla, por limpia que se vea", () => {
+  const deImagen = {
+    id: "img1", estado: ESTADOS_BANDEJA.PENDIENTE, recibido: HOY,
+    confianza: "alta", origen: ORIGENES.IMAGEN,
+    movimiento: { id: "m1", tipo: TIPOS.GASTO, monto: 8900, fecha: HOY, categoria: "super", nota: "OXXO" },
+  };
+  assert.equal(sinNadaQueRevisar(deImagen), false);
+
+  // Y el mismo aviso pegado a mano sí, para que quede claro que lo que decide es el origen.
+  assert.equal(sinNadaQueRevisar({ ...deImagen, origen: ORIGENES.PEGADO }), true);
+});
+
+test("y por lo tanto no entra al «aceptar todo» de la bandeja", () => {
+  const datos = { ...datosDePrueba(), bandeja: [{
+    id: "img1", estado: ESTADOS_BANDEJA.PENDIENTE, recibido: HOY,
+    confianza: "alta", origen: ORIGENES.IMAGEN,
+    movimiento: { id: "m1", tipo: TIPOS.GASTO, monto: 8900, fecha: HOY, categoria: "super", nota: "OXXO" },
+  }] };
+
+  assert.equal(pendientes(datos).length, 1, "sigue esperando, que es lo que debe hacer");
+  assert.equal(deConfianzaAlta(datos).length, 0, "pero no se acepta en lote");
 });

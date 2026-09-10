@@ -161,7 +161,7 @@ export const ESTADOS_BANDEJA = {
   // copia vieja de la app la descartaría al normalizar, en silencio.
   ILEGIBLE: "ilegible",
 };
-export const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" };
+export const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo", IMAGEN: "imagen" };
 
 /**
  * Una entrada de la bandeja: un movimiento propuesto, con de dónde salió y qué tan seguro

@@ -50,6 +50,7 @@ const MODULOS = [
   { ruta: "almacen/anfitrion-claude.js", opcional: true }, // borrarlo no rompe nada
   { ruta: "almacen/puente-correo.js", opcional: true },    // tampoco
   "interfaz/avisos.js",
+  { ruta: "interfaz/lector-imagen.js", opcional: true }, // borrarlo deja la app sin OCR, y ya
   "interfaz/ui.js",
 ];
 

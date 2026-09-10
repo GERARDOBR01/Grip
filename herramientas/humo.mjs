@@ -479,6 +479,83 @@ revisar("al abrir NO se pide permiso de avisos: eso se enciende en Ajustes",
   (await atajo.evaluate(() => window.__pidioPermiso)) === false);
 await contextoAtajo.close();
 
+// ── Leer una captura de pantalla ────────────────────────────────────────────────
+//
+// El texto de una notificación del banco no se puede seleccionar; una captura se hace con dos
+// botones. Esto comprueba el camino entero, con OCR de verdad: se dibuja un aviso en un canvas
+// —para no meter capturas de nadie al repositorio—, se pega como si vinieras de la galería, y
+// tiene que caer leído en la bandeja con su monto.
+//
+// Si alguien borró interfaz/lector-imagen.js, esto se salta solo: que el lector no esté es un
+// escenario válido, no un fallo.
+
+const HAY_LECTOR = existsSync(join(RAIZ, "interfaz/lector-imagen.js"));
+
+if (HAY_LECTOR) {
+const contextoOCR = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const ocr = await contextoOCR.newPage();
+await ocr.goto(`http://127.0.0.1:${puerto}/index.html`);
+await ocr.waitForSelector(".barra", { timeout: 8000 });
+await ocr.click('[data-vista="bandeja"]');
+await ocr.waitForSelector("#aviso");
+
+revisar("con el lector puesto, la app ofrece leer una captura",
+  (await ocr.locator('[data-accion="elegir-captura"]').count()) === 1);
+
+// El aviso, dibujado. Texto renderizado y de alto contraste: el mejor caso posible del OCR, y
+// exactamente lo que es una captura de pantalla de verdad.
+await ocr.evaluate(async () => {
+  const lienzo = document.createElement("canvas");
+  lienzo.width = 1000;
+  lienzo.height = 340;
+  const pincel = lienzo.getContext("2d");
+  pincel.fillStyle = "#ffffff";
+  pincel.fillRect(0, 0, 1000, 340);
+  pincel.fillStyle = "#000000";
+  pincel.font = "bold 34px sans-serif";
+  pincel.fillText("Banorte", 40, 70);
+  pincel.font = "32px sans-serif";
+  pincel.fillText("Compra por $189.00 MXN en OXXO CENTRO", 40, 160);
+  pincel.fillText("el 09/09/2026 con tu tarjeta 4821", 40, 230);
+
+  const trozo = await new Promise((listo) => lienzo.toBlob(listo, "image/png"));
+  const archivo = new File([trozo], "captura.png", { type: "image/png" });
+  const porta = new DataTransfer();
+  porta.items.add(archivo);
+  document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: porta, bubbles: true }));
+});
+
+// El motor son 4 MB y arranca una vez: aquí se le da tiempo de verdad.
+let entradaLeida = null;
+for (let i = 0; i < 120; i++) {
+  entradaLeida = await ocr.evaluate(() => {
+    const tarjeta = document.querySelector(".tarjeta.entrada");
+    return tarjeta ? tarjeta.innerText : null;
+  });
+  if (entradaLeida) break;
+  await ocr.waitForTimeout(500);
+}
+
+revisar(
+  "pegar una captura la lee y cae en la bandeja con su monto",
+  Boolean(entradaLeida) && entradaLeida.includes("189.00"),
+  (entradaLeida || "no llegó nada a la bandeja").split("\n").slice(0, 2).join(" · "),
+);
+
+// La regla que no se rompe: un dígito mal leído no se acepta sin mirarlo.
+const sinAceptarEnLote = await ocr.evaluate(() =>
+  document.querySelectorAll('[data-accion="aceptar-tanda"]').length === 0);
+revisar("y NO se ofrece aceptarla en lote: un OCR no acepta dinero solo", sinAceptarEnLote);
+
+const guardoLaImagen = await ocr.evaluate(() =>
+  JSON.stringify(window.localStorage).includes("data:image"));
+revisar("y la imagen no se guarda en ningún lado", !guardoLaImagen);
+
+await contextoOCR.close();
+} else {
+  console.log("  · el lector de imágenes no está: se salta. La app corre sin él, que es lo que se promete.");
+}
+
 // ── La sombra de notificaciones, que es donde vive la gente ─────────────────────
 //
 // La jugada del proyecto: aceptar un cargo desde la pantalla de bloqueo, sin abrir nada. Hoy

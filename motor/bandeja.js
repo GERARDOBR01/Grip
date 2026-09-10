@@ -73,6 +73,11 @@ export function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEG
     // Un cargo final NO es un gasto nuevo: sustituye a la preautorización que ya está.
     reemplaza: duplicado && duplicado.datos.motivo === "liquidacion" ? duplicado.datos.id : null,
     aviso: [duplicado ? duplicado.motivo : "", ...razones].filter(Boolean).join(" "),
+    // De una captura de pantalla SÍ se guarda la primera línea leída, y solo de ella. No es
+    // para enseñarla bonito: es para que el ojo compare el monto grande contra lo que el OCR
+    // creyó ver, antes de aceptarlo. Un correo no la necesita —lo leíste tú— y por eso ahí se
+    // sigue tirando el texto, que es la promesa de este motor.
+    resumen: origen === ORIGENES.IMAGEN ? primeraLinea(texto) : "",
   });
 
   return { datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] }, entrada, duplicado, error: null };
@@ -269,7 +274,15 @@ export function deshacerTanda(datos, ids) {
  *     que solo se movió de bolsillo, y la app mentiría hacia arriba.
  */
 export function sinNadaQueRevisar(entrada) {
-  return Boolean(entrada) && entrada.confianza === "alta" && !entrada.reemplaza && !entrada.posibleTraspaso;
+  if (!entrada) return false;
+
+  // Lo que salió de una CAPTURA DE PANTALLA nunca entra aquí, por limpio que se vea el texto.
+  // Un OCR puede leer $89.00 donde decía $8,900.00, y un dígito de más en un monto es el peor
+  // error que esta app puede cometer: no se nota al aceptarlo, se nota a fin de quincena. Que
+  // el lector convierta píxeles en texto no lo vuelve testigo de nada — se acepta mirándola.
+  if (entrada.origen === ORIGENES.IMAGEN) return false;
+
+  return entrada.confianza === "alta" && !entrada.reemplaza && !entrada.posibleTraspaso;
 }
 
 /** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */

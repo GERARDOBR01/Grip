@@ -494,13 +494,23 @@ function vistaBandeja() {
   const sinLeer = ilegibles(app.datos);
   const impacto = impactoPendiente(app.datos);
 
+  // El lector de capturas se descubre, no se importa: si alguien borró interfaz/lector-imagen.js,
+  // esto da undefined, el botón no se pinta, y la app no se entera de que faltaba nada.
+  const hayLector = typeof leerImagen === "function" && typeof puedeLeerImagenes === "function" && puedeLeerImagenes();
+
   const pegar = `<div class="tarjeta">
     <div class="titulo-tarjeta">Pega el aviso de tu banco</div>
     <div class="rotulo">Copia el correo o la notificación y pégalo aquí. Saco el monto, la fecha y el
-      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.</div>
+      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.${hayLector
+        ? " ¿El texto no se deja seleccionar? Toma una captura de pantalla y súbela: también la leo." : ""}</div>
     <textarea id="aviso" class="campo area" rows="3" data-accion-input="borrador-aviso"
       placeholder="Compra por $189.00 en ... el 09/09/2026">${esc(app.borrador)}</textarea>
-    <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
+    <div class="acciones">
+      <button class="boton" data-accion="leer-aviso">Leer</button>
+      ${hayLector ? `<button class="boton tenue" data-accion="elegir-captura">Leer una captura</button>
+        <input id="captura" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+          hidden data-accion-archivo="captura">` : ""}
+    </div>
   </div>`;
 
   // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
@@ -1460,6 +1470,56 @@ async function atenderLaSombra() {
 }
 
 /**
+ * Lee una captura de pantalla y la mete a la bandeja.
+ *
+ * El OCR convierte píxeles en TEXTO y ahí se acaba su trabajo: el monto, la fecha y el comercio
+ * los saca `recibirAviso` con las mismas reglas que leen un correo pegado. Ningún modelo decide
+ * un peso, y de paso esto hereda gratis todo lo que el motor ya sabe hacer.
+ *
+ * La imagen no se guarda en ningún lado. Se lee y se tira.
+ */
+async function leerCaptura(archivo) {
+  if (!archivo || typeof leerImagen !== "function") return;
+
+  const pasos = {
+    preparando: "Preparando la imagen…",
+    arrancando: "Arrancando el lector (la primera vez tarda)…",
+    leyendo: "Leyendo…",
+  };
+  app.aviso = pasos.preparando;
+  render();
+
+  const { texto, error } = await leerImagen(archivo, (paso) => {
+    app.aviso = pasos[paso] || app.aviso;
+    render();
+  });
+
+  if (error) {
+    app.aviso = error;
+    return render();
+  }
+  if (!texto) {
+    app.aviso = "No encontré texto en esa imagen. Prueba con una captura más cerrada del aviso.";
+    return render();
+  }
+
+  const paso = recibirAviso(app.datos, texto, "", ORIGENES.IMAGEN, app.hoy);
+
+  // Sin entrada solo puede ser un duplicado: lo ilegible SÍ deja entrada cuando el origen no es
+  // pegado, y así una captura nunca se pierde — se queda pidiendo cuánto y dónde.
+  if (!paso.entrada) {
+    app.aviso = paso.duplicado ? paso.duplicado.motivo : "Ese aviso ya estaba.";
+    return render();
+  }
+
+  app.vista = "bandeja";
+  app.aviso = paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE
+    ? "Leí la captura pero no reconocí el formato. Dime cuánto y dónde y la registro."
+    : "Leí la captura. Revisa el monto contra lo que dice y acéptala.";
+  await guardar(paso.datos);
+}
+
+/**
  * Va por los avisos del correo y los mete a la bandeja.
  *
  * Es el ÚNICO camino que hay para eso: lo recorre el botón «Traer ahora» de Ajustes y lo
@@ -1672,6 +1732,11 @@ const acciones = {
     await guardar(aplicarRegla(app.datos, p.clave, p.categoriaId));
     app.aviso = `${p.cuantos} ${p.cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(p.categoriaId)}.`;
     render();
+  },
+
+  "elegir-captura"() {
+    const campo = document.getElementById("captura");
+    if (campo) campo.click();
   },
 
   async "encender-avisos"() {
@@ -2409,6 +2474,27 @@ export async function arrancar() {
       caja.focus();
       caja.setSelectionRange(posicion, posicion);
     }
+  });
+
+  // Elegir una captura desde el botón. Va por `change` y no por `input`: un campo de archivo
+  // no avisa de otra forma.
+  document.addEventListener("change", (e) => {
+    if (e.target.dataset.accionArchivo !== "captura") return;
+    const archivo = e.target.files && e.target.files[0];
+    e.target.value = ""; // que elegir la misma imagen dos veces vuelva a disparar
+    if (archivo) leerCaptura(archivo);
+  });
+
+  // Y pegar la captura directamente en la caja, que es lo que hace cualquiera después de
+  // tomarla: copiar y pegar donde ya pegaba texto.
+  document.addEventListener("paste", (e) => {
+    if (typeof leerImagen !== "function") return;
+    const archivos = e.clipboardData && e.clipboardData.files;
+    if (!archivos || !archivos.length) return;
+    const imagen = [...archivos].find((f) => f.type.startsWith("image/"));
+    if (!imagen) return;
+    e.preventDefault();
+    leerCaptura(imagen);
   });
 
   document.addEventListener("click", (e) => {
