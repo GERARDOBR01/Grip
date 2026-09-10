@@ -556,6 +556,95 @@ await contextoOCR.close();
   console.log("  · el lector de imágenes no está: se salta. La app corre sin él, que es lo que se promete.");
 }
 
+// ── Compartir a la app desde Android ────────────────────────────────────────────
+//
+// El share_target pasó de GET a POST para poder recibir archivos, y ésa es la regresión más
+// probable de todo el trabajo: el texto compartido desde Gmail viajaba por el camino viejo.
+// Aquí se comprueban los dos, con un formulario de verdad que el service worker intercepta.
+
+const contextoCompartir = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const compartir = await contextoCompartir.newPage();
+await compartir.goto(`http://127.0.0.1:${puerto}/index.html`);
+await compartir.waitForSelector(".barra", { timeout: 8000 });
+await compartir.evaluate(async () => { await navigator.serviceWorker.ready; });
+
+/** Manda un formulario a ./compartir, como hace Android al compartir a una app instalada. */
+async function compartirComoAndroid(pagina, campos) {
+  await pagina.evaluate(async (partes) => {
+    const formulario = document.createElement("form");
+    formulario.method = "POST";
+    formulario.action = "./compartir";
+    formulario.enctype = "multipart/form-data";
+
+    if (partes.texto) {
+      const campo = document.createElement("input");
+      campo.type = "hidden";
+      campo.name = "texto";
+      campo.value = partes.texto;
+      formulario.appendChild(campo);
+    }
+
+    if (partes.conImagen) {
+      const lienzo = document.createElement("canvas");
+      lienzo.width = 1000;
+      lienzo.height = 260;
+      const pincel = lienzo.getContext("2d");
+      pincel.fillStyle = "#ffffff";
+      pincel.fillRect(0, 0, 1000, 260);
+      pincel.fillStyle = "#000000";
+      pincel.font = "32px sans-serif";
+      pincel.fillText("Compra por $77.00 MXN en CAFE LA ESQUINA", 40, 110);
+      pincel.fillText("el 09/09/2026 con tu tarjeta 4821", 40, 180);
+      const trozo = await new Promise((listo) => lienzo.toBlob(listo, "image/png"));
+
+      const campo = document.createElement("input");
+      campo.type = "file";
+      campo.name = "imagen";
+      const porta = new DataTransfer();
+      porta.items.add(new File([trozo], "captura.png", { type: "image/png" }));
+      campo.files = porta.files;
+      formulario.appendChild(campo);
+    }
+
+    document.body.appendChild(formulario);
+    formulario.submit();
+  }, campos);
+}
+
+// 1) Texto. Es lo que ya funcionaba y lo que no se puede romper.
+await compartirComoAndroid(compartir, { texto: "Banorte: Compra por $312.00 MXN en FARMACIA SAN JORGE el 09/09/2026 con tu tarjeta terminación 4821." });
+await compartir.waitForURL((u) => !u.toString().includes("/compartir"), { timeout: 10000 });
+await compartir.waitForSelector(".tarjeta.entrada", { timeout: 10000 });
+revisar(
+  "compartir TEXTO por POST sigue llegando leído a la bandeja",
+  (await compartir.textContent("body")).includes("312.00"),
+  (await compartir.textContent(".entrada .monto") || "").trim(),
+);
+revisar("y la dirección queda limpia", !compartir.url().includes("compartido"), compartir.url());
+
+// 2) Imagen. Lo nuevo: compartir la captura de una notificación desde la galería.
+if (HAY_LECTOR) {
+  await compartirComoAndroid(compartir, { conImagen: true });
+  await compartir.waitForURL((u) => !u.toString().includes("/compartir"), { timeout: 10000 });
+
+  let conCafe = false;
+  for (let i = 0; i < 120; i++) {
+    conCafe = (await compartir.textContent("body")).includes("77.00");
+    if (conCafe) break;
+    await compartir.waitForTimeout(500);
+  }
+  revisar("compartir una CAPTURA la lee y la mete a la bandeja", conCafe,
+    conCafe ? "" : "no apareció el monto de la captura");
+
+  const buzonVacio = await compartir.evaluate(async () => {
+    const buzon = await caches.open("grip-compartido");
+    return (await buzon.keys()).length === 0;
+  });
+  revisar("y el buzón queda vacío: la captura no se queda guardada", buzonVacio);
+}
+
+await contextoCompartir.close();
+
 // ── La sombra de notificaciones, que es donde vive la gente ─────────────────────
 //
 // La jugada del proyecto: aceptar un cargo desde la pantalla de bloqueo, sin abrir nada. Hoy

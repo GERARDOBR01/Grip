@@ -1,25 +1,64 @@
-// Service worker de Grip — versión 54db742c, que es el hash de lo armado.
+// Service worker de Grip — versión b59091cb, que es el hash de lo armado.
 //
 // Guarda la app para poder abrirla sin conexión. No guarda NINGÚN dato tuyo: los movimientos
 // viven en el almacenamiento del navegador, que esto ni toca.
 
-const CACHE = "grip-54db742c";
+const CACHE = "grip-b59091cb";
 const ARCHIVOS = ["./", "./index.html", "./manifest.webmanifest", "./icono-192.png", "./icono-512.png", "./icono-180.png"];
 
 self.addEventListener("install", (evento) => {
   evento.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
 });
 
+// Lo que se comparte a la app aterriza aquí antes de que la pantalla exista. No es caché de la
+// app: es un buzón de una sola entrega, y por eso NO se borra al activar una versión nueva.
+const BUZON = "grip-compartido";
+
 self.addEventListener("activate", (evento) => {
   // Al publicar una versión nueva, las viejas se tiran: nada de servir una app de hace meses.
   evento.waitUntil(
     caches.keys()
-      .then((llaves) => Promise.all(llaves.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((llaves) => Promise.all(
+        llaves.filter((k) => k !== CACHE && k !== BUZON).map((k) => caches.delete(k)),
+      ))
       .then(() => self.clients.claim()),
   );
 });
 
+/**
+ * Guarda lo compartido en el buzón. Nunca lanza: si esto falla, la app abre vacía, que es feo
+ * pero no es perder nada.
+ */
+async function recibirCompartido(peticion) {
+  try {
+    const formulario = await peticion.formData();
+    const buzon = await caches.open(BUZON);
+
+    const texto = [formulario.get("titulo"), formulario.get("texto"), formulario.get("enlace")]
+      .filter((t) => typeof t === "string" && t.trim())
+      .join("\n")
+      .trim();
+    if (texto) await buzon.put("./buzon-texto", new Response(texto));
+
+    const imagen = formulario.get("imagen");
+    if (imagen && imagen.size) {
+      await buzon.put("./buzon-imagen", new Response(imagen, {
+        headers: { "content-type": imagen.type || "image/png" },
+      }));
+    }
+  } catch (e) {}
+}
+
 self.addEventListener("fetch", (evento) => {
+  // Compartir desde Android: llega un POST a ./compartir con el texto y, si la hay, la imagen.
+  // Se contesta con un redirect INMEDIATO —la pantalla no espera a que se lea el archivo— y la
+  // lectura del formulario sigue en segundo plano con waitUntil.
+  if (evento.request.method === "POST" && new URL(evento.request.url).pathname.endsWith("/compartir")) {
+    evento.respondWith(Response.redirect("./?compartido=1", 303));
+    evento.waitUntil(recibirCompartido(evento.request));
+    return;
+  }
+
   if (evento.request.method !== "GET") return;
   // Solo lo de esta app. Si algún día se consulta algo de fuera (el puente de correo, por
   // ejemplo), guardarlo en caché serviría respuestas viejas como si fueran de ahora.

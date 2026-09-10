@@ -24,12 +24,27 @@
     }
   ],
   "share_target": {
-    "action": "./",
-    "method": "GET",
+    "action": "./compartir",
+    "method": "POST",
+    "enctype": "multipart/form-data",
     "params": {
       "title": "titulo",
       "text": "texto",
-      "url": "enlace"
+      "url": "enlace",
+      "files": [
+        {
+          "name": "imagen",
+          "accept": [
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".webp"
+          ]
+        }
+      ]
     }
   },
   "shortcuts": [

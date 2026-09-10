@@ -231,10 +231,26 @@ const manifiesto = {
   // Compartir un correo del banco a la app desde Android: llega como ?texto=... y la app lo
   // lee sola. Es GET a propósito — un POST necesitaría que el service worker lo interceptara,
   // y una pieza más que puede fallar entre el aviso y la bandeja no vale lo que cuesta.
+  // Compartir a la app desde Android. Antes era GET, porque un POST obliga al service worker a
+  // interceptarlo y era una pieza más que podía fallar entre el aviso y la bandeja. Ahora sí
+  // vale la pena: los archivos SOLO viajan por POST, y compartir la captura de una notificación
+  // es la vía principal de la app. El texto sigue llegando por el mismo camino.
+  //
+  // El `accept` lleva el tipo MIME **y** la extensión: sin la extensión, Chrome de Android
+  // aparece en el menú de compartir y a veces no recibe el archivo.
   share_target: {
-    action: "./",
-    method: "GET",
-    params: { title: "titulo", text: "texto", url: "enlace" },
+    action: "./compartir",
+    method: "POST",
+    enctype: "multipart/form-data",
+    params: {
+      title: "titulo",
+      text: "texto",
+      url: "enlace",
+      files: [{
+        name: "imagen",
+        accept: ["image/png", "image/jpeg", "image/webp", ".png", ".jpg", ".jpeg", ".webp"],
+      }],
+    },
   },
   // Dejar apretado el ícono en Android lleva directo a lo que se hace a diario, sin pasar por
   // la pantalla de Hoy. Son las dos únicas cosas que se hacen a diario; una lista más larga
@@ -298,16 +314,55 @@ self.addEventListener("install", (evento) => {
   evento.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ARCHIVOS)).then(() => self.skipWaiting()));
 });
 
+// Lo que se comparte a la app aterriza aquí antes de que la pantalla exista. No es caché de la
+// app: es un buzón de una sola entrega, y por eso NO se borra al activar una versión nueva.
+const BUZON = "grip-compartido";
+
 self.addEventListener("activate", (evento) => {
   // Al publicar una versión nueva, las viejas se tiran: nada de servir una app de hace meses.
   evento.waitUntil(
     caches.keys()
-      .then((llaves) => Promise.all(llaves.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((llaves) => Promise.all(
+        llaves.filter((k) => k !== CACHE && k !== BUZON).map((k) => caches.delete(k)),
+      ))
       .then(() => self.clients.claim()),
   );
 });
 
+/**
+ * Guarda lo compartido en el buzón. Nunca lanza: si esto falla, la app abre vacía, que es feo
+ * pero no es perder nada.
+ */
+async function recibirCompartido(peticion) {
+  try {
+    const formulario = await peticion.formData();
+    const buzon = await caches.open(BUZON);
+
+    const texto = [formulario.get("titulo"), formulario.get("texto"), formulario.get("enlace")]
+      .filter((t) => typeof t === "string" && t.trim())
+      .join("\\n")
+      .trim();
+    if (texto) await buzon.put("./buzon-texto", new Response(texto));
+
+    const imagen = formulario.get("imagen");
+    if (imagen && imagen.size) {
+      await buzon.put("./buzon-imagen", new Response(imagen, {
+        headers: { "content-type": imagen.type || "image/png" },
+      }));
+    }
+  } catch (e) {}
+}
+
 self.addEventListener("fetch", (evento) => {
+  // Compartir desde Android: llega un POST a ./compartir con el texto y, si la hay, la imagen.
+  // Se contesta con un redirect INMEDIATO —la pantalla no espera a que se lea el archivo— y la
+  // lectura del formulario sigue en segundo plano con waitUntil.
+  if (evento.request.method === "POST" && new URL(evento.request.url).pathname.endsWith("/compartir")) {
+    evento.respondWith(Response.redirect("./?compartido=1", 303));
+    evento.waitUntil(recibirCompartido(evento.request));
+    return;
+  }
+
   if (evento.request.method !== "GET") return;
   // Solo lo de esta app. Si algún día se consulta algo de fuera (el puente de correo, por
   // ejemplo), guardarlo en caché serviría respuestas viejas como si fueran de ahora.

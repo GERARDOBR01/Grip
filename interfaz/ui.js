@@ -1282,16 +1282,53 @@ async function tirarLoViejo() {
  *
  * Es la única vía que sirve para bancos que solo notifican dentro de su app, como Nu.
  */
+/**
+ * Recoge lo que el service worker dejó en el buzón al compartir desde Android.
+ *
+ * Va por ahí y no por la dirección porque los ARCHIVOS solo viajan por POST, y un POST no deja
+ * nada en la barra de direcciones. Se vacía al recogerlo: es un buzón de una sola entrega, y
+ * dejar ahí la captura de un gasto sería justo lo que este proyecto no quiere guardar.
+ */
+async function vaciarBuzon() {
+  const vacio = { texto: "", imagen: null };
+  try {
+    if (!globalThis.caches) return vacio;
+    const buzon = await caches.open("grip-compartido");
+
+    const conTexto = await buzon.match("./buzon-texto");
+    const conImagen = await buzon.match("./buzon-imagen");
+    const texto = conTexto ? (await conTexto.text()).trim() : "";
+    const imagen = conImagen ? await conImagen.blob() : null;
+
+    await buzon.delete("./buzon-texto");
+    await buzon.delete("./buzon-imagen");
+    return { texto, imagen: imagen && imagen.size ? imagen : null };
+  } catch (e) {
+    return vacio;
+  }
+}
+
 async function atenderCompartido() {
   let texto = "";
   let atajo = "";
+  let compartido = false;
   try {
     const params = new URLSearchParams(location.search);
+    // El camino viejo, por la dirección, se queda: sirve para pegar un enlace a mano y para las
+    // apps que ya estaban instaladas con el manifiesto anterior, que compartían por GET.
     texto = [params.get("texto"), params.get("titulo"), params.get("enlace")].filter(Boolean).join("\n").trim();
     atajo = params.get("atajo") || "";
-    if (texto || atajo) history.replaceState(null, "", location.pathname);
+    compartido = params.get("compartido") === "1";
+    if (texto || atajo || compartido) history.replaceState(null, "", location.pathname);
   } catch (e) {
     return; // en un contexto sin acceso a la dirección esto simplemente no aplica
+  }
+
+  // Lo compartido por POST: puede traer una imagen, texto, o las dos cosas.
+  if (compartido) {
+    const buzon = await vaciarBuzon();
+    if (buzon.imagen) return leerCaptura(buzon.imagen);
+    if (buzon.texto) texto = buzon.texto;
   }
 
   // Los atajos de Android: dejar apretado el ícono y caer donde se iba a caer de todos modos,
