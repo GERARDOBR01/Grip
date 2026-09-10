@@ -25,8 +25,12 @@
  *     ("Cualquier usuario" es necesario para que la app pueda llamarlo sin iniciar sesión;
  *      lo que protege el puente es el TOKEN, y la dirección es imposible de adivinar.)
  *  5. Copia la URL que termina en /exec y pégala en la app, en Ajustes, junto con tu token.
+ *  6. Para el correo diario: en el editor elige la función `instalar` y dale a Ejecutar, una
+ *     vez. Te pedirá permiso —es tu propio script pidiéndote leer tu correo y mandarte un
+ *     mensaje— y deja el activador diario puesto. No hay que configurar nada a mano.
  *
- * Para dejar de usarlo: Implementaciones → Archivar. O borra el proyecto. La app ni se entera.
+ * Para dejar de usarlo: corre `desinstalar` y archiva la implementación. O borra el proyecto.
+ * La app ni se entera.
  */
 
 // ── Lo que tienes que cambiar ──────────────────────────────────────────────
@@ -218,4 +222,40 @@ function responder(objeto) {
   return ContentService
     .createTextOutput(JSON.stringify(objeto))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ── Encender y apagar el correo diario ─────────────────────────────────────
+//
+// Esto existe para que instalar el puente no incluya un paso de "ahora ve a Activadores y
+// configura un temporizador diario". Ese paso se saltaba, y entonces el correo diario no
+// llegaba nunca sin que nada lo dijera.
+
+/** La hora a la que llega el correo diario. Cámbiala si te acomoda otra. */
+var HORA_DEL_RESUMEN = 8;
+
+/**
+ * Deja el activador diario puesto. Correr esto dos veces no deja dos activadores: primero
+ * quita los que ya había. Un correo duplicado cada mañana es de las cosas que hacen que la
+ * gente apague todo.
+ */
+function instalar() {
+  desinstalar();
+  ScriptApp.newTrigger("enviarResumenDiario")
+    .timeBased()
+    .atHour(HORA_DEL_RESUMEN)
+    .everyDays(1)
+    .inTimezone("America/Mexico_City")
+    .create();
+  Logger.log("Listo: el resumen diario sale a las " + HORA_DEL_RESUMEN + ":00, hora de la Ciudad de México.");
+}
+
+/** Quita los activadores de este script. No borra nada más: ni el despliegue ni tu correo. */
+function desinstalar() {
+  var activadores = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < activadores.length; i++) {
+    if (activadores[i].getHandlerFunction() === "enviarResumenDiario") {
+      ScriptApp.deleteTrigger(activadores[i]);
+    }
+  }
+  Logger.log("Activadores del resumen diario: quitados.");
 }

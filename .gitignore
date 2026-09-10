@@ -3,3 +3,9 @@
 *.json
 respaldos/
 datos/
+
+# Excepción, y la única: las expectativas del corpus de avisos. No son datos de nadie —son
+# estructuras inventadas, con montos y nombres falsos; la regla está escrita en
+# pruebas/correos/LEEME.md. Sin esta línea el `*.json` de arriba se las traga y corpus.test.js
+# se queda sin nada que comparar, que es exactamente lo que pasó hasta hoy.
+!pruebas/correos/*.json

@@ -2,7 +2,8 @@
 
 App de finanzas personales para quien no tiene tiempo de llevarlas. Le pegas el aviso de tu
 banco y ella saca el monto, la fecha y el comercio; tú confirmas de un toque. Y aprende: si
-corriges una categoría una vez, no vuelve a preguntar.
+corriges una categoría una vez, no vuelve a preguntar — ni por los cargos que vienen, ni por
+los que ya estaban, que se ofrece a arreglar de un toque.
 
 Contesta lo que importa a diario: a dónde se va el dinero, cuánto puedes gastar hoy sin
 quedarte corto, y si una meta de ahorro de verdad alcanza o no.
@@ -34,7 +35,7 @@ motor/          el cálculo, en JavaScript puro y sin DOM
 | **Presupuesto** | Cuánto va gastado por categoría contra su tope, con semáforo |
 | **Metas** | Cuánto hay que apartar por quincena — y si eso cabe en la capacidad real de ahorro |
 | **Fijos** | Qué vence, qué ya se pagó y cuánto se debe, más las suscripciones que encontró sola en el historial |
-| **Ajustes** | Ingreso, ciclo, fondo de emergencia, lo que aprendió de ti, respaldo en JSON |
+| **Ajustes** | Ingreso, ciclo, fondo de emergencia, lo que aprendió de ti, avisos, el puente de correo y respaldo en JSON |
 
 Cuatro cosas mueven dinero y todas se capturan igual, desde el botón `+`: **gasto**,
 **ingreso**, **apartar** y **retirar**. Un retiro no borra el apartado original — los dos
@@ -129,7 +130,21 @@ Tres formas de llenar la bandeja, todas contra el mismo lector:
    leída. Es la única vía para bancos que solo notifican dentro de su app.
 3. **El puente.** Un [Apps Script](puente/) en tu propia cuenta de Google que busca los
    avisos de tus bancos y se los pasa a la app. Gratis, sin servidor, y lo borras cuando
-   quieras.
+   quieras. Configurado una vez, **la app va por ellos sola cada vez que la abres**: pide los
+   días que hagan falta desde la última, así que volver de vacaciones no deja correo afuera. Si
+   el puente está caído no te interrumpe — lo dice en Ajustes y ya.
+
+## Que avise sin que la abras
+
+Un aviso cuando venga un pago fijo, y cuando lleves varios correos sin confirmar. Nada más: una
+app que avisa de todo se apaga a los tres días y no se vuelve a encender. Se enciende en
+Ajustes —nunca se pide el permiso al abrir— y en Android los atajos del ícono llevan directo a
+pegar un aviso o a capturar un gasto.
+
+Y aquí va lo que casi ninguna app dice: **con la app cerrada, esto no te despierta.** Ningún
+sitio web puede hacerlo de forma fiable —Periodic Background Sync no existe en iOS y en
+Chromium pide app instalada y uso frecuente—, así que el canal que de verdad llega con la app
+cerrada es el correo diario del puente. Está escrito así en Ajustes, en vez de prometer de más.
 
 Lo que hay que decir antes de que alguien se ilusione: **el correo no cubre todo tu dinero.**
 Nu manda correo de las transferencias que envías, pero no de las compras con tarjeta. HSBC solo
@@ -140,7 +155,7 @@ banco, en vez de prometer de más.
 ## Cómo se trabaja
 
 ```bash
-node --test pruebas/*.test.js      # 197 pruebas: sin red, sin API, sin gastar un peso
+node --test pruebas/*.test.js      # toda la suite: sin red, sin API, sin gastar un peso
 node herramientas/armar.mjs        # arma index.html y finanzas.html desde motor/ e interfaz/
 node herramientas/humo.mjs         # navegador real: disco, sin almacenamiento, e instalada
 node herramientas/logo.mjs         # solo si cambia el logo
@@ -172,9 +187,10 @@ alguien afloje uno.
 
 ```
 motor/       cálculo puro, sin DOM: dinero, ciclos, presupuesto, ahorro, metas, fijos, deudas,
-             lectura de avisos, bandeja, aprendizaje, recurrentes, tendencia y fusión
+             lectura de avisos, bandeja, aprendizaje, recurrentes, tendencia, fusión y qué
+             merece un recordatorio
 almacen/     persistencia detrás de 4 métodos, con adaptadores intercambiables
-interfaz/    plantilla, estilos, render y el logo
+interfaz/    plantilla, estilos, render, avisos del sistema y el logo
 pruebas/     node --test: ejemplos, corpus de avisos e invariantes sobre entrada generada
 herramientas/armar.mjs (build), humo.mjs (navegador) y logo.mjs (íconos)
 puente/      el script de Google Apps Script que lee el correo, con sus instrucciones

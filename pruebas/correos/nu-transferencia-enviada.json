@@ -1,0 +1,9 @@
+{
+  "banco": "nu",
+  "tipo": "gasto",
+  "monto": 8000,
+  "fecha": "2026-09-08",
+  "comercio": "Persona",
+  "ultimos4": "9876",
+  "confianza": "alta"
+}

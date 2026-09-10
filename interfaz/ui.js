@@ -21,9 +21,15 @@ import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
 import {
   recibirAviso, pendientes, ilegibles, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja,
   impactoPendiente, purgarBandeja, aceptarTanda, deshacerTanda, deConfianzaAlta,
+  absorberAvisos, ventanaDeAvisos, tocaTraer, entradaPorId,
 } from "../motor/bandeja.js";
 import { montosFrecuentes } from "../motor/rapido.js";
-import { reglasAprendidas, olvidar } from "../motor/aprendizaje.js";
+import { reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla } from "../motor/aprendizaje.js";
+import { marcaDe } from "../motor/lectura.js";
+import { recordatoriosDeHoy } from "../motor/recordatorios.js";
+import {
+  estadoDeAvisos, encenderAvisos, apagarAvisos, avisarDe, ponerGlobo, ESPERA_ENTRE_REVISIONES,
+} from "./avisos.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
@@ -40,6 +46,9 @@ const app = {
   aviso: null,
   bloqueado: false,
   filtro: { texto: "", tipo: "" },
+  // Un ofrecimiento pendiente de contestar: `{ clave, categoriaId, comercio, cuantos }`.
+  // Vive solo en la pantalla. Ignorarlo y cerrar la app no cambia nada, que es la idea.
+  propuesta: null,
   // Lo que la persona eligió en la bandeja antes de aceptar, por entrada. Vive solo en la
   // pantalla: si cierra la app sin aceptar, no queda rastro de una decisión a medias.
   eleccion: {},
@@ -68,6 +77,62 @@ const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
 
 function esc(valor) {
   return String(valor ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+/**
+ * «hace 2 h», «ayer», «hace 3 días». Para decir cuándo pasó algo sin obligar a leer una fecha.
+ * Redondea hacia abajo a propósito: «hace 2 h» siendo dos horas y media es honesto; «hace 3 h»
+ * cuando llevan dos y media, no.
+ */
+function haceCuanto(sello, ahora = Date.now()) {
+  const minutos = Math.floor((ahora - sello) / 60000);
+  if (!Number.isFinite(minutos) || minutos < 0) return "hace un momento";
+  if (minutos < 2) return "hace un momento";
+  if (minutos < 60) return `hace ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `hace ${horas} h`;
+  const dias = Math.floor(horas / 24);
+  return dias === 1 ? "ayer" : `hace ${dias} días`;
+}
+
+/** El nombre visible de una categoría, o su id si alguien la borró y quedó huérfana. */
+function nombreCategoria(id) {
+  const encontrada = categoriaPorId(app.datos, id);
+  return encontrada ? encontrada.nombre : id;
+}
+
+/**
+ * Mira si corregir este comercio deja cargos pasados sin corregir, y prepara el ofrecimiento.
+ *
+ * Aprender hacia adelante deja media promesa cumplida: el siguiente OXXO llega bien y los
+ * veinte de antes se quedan en «Otros», así que el presupuesto sigue mintiendo hasta que los
+ * tocas uno por uno — el trabajo que la app dijo que te iba a quitar.
+ */
+function proponerHaciaAtras(datos, comercio, categoriaId) {
+  const clave = marcaDe(comercio);
+  if (!clave || !categoriaId) return null;
+  const cuantos = movimientosDeLaMarca(datos, clave, categoriaId).length;
+  return cuantos ? { clave, categoriaId, comercio, cuantos } : null;
+}
+
+/**
+ * El ofrecimiento, con el número por delante y sin bloquear nada.
+ *
+ * Nunca se aplica solo: esto reescribe historial, y una app que cambia tus números pasados
+ * sin decírtelo pierde la autoridad que la hace útil. Y no se queda insistiendo: se contesta
+ * una vez, o se ignora y desaparece al siguiente movimiento.
+ */
+function bannerPropuesta() {
+  const p = app.propuesta;
+  if (!p) return "";
+  return `<div class="aviso">
+    <b>También tienes ${p.cuantos} ${p.cuantos === 1 ? "cargo" : "cargos"} de ${esc(p.comercio)}</b>
+    en otra categoría. ¿${p.cuantos === 1 ? "Lo paso" : "Los paso"} a ${esc(nombreCategoria(p.categoriaId))}?
+    <div class="acciones">
+      <button class="boton chico" data-accion="aplicar-hacia-atras">Sí, ${p.cuantos === 1 ? "pásalo" : "pásalos"}</button>
+      <button class="boton chico tenue" data-accion="descartar-propuesta">Déjalos como están</button>
+    </div>
+  </div>`;
 }
 
 function monto(centavos, opciones) {
@@ -137,6 +202,7 @@ function render() {
     <main class="envoltura">
       ${app.aviso ? `<div class="aviso ${app.bloqueado ? "malo" : ""}">${esc(app.aviso)}
         <div class="acciones"><button class="boton chico tenue" data-accion="cerrar-aviso">Entendido</button></div></div>` : ""}
+      ${bannerPropuesta()}
       ${vistaActual()}
       <div class="pie">Tus datos viven en este dispositivo${sincronizado ? " y en tu cuenta" : ""}. Nunca en el repositorio.</div>
     </main>
@@ -889,6 +955,40 @@ function vistaAjustes() {
   // undefined, la sección no se pinta, y la app no se entera de que faltaba nada.
   const hayPuente = typeof traerAvisos === "function" && typeof configuracionDelPuente === "function";
   const puente = hayPuente ? configuracionDelPuente() : null;
+
+  // Ahora que el correo se trae solo, aquí es donde se rinden cuentas: si el puente lleva
+  // días caído, la app no interrumpe por eso, pero tampoco puede callárselo.
+  const bitacora = hayPuente && typeof ultimaTraida === "function" ? ultimaTraida() : null;
+  const lineaTraida = !puente || !puente.url
+    ? ""
+    : !bitacora || !bitacora.sello
+      ? `<div class="rotulo" style="margin-top:8px">Todavía no ha traído nada. Se trae solo al abrir la app.</div>`
+      : bitacora.error
+        ? `<div class="rotulo aviso-linea" style="margin-top:8px">Último intento ${esc(haceCuanto(bitacora.sello))}: ${esc(bitacora.error)}</div>`
+        : `<div class="rotulo" style="margin-top:8px">Última vez que trajo: ${esc(haceCuanto(bitacora.sello))}.</div>`;
+
+  // Los avisos del sistema. Lo que dice esta tarjeta es tan importante como lo que hace: si
+  // promete avisar con la app cerrada, miente, y quien confíe en eso va a pagar un recargo.
+  const avisos = estadoDeAvisos();
+  const seccionAvisos = `<div class="titulo-seccion">Que te avise</div>
+    <div class="tarjeta">
+      <div class="rotulo">Un aviso cuando venga un pago fijo, y cuando lleves varios correos
+        sin confirmar. Nada más: una app que avisa de todo se apaga a los tres días.</div>
+      <div class="fila"><div class="crece">
+        <div class="nombre">${avisos.encendidos ? "Encendidos" : "Apagados"}</div>
+        <div class="sub">${avisos.negados
+          ? "bloqueados en este navegador; se cambia desde sus ajustes"
+          : avisos.soportados ? "mientras tengas la app abierta o la abras" : "este navegador no sabe mandarlos"}</div>
+      </div>
+      ${avisos.soportados && !avisos.negados
+        ? `<button class="boton chico ${avisos.encendidos ? "tenue" : ""}"
+             data-accion="${avisos.encendidos ? "apagar-avisos" : "encender-avisos"}">${avisos.encendidos ? "Apagar" : "Encender"}</button>`
+        : ""}</div>
+      <div class="rotulo aviso-linea" style="margin-top:8px">Con la app cerrada esto no te
+        despierta: ningún sitio web puede hacerlo de forma fiable. Para eso está el correo
+        diario del puente, aquí abajo.</div>
+    </div>`;
+
   const seccionPuente = hayPuente
     ? `<div class="titulo-seccion">Traer de mi correo</div>
        <div class="tarjeta">
@@ -904,6 +1004,7 @@ function vistaAjustes() {
              <button class="boton" data-accion="traer-del-puente">Traer ahora</button>
              <button class="boton tenue" data-accion="probar-puente">Probar puente</button>
            </div>` : ""}
+         ${lineaTraida}
          <details style="margin-top:10px">
            <summary class="rotulo" style="cursor:pointer">Cómo encenderlo, paso a paso</summary>
            <ol class="rotulo" style="padding-left:18px;line-height:1.7">
@@ -916,8 +1017,8 @@ function vistaAjustes() {
              <li>Dale a <b>Probar puente</b>: si algo falla, te digo exactamente qué mover.</li>
            </ol>
            <div class="rotulo">Para el correo diario, en el editor: elige la función
-             <code>enviarResumenDiario</code>, ejecútala una vez para dar permiso, y en
-             <b>Activadores</b> ponle un temporizador diario. Para apagarlo, borra el activador.</div>
+             <code>instalar</code> y ejecútala una vez. Ella sola pide los permisos y deja el
+             activador diario puesto. Para apagarlo, corre <code>desinstalar</code>.</div>
          </details>
          <div class="rotulo" style="margin-top:10px"><b>Llegan completos:</b>
            ${esc(bancosQueAvisan().map((b) => b.nombre).join(", "))}.</div>
@@ -937,6 +1038,15 @@ function vistaAjustes() {
            return `<div class="fila">
              <div class="crece"><div class="nombre">${esc(r.clave)}</div>
                <div class="sub">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div></div>
+             ${(() => {
+               // Solo si de verdad quedó historial viejo detrás. Un botón que no hace nada es
+               // peor que no tener botón.
+               const atrasados = movimientosDeLaMarca(app.datos, r.clave, r.categoriaId).length;
+               return atrasados
+                 ? `<button class="boton chico tenue" data-accion="aplicar-regla-atras"
+                      data-clave="${esc(r.clave)}" data-categoria="${esc(r.categoriaId)}">Aplicar a ${atrasados}</button>`
+                 : "";
+             })()}
              <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
            </div>`;
          }).join("")}
@@ -958,6 +1068,7 @@ function vistaAjustes() {
         <button class="boton chico tenue" data-accion="cambiar-tema">Cambiar</button></div>
     </div>
 
+    ${seccionAvisos}
     ${seccionPuente}
     ${loAprendido}
 
@@ -1161,13 +1272,30 @@ async function tirarLoViejo() {
  */
 async function atenderCompartido() {
   let texto = "";
+  let atajo = "";
   try {
     const params = new URLSearchParams(location.search);
     texto = [params.get("texto"), params.get("titulo"), params.get("enlace")].filter(Boolean).join("\n").trim();
-    if (texto) history.replaceState(null, "", location.pathname);
+    atajo = params.get("atajo") || "";
+    if (texto || atajo) history.replaceState(null, "", location.pathname);
   } catch (e) {
     return; // en un contexto sin acceso a la dirección esto simplemente no aplica
   }
+
+  // Los atajos de Android: dejar apretado el ícono y caer donde se iba a caer de todos modos,
+  // dos toques antes. No traen datos, solo dicen a dónde ibas.
+  if (!texto && atajo) {
+    if (atajo === "pegar") {
+      app.vista = "bandeja";
+      render();
+      const caja = document.getElementById("aviso");
+      if (caja) caja.focus();
+    } else if (atajo === "rapido") {
+      hojaMovimiento();
+    }
+    return;
+  }
+
   if (!texto) return;
 
   app.vista = "bandeja";
@@ -1212,6 +1340,7 @@ async function guardar(datos) {
   }
   render();
   dejarResumenEnElPuente();
+  revisarRecordatorios();
 }
 
 /**
@@ -1242,6 +1371,80 @@ function dejarResumenEnElPuente() {
     });
   } catch (e) {
     // Que el correo diario no se actualice no puede interrumpir a nadie.
+  }
+}
+
+/**
+ * Mira si hay algo que recordarle a esta persona, y pinta el globo del ícono.
+ *
+ * Qué merece un aviso lo decide el motor (motor/recordatorios.js); aquí solo se entrega. Y no
+ * lanza nunca: que un aviso no salga no puede tumbar nada.
+ */
+async function revisarRecordatorios() {
+  try {
+    ponerGlobo(resumenBandeja(app.datos).pendientes);
+    await avisarDe(recordatoriosDeHoy(app.datos, app.hoy), app.hoy);
+  } catch (e) {
+    // Un recordatorio que no sale no es un problema de nadie.
+  }
+}
+
+/**
+ * Va por los avisos del correo y los mete a la bandeja.
+ *
+ * Es el ÚNICO camino que hay para eso: lo recorre el botón «Traer ahora» de Ajustes y lo
+ * recorre la app sola al abrirse. Lo que cambia entre los dos es lo que hacen con el
+ * resultado, no cómo lo consiguen — dos caminos se habrían separado a la primera.
+ *
+ * Nunca lanza: devuelve `{ datos, nuevos, repetidos, sinLeer, revisados, error }`.
+ */
+async function irPorCorreo(config) {
+  const previa = typeof ultimaTraida === "function" ? ultimaTraida() : null;
+  const dias = ventanaDeAvisos(previa ? previa.dia : "", app.hoy);
+  const quieto = { datos: app.datos, nuevos: 0, repetidos: 0, sinLeer: 0, revisados: 0 };
+
+  const { avisos, error } = await traerAvisos({ url: config.url, token: config.token, dias });
+  if (error) {
+    if (typeof anotarTraida === "function") anotarTraida({ exito: false, error });
+    return { ...quieto, error };
+  }
+
+  const absorbido = absorberAvisos(app.datos, avisos, app.hoy);
+  if (typeof anotarTraida === "function") anotarTraida({ exito: true, dia: app.hoy });
+  return { ...absorbido, revisados: avisos.length, error: null };
+}
+
+/**
+ * Lo mismo, pero sin que nadie lo pida y sin que se note.
+ *
+ * «Que capture sola» decía el README, y hasta hoy dependía de que te acordaras de apretar un
+ * botón escondido en Ajustes. Lo que decide si esto ayuda o estorba son las tres reglas de
+ * silencio de aquí abajo:
+ *
+ *   · No cambia de pantalla. El botón sí salta a la bandeja, y está bien: lo apretaste tú.
+ *     Hacerlo solo sería quitarle la pantalla a alguien a media captura.
+ *   · Si no hay nada nuevo, no dice nada ni vuelve a pintar. Ni un «revisé 12 correos».
+ *   · Si falla, tampoco interrumpe: el motivo queda anotado y se enseña en Ajustes, junto al
+ *     puente. Un puente caído no es una emergencia que valga una alerta en la cara.
+ *
+ * Cuando SÍ trajo algo, no hace falta anunciarlo: el banner de la bandeja ya está pintado.
+ */
+async function traerDelPuenteEnSilencio() {
+  // El puente se descubre, no se importa: si alguien borró el adaptador, aquí no pasa nada.
+  if (typeof traerAvisos !== "function" || typeof configuracionDelPuente !== "function") return;
+
+  const config = configuracionDelPuente();
+  if (!config.url || !config.token) return;
+
+  const previa = typeof ultimaTraida === "function" ? ultimaTraida() : null;
+  if (!tocaTraer(previa ? previa.sello : 0)) return;
+
+  try {
+    const { datos, nuevos, sinLeer } = await irPorCorreo(config);
+    if (nuevos + sinLeer === 0) return;
+    await guardar(datos);
+  } catch (e) {
+    // `guardar` ya avisó y revirtió si fue el disco. Traer correo no puede tumbar la app.
   }
 }
 
@@ -1313,40 +1516,23 @@ const acciones = {
     el.disabled = true;
     el.textContent = "Buscando…";
 
-    const { avisos, error } = await traerAvisos({ url: config.url, token: config.token, dias: 3 });
+    const { datos, nuevos, repetidos, sinLeer, revisados, error } = await irPorCorreo(config);
     if (error) {
       app.aviso = error;
       return render();
     }
 
-    // Se leen todos y se guarda UNA vez: un guardado por correo dejaría la pantalla
-    // parpadeando y multiplicaría las escrituras por nada.
-    let datos = app.datos;
-    let nuevos = 0, repetidos = 0, sinLeer = 0;
-    for (const aviso of avisos) {
-      const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
-      const paso = recibirAviso(datos, texto, aviso.remitente || "", ORIGENES.CORREO, app.hoy);
-
-      // Lo que importa es si hubo ENTRADA, no si hubo error. Un aviso que no se pudo leer
-      // ahora deja entrada igual, esperando que digas cuánto y dónde; antes se contaba como
-      // "ilegible" y el correo se tiraba aquí mismo, con el gasto adentro.
-      if (!paso.entrada) {
-        repetidos++;
-        continue;
-      }
-      datos = paso.datos;
-      if (paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE) sinLeer++;
-      else nuevos++;
-    }
-
     const total = nuevos + sinLeer;
+    // Lo apretaste tú: se te enseña la bandeja y se te dice qué pasó, aunque no haya nada.
+    // La traída automática hace lo contrario, y por eso son dos caminos distintos aquí y uno
+    // solo en el motor.
     app.vista = "bandeja";
     app.aviso = total
       ? `${nuevos} ${nuevos === 1 ? "aviso nuevo" : "avisos nuevos"} en la bandeja.` +
         (sinLeer ? ` ${sinLeer} que no supe leer y ${sinLeer === 1 ? "espera" : "esperan"} tus datos.` : "") +
         (repetidos ? ` ${repetidos} ya los tenías.` : "")
-      : avisos.length
-        ? `Revisé ${avisos.length} ${avisos.length === 1 ? "correo" : "correos"} y no hay nada nuevo.`
+      : revisados
+        ? `Revisé ${revisados} ${revisados === 1 ? "correo" : "correos"} y no hay nada nuevo.`
         : "No encontré avisos de tus bancos en los últimos días.";
 
     if (total) await guardar(datos);
@@ -1379,17 +1565,67 @@ const acciones = {
   },
 
   async "aceptar-entrada"(el, reemplazar = false) {
+    app.propuesta = null; // el ofrecimiento anterior ya no viene al caso
     const id = el.dataset.id;
     const cambios = app.eleccion[id] !== undefined ? { categoria: app.eleccion[id] } : {};
     if (reemplazar) cambios.reemplazar = true;
-    const { datos, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
+    const entrada = entradaPorId(app.datos, id);
+    const { datos, movimiento, error } = aceptarEntrada(app.datos, id, cambios, app.hoy);
     if (error) {
       app.aviso = error;
       return render();
     }
     const { [id]: quitada, ...resto } = app.eleccion;
     app.eleccion = resto;
+
+    // Aceptar acaba de enseñarle una categoría a este comercio. Si hay cargos viejos suyos en
+    // otra parte, se OFRECE arreglarlos — no se hace. Y se ofrece después de guardar, para
+    // que aceptar siga costando un toque.
+    app.propuesta = movimiento
+      ? proponerHaciaAtras(datos, (entrada && entrada.comercio) || movimiento.nota, movimiento.categoria)
+      : null;
+
     await guardar(datos);
+  },
+
+  async "aplicar-hacia-atras"() {
+    const p = app.propuesta;
+    if (!p) return;
+    app.propuesta = null;
+    // El aviso va DESPUÉS de guardar: `guardar` lo limpia al terminar bien, así que ponerlo
+    // antes sería escribir un mensaje para que se borre solo.
+    await guardar(aplicarRegla(app.datos, p.clave, p.categoriaId));
+    app.aviso = `${p.cuantos} ${p.cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(p.categoriaId)}.`;
+    render();
+  },
+
+  async "encender-avisos"() {
+    const { ok, motivo } = await encenderAvisos();
+    if (!ok) app.aviso = motivo;
+    else await revisarRecordatorios();
+    render();
+  },
+
+  "apagar-avisos"() {
+    apagarAvisos();
+    render();
+  },
+
+  "descartar-propuesta"() {
+    app.propuesta = null;
+    render();
+  },
+
+  // Lo mismo, desde la lista de reglas de Ajustes: para lo que se aprendió hace meses y dejó
+  // historial viejo detrás.
+  async "aplicar-regla-atras"(el) {
+    const clave = el.dataset.clave;
+    const categoriaId = el.dataset.categoria;
+    const cuantos = movimientosDeLaMarca(app.datos, clave, categoriaId).length;
+    if (!cuantos) return;
+    await guardar(aplicarRegla(app.datos, clave, categoriaId));
+    app.aviso = `${cuantos} ${cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(categoriaId)}.`;
+    render();
   },
 
   "editar-entrada"(el) {
@@ -2126,6 +2362,22 @@ export async function arrancar() {
   await tirarLoViejo();
   render();
   await atenderCompartido();
+
+  // Que la bandeja se llene sola. Va después de pintar y de atender lo compartido: nada de
+  // esto debe hacer esperar a la pantalla.
+  traerDelPuenteEnSilencio();
+  revisarRecordatorios();
+
+  // En un celular la app se deja abierta días. Si sigue ahí cuando cambie el día o venza algo,
+  // que lo diga en vez de esperar a que alguien la mire.
+  setInterval(revisarRecordatorios, ESPERA_ENTRE_REVISIONES);
+
+  // En un celular la app no se cierra, se deja. Volver a ella días después tiene que traer lo
+  // que llegó mientras tanto; el freno de `tocaTraer` es lo que evita que esto sea una
+  // petición cada vez que cambias de pestaña.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") traerDelPuenteEnSilencio();
+  });
 
   // Si otro dispositivo escribe, esta pantalla se entera.
   app.almacen.suscribir(async () => {

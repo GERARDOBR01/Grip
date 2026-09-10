@@ -16,6 +16,11 @@ import { interpretar } from "../motor/lectura.js";
 const CARPETA = join(dirname(fileURLToPath(import.meta.url)), "correos");
 const HOY = "2026-09-09";
 
+// El .json NO se lee aquí. Se lee dentro de la prueba de cada caso, a propósito: un `.txt` sin
+// su `.json` reventaba este `.map()` antes de que corriera una sola prueba —incluida la guarda
+// de corpus vacío de aquí abajo, que existe justo para eso— y el archivo entero se caía con un
+// ENOENT que no decía qué caso faltaba. Que falte una expectativa tiene que fallar ruidosamente
+// y con nombre y apellido, como falla el armado.
 const casos = readdirSync(CARPETA)
   .filter((n) => n.endsWith(".txt"))
   .map((n) => {
@@ -26,9 +31,23 @@ const casos = readdirSync(CARPETA)
       nombre: n.replace(".txt", ""),
       remitente,
       texto: remitente ? resto.join("\n") : crudo,
-      espera: JSON.parse(readFileSync(join(CARPETA, n.replace(".txt", ".json")), "utf8")),
+      archivoEspera: join(CARPETA, n.replace(".txt", ".json")),
     };
   });
+
+/** Lo que el lector DEBE sacar de este aviso, o un error que dice qué archivo falta. */
+function expectativaDe(caso) {
+  try {
+    return JSON.parse(readFileSync(caso.archivoEspera, "utf8"));
+  } catch (e) {
+    assert.fail(
+      `${caso.nombre}: no pude leer su expectativa (${caso.archivoEspera}) — ${e.message}\n` +
+      "Cada aviso son DOS archivos: el .txt y el .json con lo que debe salir de él.\n" +
+      "Si el .json existe en tu disco pero no en un clon limpio, míralo con `git check-ignore -v`: " +
+      "el `*.json` del .gitignore se lo puede estar tragando.",
+    );
+  }
+}
 
 test("el corpus no está vacío: si lo estuviera, estas pruebas pasarían sin probar nada", () => {
   assert.ok(casos.length >= 3, `solo ${casos.length} avisos en el corpus`);
@@ -49,7 +68,7 @@ for (const caso of casos) {
       confianza: leido.confianza,
     };
 
-    for (const [campo, esperado] of Object.entries(caso.espera)) {
+    for (const [campo, esperado] of Object.entries(expectativaDe(caso))) {
       assert.equal(obtenido[campo], esperado,
         `${campo}: esperaba ${JSON.stringify(esperado)} y salió ${JSON.stringify(obtenido[campo])}` +
         (campo === "confianza" ? ` — motivo: ${leido.veredicto.motivo}` : ""));

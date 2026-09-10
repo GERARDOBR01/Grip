@@ -305,6 +305,12 @@ const manifiesto = await instalada.evaluate(async () => {
 });
 revisar("el manifest carga y la declara instalable", Boolean(manifiesto) && manifiesto.display === "standalone");
 revisar(
+  "y trae los atajos de Android: pegar y gasto rápido",
+  Boolean(manifiesto) && (manifiesto.shortcuts || []).length === 2 &&
+    manifiesto.shortcuts.every((a) => a.url && a.name && (a.icons || []).length),
+  `${((manifiesto || {}).shortcuts || []).length} atajos`,
+);
+revisar(
   "con íconos enmascarables, como piden Android e iOS",
   Boolean(manifiesto) && manifiesto.icons.length === 2 && manifiesto.icons.every((i) => i.purpose.includes("maskable")),
 );
@@ -445,6 +451,86 @@ const trasDeshacer = await lote.$$eval(".tarjeta.entrada", (n) => n.length);
 revisar("y otro toque los devuelve enteros", trasDeshacer === 6, `${trasDeshacer} tarjetas`);
 await contextoLote.close();
 
+// ── Los atajos, y el permiso que NO se pide ─────────────────────────────────────
+//
+// Lo segundo importa más que lo primero. Pedir permiso de notificaciones al abrir es la forma
+// más rápida de que te lo nieguen para siempre; aquí se pide desde Ajustes, cuando la persona
+// lo enciende, y nunca antes. Esta prueba es lo que evita que alguien lo "mejore".
+
+const contextoAtajo = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const atajo = await contextoAtajo.newPage();
+await atajo.addInitScript(() => {
+  window.__pidioPermiso = false;
+  if (typeof Notification !== "undefined") {
+    const original = Notification.requestPermission;
+    Notification.requestPermission = function (...args) {
+      window.__pidioPermiso = true;
+      return original.apply(this, args);
+    };
+  }
+});
+await atajo.goto(`http://127.0.0.1:${puerto}/index.html?atajo=pegar`);
+await atajo.waitForSelector("#aviso", { timeout: 8000 });
+revisar("el atajo «pegar» abre directo en la caja de pegar", true);
+revisar("y limpia la dirección: recargar no repite el atajo", !atajo.url().includes("atajo="), atajo.url());
+
+await atajo.waitForTimeout(500);
+revisar("al abrir NO se pide permiso de avisos: eso se enciende en Ajustes",
+  (await atajo.evaluate(() => window.__pidioPermiso)) === false);
+await contextoAtajo.close();
+
+// ── Corregir una vez, no veinte ─────────────────────────────────────────────────
+//
+// Aprender hacia adelante dejaba media promesa cumplida: el siguiente cargo de OXXO llegaba
+// bien y los cinco de antes se quedaban donde estaban, así que el presupuesto seguía mintiendo
+// hasta tocarlos uno por uno — el trabajo que la app dice que te quita. Ahora se OFRECE
+// arreglarlos, con el número por delante. Nunca solo: esto reescribe historial.
+
+const contextoAtras = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const atras = await contextoAtras.newPage();
+await atras.goto(`http://127.0.0.1:${puerto}/index.html`);
+await atras.waitForSelector(".tarjeta");
+await atras.click('[data-vista="bandeja"]');
+await atras.waitForSelector("#aviso");
+
+// Cinco cargos del mismo lugar, aceptados con la categoría que trae por defecto.
+for (let i = 0; i < 5; i++) {
+  await atras.fill("#aviso", `Banorte: Compra por $${60 + i}.00 MXN en OXXO CENTRO el 0${i + 1}/09/2026 con tu tarjeta terminación 4821.`);
+  await atras.click('[data-accion="leer-aviso"]');
+  await atras.waitForTimeout(120);
+}
+await atras.click('[data-accion="aceptar-tanda"]');
+await atras.waitForTimeout(500);
+
+// El sexto se corrige a mano: se le pone otra categoría antes de aceptar.
+await atras.fill("#aviso", "Banorte: Compra por $99.00 MXN en OXXO CENTRO el 06/09/2026 con tu tarjeta terminación 4821.");
+await atras.click('[data-accion="leer-aviso"]');
+await atras.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+// Las categorías son fichas, no un desplegable: aceptar tiene que ser un toque. Se elige la
+// primera que NO sea la que ya viene puesta.
+const otraFicha = await atras.$('.tarjeta.entrada .chip[aria-pressed="false"]');
+if (otraFicha) {
+  await otraFicha.click();
+  await atras.waitForTimeout(250);
+  await atras.click('.tarjeta.entrada [data-accion="aceptar-entrada"]');
+  await atras.waitForTimeout(600);
+
+  const texto = await atras.textContent("body");
+  const ofrecido = (texto.match(/También tienes \d+ cargos?/) || ["no salió el ofrecimiento"])[0];
+  revisar("corregir una vez ofrece arreglar los cargos viejos del mismo lugar",
+    texto.includes("También tienes 5 cargos"), ofrecido);
+
+  await atras.click('[data-accion="aplicar-hacia-atras"]');
+  await atras.waitForTimeout(600);
+  const despues = await atras.textContent("body");
+  revisar("y un toque los pasa todos, diciendo cuántos movió",
+    despues.includes("5 movimientos pasaron") && !despues.includes("También tienes 5 cargos"));
+} else {
+  revisar("corregir una vez ofrece arreglar los cargos viejos del mismo lugar", false,
+    "no encontré una ficha de categoría distinta a la puesta");
+}
+await contextoAtras.close();
+
 // ── Un banco que nadie programó ─────────────────────────────────────────────────
 //
 // Ocho de los once bancos de la tabla nunca han enseñado su formato, y las plantillas cambian
@@ -516,26 +602,53 @@ await new Promise((listo) => puente.listen(0, "127.0.0.1", listo));
 const puertoPuente = puente.address().port;
 
 if (HAY_PUENTE) {
-await instalada.evaluate((direccion) => {
-  localStorage.setItem("grip:puente", JSON.stringify({ url: direccion, token: "llave-de-prueba" }));
-}, `http://127.0.0.1:${puertoPuente}/exec`);
-await instalada.reload();
-await instalada.waitForSelector(".barra");
-await instalada.click('[data-vista="ajustes"]');
-await instalada.waitForSelector('[data-accion="traer-del-puente"]');
 // Esta página comparte origen con las anteriores, así que ya hay cosas en la bandeja: lo que
 // se mide es cuánto CRECE. Y se cuenta por el contador de la barra, no por tarjetas pintadas
 // — la lista tiene tope, así que contar tarjetas daría siempre el mismo número.
 const contador = async () => Number((await instalada.locator(".globo").textContent().catch(() => "0")) || 0);
+const esperarA = async (condicion, limite = 8000) => {
+  const hasta = Date.now() + limite;
+  while (Date.now() < hasta) {
+    if (await condicion()) return true;
+    await instalada.waitForTimeout(150);
+  }
+  return false;
+};
+
+// El contador se lee sobre una página ya recargada: las pantallas anteriores dejaron cosas en
+// la bandeja y el número de esta pestaña está viejo.
 await instalada.reload();
 await instalada.waitForSelector(".barra", { timeout: 8000 });
 const antes = await contador();
-await instalada.click('[data-vista="ajustes"]');
-await instalada.click('[data-accion="traer-del-puente"]');
-await instalada.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
 
-const traidas = (await contador()) - antes;
-revisar("el puente trae los dos avisos y caen leídos en la bandeja", traidas === 2, `${traidas} nuevas`);
+// La promesa: configurado el puente, la bandeja se llena SOLA. Aquí no se aprieta nada — se
+// configura, se recarga, y se espera. Si esto deja de pasar, «que capture sola» era un decir.
+await instalada.evaluate((direccion) => {
+  localStorage.removeItem("grip:puente:ultima"); // como si nunca se hubiera traído
+  localStorage.setItem("grip:puente", JSON.stringify({ url: direccion, token: "llave-de-prueba" }));
+}, `http://127.0.0.1:${puertoPuente}/exec`);
+await instalada.reload();
+await instalada.waitForSelector(".barra", { timeout: 8000 });
+
+const llegaronSolos = await esperarA(async () => (await contador()) - antes === 2);
+revisar("sin tocar nada, la bandeja se llena sola al abrir",
+  llegaronSolos, `${(await contador()) - antes} nuevas`);
+
+// Y no se pregunta otra vez en cada recarga: eso sería una llamada a Apps Script por vistazo.
+await instalada.reload();
+await instalada.waitForSelector(".barra", { timeout: 8000 });
+await instalada.waitForTimeout(600);
+revisar("y no vuelve a preguntar en cada recarga", (await contador()) - antes === 2,
+  `${(await contador()) - antes} tras recargar`);
+
+// El botón sigue ahí para quien no quiera esperar, y lo que ya trajo no lo trae dos veces.
+await instalada.click('[data-vista="ajustes"]');
+await instalada.waitForSelector('[data-accion="traer-del-puente"]');
+await instalada.click('[data-accion="traer-del-puente"]');
+await instalada.waitForSelector(".aviso", { timeout: 8000 });
+revisar("«Traer ahora» sigue funcionando y no duplica lo ya traído",
+  (await contador()) - antes === 2 && (await instalada.textContent(".aviso")).includes("no hay nada nuevo"),
+  await instalada.textContent(".aviso"));
 revisar(
   "sin petición de permiso previa: por eso se manda como text/plain",
   !huboPreflight,

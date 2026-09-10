@@ -13,6 +13,7 @@
 // Uso: node herramientas/armar.mjs
 
 import { readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { LOGO_PNG, LOGO_SVG } from "../interfaz/logo-datos.js";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,11 +42,13 @@ const MODULOS = [
   "motor/recurrentes.js",
   "motor/tendencia.js",
   "motor/bandeja.js",
+  "motor/recordatorios.js", // después de fijos y bandeja: lee de los dos
   "almacen/archivo.js",
   "almacen/local.js",
   "almacen/almacen.js",
   { ruta: "almacen/anfitrion-claude.js", opcional: true }, // borrarlo no rompe nada
   { ruta: "almacen/puente-correo.js", opcional: true },    // tampoco
+  "interfaz/avisos.js",
   "interfaz/ui.js",
 ];
 
@@ -139,7 +142,22 @@ try {
 
 const estilos = readFileSync(join(RAIZ, "interfaz/estilos.css"), "utf8");
 const marcado = readFileSync(join(RAIZ, "interfaz/plantilla.html"), "utf8");
-const sello = new Date().toISOString().slice(0, 10);
+// El sello de esta versión sale del CONTENIDO armado, no del calendario.
+//
+// Antes era la fecha del día, y eso costaba dos cosas que no se ven hasta que muerden: armar
+// dos veces sin tocar nada producía archivos distintos —así que nadie podía comprobar que lo
+// publicado corresponde a las fuentes— y le tiraba la caché a todo mundo por haber pasado un
+// día. Con el hash el sello cambia exactamente cuando cambia la app: ni antes, ni después.
+const sello = createHash("sha256")
+  .update(guion)
+  .update(estilos)
+  .update(marcado)
+  .update(LOGO_SVG)
+  .update(LOGO_PNG[192])
+  .update(LOGO_PNG[512])
+  .update(LOGO_PNG[180])
+  .digest("hex")
+  .slice(0, 8);
 
 const DESCRIPCION_CORTA = "Ordena tu quincena y sabe si tus metas de ahorro alcanzan.";
 const FONDO = "#14171A";
@@ -177,7 +195,7 @@ ${metaApp}
 ${encabezado}
 </head>
 <body>
-<!-- Armado el ${sello} desde finanzas/. No editar a mano: se regenera con armar.mjs. -->
+<!-- Armado desde finanzas/, versión ${sello}. No editar a mano: se regenera con armar.mjs. -->
 ${marcado}
 ${guionEnvuelto}
 </body>
@@ -216,6 +234,25 @@ const manifiesto = {
     method: "GET",
     params: { title: "titulo", text: "texto", url: "enlace" },
   },
+  // Dejar apretado el ícono en Android lleva directo a lo que se hace a diario, sin pasar por
+  // la pantalla de Hoy. Son las dos únicas cosas que se hacen a diario; una lista más larga
+  // sería un menú, y un menú no ahorra nada.
+  shortcuts: [
+    {
+      name: "Pegar un aviso",
+      short_name: "Pegar",
+      description: "Pega el correo del banco y cae leído en la bandeja",
+      url: "./?atajo=pegar",
+      icons: [{ src: "./icono-192.png", sizes: "192x192" }],
+    },
+    {
+      name: "Gasto rápido",
+      short_name: "Gasto",
+      description: "Captura un gasto en efectivo",
+      url: "./?atajo=rapido",
+      icons: [{ src: "./icono-192.png", sizes: "192x192" }],
+    },
+  ],
 };
 
 const hospedada = `<!doctype html>
@@ -231,7 +268,7 @@ ${metaApp}
 ${encabezado}
 </head>
 <body>
-<!-- Armado el ${sello} desde finanzas/. No editar a mano: se regenera con armar.mjs. -->
+<!-- Armado desde finanzas/, versión ${sello}. No editar a mano: se regenera con armar.mjs. -->
 ${marcado}
 ${guionEnvuelto}
 <script>
@@ -247,7 +284,7 @@ if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
 </html>
 `;
 
-const serviceWorker = `// Service worker de Grip — armado el ${sello}.
+const serviceWorker = `// Service worker de Grip — versión ${sello}, que es el hash de lo armado.
 //
 // Guarda la app para poder abrirla sin conexión. No guarda NINGÚN dato tuyo: los movimientos
 // viven en el almacenamiento del navegador, que esto ni toca.

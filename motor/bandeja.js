@@ -7,7 +7,7 @@
 // Al aceptar, la app aprende. Esa es la mitad que convierte la bandeja de un trámite diario
 // en algo que se hace cada vez más corto.
 
-import { hoyISO, comparar } from "./ciclo.js";
+import { hoyISO, comparar, diasEntre } from "./ciclo.js";
 import {
   agregarMovimiento, eliminarMovimiento, normalizarEntrada,
   ESTADOS_BANDEJA, ORIGENES, TIPOS, esperaRespuesta,
@@ -260,4 +260,79 @@ export function deshacerTanda(datos, ids) {
 /** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */
 export function deConfianzaAlta(datos) {
   return pendientes(datos).filter((e) => e.confianza === "alta" && !e.reemplaza);
+}
+
+// ── Traer del correo ───────────────────────────────────────────────────────
+//
+// Estas dos viven aquí, y no en la interfaz, por la misma razón de siempre: son cálculo puro
+// y aquí se pueden probar sin navegador. Además el botón «Traer ahora» y la traída automática
+// tienen que recorrer EXACTAMENTE el mismo camino; si cada uno tuviera el suyo, uno de los
+// dos se quedaría atrás el día que cambie algo.
+
+/** Cuántos días pedirle al puente cuando no hay de dónde calcularlo. */
+export const DIAS_POR_DEFECTO = 3;
+
+/**
+ * Cuántos días de correo pedir, para no perder nada por haber estado fuera.
+ *
+ * Pedir 3 fijos está bien para un botón que aprietas hoy; para algo que corre solo no, porque
+ * volver de una semana de vacaciones dejaría cuatro días de avisos afuera y nadie se enteraría.
+ * Se cubre el hueco desde la última traída, más un día de traslape —un aviso que llegó anoche,
+ * después de la última vez, tiene que caer dentro—, y con un tope: pedirle a Gmail seis meses
+ * no trae seis meses, trae un tiempo de espera.
+ *
+ * Los repetidos no cuestan nada: `recibirAviso` los reconoce y no los mete dos veces.
+ */
+export function ventanaDeAvisos(ultima, hoy = hoyISO(), tope = 30) {
+  if (!ultima) return DIAS_POR_DEFECTO;
+  const dias = diasEntre(ultima, hoy);
+  if (!Number.isFinite(dias) || dias < 0) return DIAS_POR_DEFECTO;
+  return Math.min(Math.max(dias + 1, DIAS_POR_DEFECTO), tope);
+}
+
+/** Cada cuántas horas, como mucho, vale la pena volver a preguntarle al correo. */
+export const HORAS_ENTRE_TRAIDAS = 3;
+
+/**
+ * ¿Toca ir por correo, o se preguntó hace un rato?
+ *
+ * Va en milisegundos y no en días porque lo que evita es otra cosa: en un celular la app se
+ * queda abierta y se vuelve a mirar veinte veces al día. Sin este freno, cada vez que vuelves
+ * a la pestaña saldría una petición a Apps Script, que además tiene cuota diaria.
+ */
+export function tocaTraer(selloUltima, ahora = Date.now(), horas = HORAS_ENTRE_TRAIDAS) {
+  if (!selloUltima) return true; // nunca se ha traído: adelante
+  const transcurrido = ahora - selloUltima;
+  if (!Number.isFinite(transcurrido)) return true;
+  // Un reloj que va atrasado dejaría la traída congelada hasta que se emparejara. Mejor ir.
+  if (transcurrido < 0) return true;
+  return transcurrido >= horas * 3600000;
+}
+
+/**
+ * Mete a la bandeja todo lo que trajo el puente. Devuelve datos nuevos; no muta lo recibido.
+ *
+ * Se recorre entero y se guarda UNA vez del lado de quien llama: un guardado por correo
+ * dejaría la pantalla parpadeando y multiplicaría las escrituras por nada.
+ */
+export function absorberAvisos(datos, avisos, iso = hoyISO()) {
+  let acumulado = datos;
+  let nuevos = 0, repetidos = 0, sinLeer = 0;
+
+  for (const aviso of avisos || []) {
+    const texto = [aviso.asunto, aviso.texto].filter(Boolean).join("\n");
+    const paso = recibirAviso(acumulado, texto, aviso.remitente || "", ORIGENES.CORREO, iso);
+
+    // Lo que importa es si hubo ENTRADA, no si hubo error. Un aviso que no se pudo leer deja
+    // entrada igual, esperando que digas cuánto y dónde; tirarlo aquí sería tirar el gasto.
+    if (!paso.entrada) {
+      repetidos++;
+      continue;
+    }
+    acumulado = paso.datos;
+    if (paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE) sinLeer++;
+    else nuevos++;
+  }
+
+  return { datos: acumulado, nuevos, repetidos, sinLeer };
 }
