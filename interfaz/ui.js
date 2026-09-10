@@ -8,7 +8,7 @@
 // un cero disfrazado de dato.
 
 import { formatear, aCentavos } from "../motor/dinero.js";
-import { hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
+import { horaAhora, hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
   ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
@@ -24,12 +24,15 @@ import {
   absorberAvisos, ventanaDeAvisos, tocaTraer, entradaPorId,
 } from "../motor/bandeja.js";
 import { montosFrecuentes } from "../motor/rapido.js";
+import { leerNomina, corteDeNomina } from "../motor/nomina.js";
 import { reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla } from "../motor/aprendizaje.js";
 import { marcaDe } from "../motor/lectura.js";
-import { recordatoriosDeHoy } from "../motor/recordatorios.js";
+import { recordatoriosDeHoy, avisoDeEntrada, barraDeHoy } from "../motor/recordatorios.js";
 import {
   estadoDeAvisos, encenderAvisos, apagarAvisos, avisarDe, ponerGlobo, ESPERA_ENTRE_REVISIONES,
+  avisarDeEntrada, ponerBarra, quitarBarra,
 } from "./avisos.js";
+import { drenarIntenciones } from "../almacen/intenciones.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
 import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
@@ -43,6 +46,9 @@ const app = {
   almacen: null,
   vista: "hoy",
   hoy: hoyISO(),
+  // La hora del reloj, para que las sugerencias de efectivo sepan si son las 2 de la tarde o
+  // las 9 de la mañana. Se refresca con el mismo intervalo que ya vigila el cambio de día.
+  hora: horaAhora(),
   aviso: null,
   bloqueado: false,
   filtro: { texto: "", tipo: "" },
@@ -133,6 +139,16 @@ function bannerPropuesta() {
       <button class="boton chico tenue" data-accion="descartar-propuesta">Déjalos como están</button>
     </div>
   </div>`;
+}
+
+/**
+ * Un golpecito al guardar. No un zumbido: 12 milisegundos, lo justo para que la mano sepa que
+ * pasó algo sin tener que mirar la pantalla. Donde no exista, no hace nada y nadie se entera.
+ */
+function vibrar(ms = 12) {
+  try {
+    if (globalThis.navigator && navigator.vibrate) navigator.vibrate(ms);
+  } catch (e) {}
 }
 
 function monto(centavos, opciones) {
@@ -342,7 +358,7 @@ function vistaHoy() {
   // no entra, los números mienten hacia abajo. Los montos salen de SU historial —la gente
   // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
   // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
-  const frecuentes = montosFrecuentes(datos, hoy);
+  const frecuentes = montosFrecuentes(datos, hoy, 3, app.hora);
   const rapido = frecuentes.length
     ? `<div class="tarjeta">
         <div class="rotulo">Lo de siempre, en efectivo</div>
@@ -492,13 +508,23 @@ function vistaBandeja() {
   const sinLeer = ilegibles(app.datos);
   const impacto = impactoPendiente(app.datos);
 
+  // El lector de capturas se descubre, no se importa: si alguien borró interfaz/lector-imagen.js,
+  // esto da undefined, el botón no se pinta, y la app no se entera de que faltaba nada.
+  const hayLector = typeof leerImagen === "function" && typeof puedeLeerImagenes === "function" && puedeLeerImagenes();
+
   const pegar = `<div class="tarjeta">
     <div class="titulo-tarjeta">Pega el aviso de tu banco</div>
     <div class="rotulo">Copia el correo o la notificación y pégalo aquí. Saco el monto, la fecha y el
-      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.</div>
+      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.${hayLector
+        ? " ¿El texto no se deja seleccionar? Toma una captura de pantalla y súbela: también la leo." : ""}</div>
     <textarea id="aviso" class="campo area" rows="3" data-accion-input="borrador-aviso"
       placeholder="Compra por $189.00 en ... el 09/09/2026">${esc(app.borrador)}</textarea>
-    <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
+    <div class="acciones">
+      <button class="boton" data-accion="leer-aviso">Leer</button>
+      ${hayLector ? `<button class="boton tenue" data-accion="elegir-captura">Leer una captura</button>
+        <input id="captura" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+          hidden data-accion-archivo="captura">` : ""}
+    </div>
   </div>`;
 
   // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
@@ -553,7 +579,10 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${seccionSinLeer}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  // Pegar y leer una captura van ARRIBA, no al final. Son las dos vías principales de la app y
+  // tenían que bajar por toda la lista de pendientes para encontrarlas. Lo único que va antes
+  // es lo que no se supo leer: si nadie lo completa, ahí desaparece un gasto de verdad.
+  return `${seccionSinLeer}${pegar}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}`;
 }
 
 /**
@@ -989,12 +1018,17 @@ function vistaAjustes() {
         diario del puente, aquí abajo.</div>
     </div>`;
 
+  // El puente sigue funcionando y no se toca, pero deja de estar en el centro: la app gira
+  // ahora alrededor de pegar y de leer capturas, que no piden instalar nada ni dar permisos.
+  // Quien lo quiera lo abre; quien no, ni lo ve.
   const seccionPuente = hayPuente
     ? `<div class="titulo-seccion">Traer de mi correo</div>
-       <div class="tarjeta">
-         <div class="rotulo">Un script tuyo, dentro de tu cuenta de Google, le pasa a Grip los
-           avisos de tus bancos. Las instrucciones están en la carpeta <code>puente/</code> del
-           repositorio. La dirección y el token se guardan solo en este dispositivo.</div>
+       <details class="tarjeta"${puente.url ? " open" : ""}>
+         <summary class="rotulo" style="cursor:pointer">Un script tuyo, en tu cuenta de Google, que
+           le pasa a Grip los avisos de tus bancos. ${puente.url ? "Configurado." : "Opcional — toca para verlo."}</summary>
+         <div class="rotulo" style="margin-top:10px">Las instrucciones están en la carpeta
+           <code>puente/</code> del repositorio. La dirección y el token se guardan solo en este
+           dispositivo.</div>
          <div class="fila"><div class="crece">
            <div class="nombre">${puente.url ? "Puente configurado" : "Sin configurar"}</div>
            <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
@@ -1025,7 +1059,7 @@ function vistaAjustes() {
          ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
            <b>${esc(b.nombre)}:</b> ${esc(b.nota)}. Para lo que no llegue, compártele el aviso a
            Grip desde el celular.</div>`).join("")}
-       </div>`
+       </details>`
     : "";
 
   const reglas = reglasAprendidas(app.datos);
@@ -1055,8 +1089,12 @@ function vistaAjustes() {
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
-        <div class="sub">lo que entra cada 15 días</div></div>
+        <div class="sub">lo que entra cada vez que te pagan</div></div>
         <button class="boton chico tenue" data-accion="editar-ingreso">${monto(perfil.ingresoQuincenal)}</button></div>
+      <div class="fila"><div class="crece"><div class="nombre">Sube tu recibo de nómina</div>
+        <div class="sub">el XML del SAT: pone el neto exacto y de paso tus días de corte</div></div>
+        <button class="boton chico" data-accion="subir-nomina">Subir</button>
+        <input id="nomina" type="file" accept="text/xml,application/xml,.xml" hidden data-accion-archivo="nomina"></div>
       <div class="fila"><div class="crece"><div class="nombre">Días de corte</div>
         <div class="sub">${perfil.cortes.length ? `quincenal (día ${perfil.cortes.join(", ")} y fin de mes)` : "mensual"}</div></div>
         <button class="boton chico tenue" data-accion="editar-cortes">Cambiar</button></div>
@@ -1270,28 +1308,68 @@ async function tirarLoViejo() {
  *
  * Es la única vía que sirve para bancos que solo notifican dentro de su app, como Nu.
  */
+/**
+ * Recoge lo que el service worker dejó en el buzón al compartir desde Android.
+ *
+ * Va por ahí y no por la dirección porque los ARCHIVOS solo viajan por POST, y un POST no deja
+ * nada en la barra de direcciones. Se vacía al recogerlo: es un buzón de una sola entrega, y
+ * dejar ahí la captura de un gasto sería justo lo que este proyecto no quiere guardar.
+ */
+async function vaciarBuzon() {
+  const vacio = { texto: "", imagen: null };
+  try {
+    if (!globalThis.caches) return vacio;
+    const buzon = await caches.open("grip-compartido");
+
+    const conTexto = await buzon.match("./buzon-texto");
+    const conImagen = await buzon.match("./buzon-imagen");
+    const texto = conTexto ? (await conTexto.text()).trim() : "";
+    const imagen = conImagen ? await conImagen.blob() : null;
+
+    await buzon.delete("./buzon-texto");
+    await buzon.delete("./buzon-imagen");
+    return { texto, imagen: imagen && imagen.size ? imagen : null };
+  } catch (e) {
+    return vacio;
+  }
+}
+
 async function atenderCompartido() {
   let texto = "";
   let atajo = "";
+  let compartido = false;
   try {
     const params = new URLSearchParams(location.search);
+    // El camino viejo, por la dirección, se queda: sirve para pegar un enlace a mano y para las
+    // apps que ya estaban instaladas con el manifiesto anterior, que compartían por GET.
     texto = [params.get("texto"), params.get("titulo"), params.get("enlace")].filter(Boolean).join("\n").trim();
     atajo = params.get("atajo") || "";
-    if (texto || atajo) history.replaceState(null, "", location.pathname);
+    compartido = params.get("compartido") === "1";
+    if (texto || atajo || compartido) history.replaceState(null, "", location.pathname);
   } catch (e) {
     return; // en un contexto sin acceso a la dirección esto simplemente no aplica
+  }
+
+  // Lo compartido por POST: puede traer una imagen, texto, o las dos cosas.
+  if (compartido) {
+    const buzon = await vaciarBuzon();
+    if (buzon.imagen) return leerCaptura(buzon.imagen);
+    if (buzon.texto) texto = buzon.texto;
   }
 
   // Los atajos de Android: dejar apretado el ícono y caer donde se iba a caer de todos modos,
   // dos toques antes. No traen datos, solo dicen a dónde ibas.
   if (!texto && atajo) {
-    if (atajo === "pegar") {
+    if (atajo === "bandeja") {
+      app.vista = "bandeja";
+      render();
+    } else if (atajo === "pegar") {
       app.vista = "bandeja";
       render();
       const caja = document.getElementById("aviso");
       if (caja) caja.focus();
     } else if (atajo === "rapido") {
-      hojaMovimiento();
+      hojaTeclado();
     }
     return;
   }
@@ -1384,9 +1462,180 @@ async function revisarRecordatorios() {
   try {
     ponerGlobo(resumenBandeja(app.datos).pendientes);
     await avisarDe(recordatoriosDeHoy(app.datos, app.hoy), app.hoy);
+    if (estadoDeAvisos().encendidos) await ponerBarra(barraDeHoy(panelHoy(app.datos, app.hoy), app.hoy));
+    else await quitarBarra();
   } catch (e) {
     // Un recordatorio que no sale no es un problema de nadie.
   }
+}
+
+/**
+ * Publica en la sombra lo que acaba de caer a la bandeja, con su botón de aceptar.
+ *
+ * Es la mitad que convierte la bandeja de un trámite en un toque: llegó el cargo, lo aceptas
+ * desde la pantalla de bloqueo y nunca abriste la app. El `tag` por entrada evita que abrir la
+ * app tres veces deje tres avisos del mismo cargo.
+ */
+async function avisarDeLoQueLlego(entradasNuevas) {
+  if (!estadoDeAvisos().encendidos) return;
+  for (const entrada of entradasNuevas) {
+    try {
+      await avisarDeEntrada(avisoDeEntrada(app.datos, entrada));
+    } catch (e) {
+      // Que un aviso no salga no puede impedir que salgan los demás.
+    }
+  }
+}
+
+/**
+ * Aplica lo que la persona decidió en la sombra.
+ *
+ * El service worker no calcula nada: recoge la intención y llega aquí, donde se aplica con el
+ * mismo `aceptarEntrada` que usa el botón de la bandeja. Un solo camino, como con el puente.
+ */
+async function aplicarIntencion(intencion) {
+  if (!intencion) return;
+
+  if (intencion.accion === "aceptar" && intencion.entradaId) {
+    const { datos, error } = aceptarEntrada(app.datos, intencion.entradaId, {}, app.hoy);
+    // Que ya no esté no es un error que valga la pena contar: la aceptaste dos veces, o la
+    // aceptaste aquí después de aceptarla allá. El resultado es el mismo y es el correcto.
+    if (!error) await guardar(datos);
+    return;
+  }
+
+  if (intencion.accion === "ver") {
+    app.vista = "bandeja";
+    return render();
+  }
+
+  if (intencion.accion === "anotar") {
+    // Con respuesta escrita en la sombra viene el texto; sin ella, viene vacío y se abre la
+    // captura en blanco, que es exactamente a lo que ibas.
+    if (intencion.texto) hojaMovimiento({ valores: { monto: primerNumero(intencion.texto), nota: intencion.texto } });
+    else hojaTeclado();
+  }
+}
+
+/** El primer número de un texto suelto, como campo de monto. «120 tacos» → «120». */
+function primerNumero(texto) {
+  const encontrado = String(texto || "").match(/\d+(?:[.,]\d{1,2})?/);
+  return encontrado ? encontrado[0].replace(",", ".") : "";
+}
+
+/** Lo que quedó pendiente de la sombra mientras la app estaba cerrada. */
+async function atenderLaSombra() {
+  try {
+    for (const intencion of await drenarIntenciones()) await aplicarIntencion(intencion);
+  } catch (e) {
+    // Una intención que no se pudo aplicar deja el cargo esperando en la bandeja. Se pierde un
+    // toque, no un gasto.
+  }
+}
+
+/**
+ * Toma el ingreso del recibo de nómina, que es el dato exacto y no una estimación tecleada.
+ *
+ * Nunca lo aplica solo: el ingreso es el número del que cuelgan todos los demás, así que se
+ * enseña lo que se leyó y lo confirmas. Y si el recibo trae un corte que se deduce limpio, se
+ * ofrece aparte — cambiarle los ciclos a alguien sin avisar le movería todo el historial.
+ */
+async function aplicarNomina(archivo) {
+  if (!archivo) return;
+
+  let texto = "";
+  try {
+    texto = await archivo.text();
+  } catch (e) {
+    app.aviso = "No pude abrir ese archivo.";
+    return render();
+  }
+
+  const { nomina, veredicto: leido } = leerNomina(texto);
+  if (!nomina) {
+    app.aviso = `${leido.motivo}${leido.datos && leido.datos.falta ? ` Falta ${leido.datos.falta}.` : ""}`;
+    return render();
+  }
+
+  const corte = corteDeNomina(nomina);
+  const yaTieneEseCorte = corte !== null && app.datos.perfil.cortes.includes(corte);
+
+  abrirHoja({
+    titulo: "Tu recibo de nómina",
+    textoGuardar: "Usar estos datos",
+    extra: `<div class="rotulo" style="margin:0 0 10px;line-height:1.7">
+      Neto del periodo <b>${esc(nomina.inicio)} al ${esc(nomina.fin)}</b>:
+      <b>${monto(nomina.neto)}</b><br>
+      Percepciones ${monto(nomina.percepciones)} · deducciones ${monto(nomina.deducciones)}<br>
+      ${!nomina.ordinaria
+        ? `<span class="marca AJUSTADO">OJO</span> Es una nómina extraordinaria (aguinaldo, PTU o
+           finiquito). Es dinero de verdad, pero no es lo que entra cada quincena: si la usas
+           como ingreso, el disponible de todo el ciclo se infla.`
+        : corte === null
+          ? "El periodo no cae dentro de un solo mes, así que de aquí no puedo deducir tus días de corte. Ésos los pones tú."
+          : yaTieneEseCorte
+            ? `Y coincide con tu corte del día ${corte}, que ya tenías puesto.`
+            : `Y dice que tu quincena corta el día <b>${corte}</b>: lo pongo también.`}
+    </div>`,
+    campos: [],
+    async alGuardar() {
+      const perfil = { ...app.datos.perfil, ingresoQuincenal: nomina.neto };
+      if (corte !== null && !yaTieneEseCorte) perfil.cortes = [corte];
+      await guardar({ ...app.datos, perfil });
+      app.aviso = `Ingreso puesto en ${monto(nomina.neto)}, del recibo del ${nomina.fechaPago}.`;
+      return null;
+    },
+  });
+}
+
+/**
+ * Lee una captura de pantalla y la mete a la bandeja.
+ *
+ * El OCR convierte píxeles en TEXTO y ahí se acaba su trabajo: el monto, la fecha y el comercio
+ * los saca `recibirAviso` con las mismas reglas que leen un correo pegado. Ningún modelo decide
+ * un peso, y de paso esto hereda gratis todo lo que el motor ya sabe hacer.
+ *
+ * La imagen no se guarda en ningún lado. Se lee y se tira.
+ */
+async function leerCaptura(archivo) {
+  if (!archivo || typeof leerImagen !== "function") return;
+
+  const pasos = {
+    preparando: "Preparando la imagen…",
+    arrancando: "Arrancando el lector (la primera vez tarda)…",
+    leyendo: "Leyendo…",
+  };
+  app.aviso = pasos.preparando;
+  render();
+
+  const { texto, error } = await leerImagen(archivo, (paso) => {
+    app.aviso = pasos[paso] || app.aviso;
+    render();
+  });
+
+  if (error) {
+    app.aviso = error;
+    return render();
+  }
+  if (!texto) {
+    app.aviso = "No encontré texto en esa imagen. Prueba con una captura más cerrada del aviso.";
+    return render();
+  }
+
+  const paso = recibirAviso(app.datos, texto, "", ORIGENES.IMAGEN, app.hoy);
+
+  // Sin entrada solo puede ser un duplicado: lo ilegible SÍ deja entrada cuando el origen no es
+  // pegado, y así una captura nunca se pierde — se queda pidiendo cuánto y dónde.
+  if (!paso.entrada) {
+    app.aviso = paso.duplicado ? paso.duplicado.motivo : "Ese aviso ya estaba.";
+    return render();
+  }
+
+  app.vista = "bandeja";
+  app.aviso = paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE
+    ? "Leí la captura pero no reconocí el formato. Dime cuánto y dónde y la registro."
+    : "Leí la captura. Revisa el monto contra lo que dice y acéptala.";
+  await guardar(paso.datos);
 }
 
 /**
@@ -1440,9 +1689,14 @@ async function traerDelPuenteEnSilencio() {
   if (!tocaTraer(previa ? previa.sello : 0)) return;
 
   try {
+    const antes = new Set((app.datos.bandeja || []).map((e) => e.id));
     const { datos, nuevos, sinLeer } = await irPorCorreo(config);
     if (nuevos + sinLeer === 0) return;
     await guardar(datos);
+
+    // Y ahora lo que importa: que aparezca en la sombra, con su botón. Va después de guardar
+    // —nunca antes— para que aceptar desde la notificación encuentre la entrada donde debe.
+    await avisarDeLoQueLlego((app.datos.bandeja || []).filter((e) => !antes.has(e.id)));
   } catch (e) {
     // `guardar` ya avisó y revirtió si fue el disco. Traer correo no puede tumbar la app.
   }
@@ -1466,6 +1720,12 @@ const acciones = {
   },
 
   capturar() {
+    // El botón grande abre el teclado, no el formulario: nueve de cada diez capturas son un
+    // gasto en efectivo. Lo demás (ingresos, apartar, retirar) sigue a un toque de distancia.
+    hojaTeclado();
+  },
+
+  "capturar-completo"() {
     hojaMovimiento();
   },
 
@@ -1599,6 +1859,16 @@ const acciones = {
     render();
   },
 
+  "subir-nomina"() {
+    const campo = document.getElementById("nomina");
+    if (campo) campo.click();
+  },
+
+  "elegir-captura"() {
+    const campo = document.getElementById("captura");
+    if (campo) campo.click();
+  },
+
   async "encender-avisos"() {
     const { ok, motivo } = await encenderAvisos();
     if (!ok) app.aviso = motivo;
@@ -1606,8 +1876,9 @@ const acciones = {
     render();
   },
 
-  "apagar-avisos"() {
+  async "apagar-avisos"() {
     apagarAvisos();
+    await quitarBarra(); // dejar de moverla no basta: hay que bajarla
     render();
   },
 
@@ -1686,6 +1957,7 @@ const acciones = {
 
     const { datos, error } = agregarMovimiento(app.datos, {
       fecha: app.hoy,
+      hora: app.hora,
       monto: centavos,
       tipo: TIPOS.GASTO,
       categoria: el.dataset.categoria || "otros",
@@ -2113,6 +2385,133 @@ const TIPOS_CAPTURA = [
  * ya tecleaste. También sirve para CORREGIR un movimiento: conserva su id, así que editar
  * no es borrar y volver a capturar.
  */
+/**
+ * El teclado de efectivo. La pantalla donde se juega si esta app sirve o estorba.
+ *
+ * El 78% de los pagos en México son en efectivo, y anotarlos costaba seis pasos: abrir, tocar
+ * `+`, tocar el campo, escribir con el teclado del sistema, elegir categoría, guardar. Seis
+ * pasos para $50 de tacos, y la investigación de abandono dice exactamente eso — la gente deja
+ * de registrar porque el hueco entre gastar y anotar es demasiado ancho.
+ *
+ * Aquí son dos toques cuando el monto ya lo conoce, y teclear-tocar-guardar cuando no.
+ *
+ * El teclado es propio y no el del sistema a propósito: el del sistema tarda en aparecer, tapa
+ * media pantalla y trae teclas que aquí no sirven de nada.
+ */
+function hojaTeclado() {
+  const contenedor = document.getElementById("hojas");
+  const sugeridos = montosFrecuentes(app.datos, app.hoy, 3, app.hora);
+  const categorias = categoriasACalce(sugeridos.length ? sugeridos[0].categoriaId : "");
+
+  let tecleado = "";
+  let elegida = (sugeridos[0] && sugeridos[0].categoriaId) || (categorias[0] && categorias[0].valor) || "otros";
+
+  const centavos = () => aCentavos(tecleado || "0") || 0;
+
+  contenedor.innerHTML = `<div class="velo" data-velo="1"><div class="hoja">
+    <div class="teclado-cifra" id="teclado-cifra">${monto(0)}</div>
+    ${sugeridos.length ? `<div class="rotulo">Lo de siempre, a esta hora</div>
+      <div class="chips apretados">${sugeridos.map((f) => {
+        const categoria = categoriaPorId(app.datos, f.categoriaId);
+        return `<button type="button" class="chip" data-repetir="${f.monto}"
+          data-categoria="${esc(f.categoriaId || "otros")}"
+          title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
+      }).join("")}</div>` : ""}
+    <div class="rotulo" style="margin-top:10px">En qué</div>
+    <div class="chips apretados" id="teclado-categorias">${categorias.map((c) => `
+      <button type="button" class="chip" aria-pressed="${c.valor === elegida}"
+        data-categoria-teclado="${esc(c.valor)}">${esc(c.etiqueta)}</button>`).join("")}</div>
+    <div class="teclado">
+      ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button type="button" class="tecla" data-tecla="${n}">${n}</button>`).join("")}
+      <button type="button" class="tecla" data-tecla=".">.</button>
+      <button type="button" class="tecla" data-tecla="0">0</button>
+      <button type="button" class="tecla" data-tecla="borrar" aria-label="Borrar">⌫</button>
+    </div>
+    <div class="acciones">
+      <button type="button" class="boton tenue" data-accion="cerrar-hoja">Cancelar</button>
+      <button type="button" class="boton" id="teclado-guardar">Guardar</button>
+    </div>
+    <!-- El teclado solo hace gastos, que son nueve de cada diez capturas. Lo demás vive aquí,
+         a un toque, y no escondido: sin esta línea, capturar un ingreso o un apartado se
+         volvería imposible desde el botón grande. -->
+    <button type="button" class="boton tenue chico" id="teclado-completo"
+      style="width:100%;margin-top:10px">Ingreso, apartar o retirar</button>
+  </div></div>`;
+
+  cerrarHoja = () => {
+    contenedor.innerHTML = "";
+    cerrarHoja = null;
+  };
+
+  const pantalla = document.getElementById("teclado-cifra");
+  const pintar = () => {
+    pantalla.textContent = monto(centavos());
+    pantalla.classList.toggle("vacia", !tecleado);
+  };
+
+  const guardar1 = async (cuanto, categoria) => {
+    if (!cuanto || cuanto <= 0) return;
+    const { datos, error } = agregarMovimiento(app.datos, {
+      fecha: app.hoy, hora: app.hora, monto: cuanto, tipo: TIPOS.GASTO,
+      categoria: categoria || "otros", nota: "",
+    });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    cerrarHoja();
+    vibrar();
+    await guardar(datos);
+  };
+
+  contenedor.querySelector(".velo").addEventListener("click", (e) => {
+    if (e.target.dataset.velo) cerrarHoja();
+  });
+
+  contenedor.querySelector(".hoja").addEventListener("click", async (e) => {
+    const boton = e.target.closest("button");
+    if (!boton) return;
+
+    // Un monto de los de siempre: un toque y ya está guardado. Ése es el camino de dos segundos.
+    if (boton.dataset.repetir) {
+      return guardar1(Number(boton.dataset.repetir), boton.dataset.categoria);
+    }
+
+    if (boton.dataset.categoriaTeclado) {
+      elegida = boton.dataset.categoriaTeclado;
+      for (const chip of document.querySelectorAll("#teclado-categorias .chip")) {
+        chip.setAttribute("aria-pressed", String(chip.dataset.categoriaTeclado === elegida));
+      }
+      return;
+    }
+
+    const tecla = boton.dataset.tecla;
+    if (tecla) {
+      if (tecla === "borrar") tecleado = tecleado.slice(0, -1);
+      else if (tecla === ".") {
+        if (!tecleado.includes(".")) tecleado = `${tecleado || "0"}.`;
+      } else if (!/\.\d\d$/.test(tecleado)) {
+        // Se cortan los centavos en dos dígitos: nadie paga $50.123 y dejarlo crecer solo
+        // produce montos absurdos por un dedo torpe.
+        tecleado += tecla;
+      }
+      return pintar();
+    }
+
+    if (boton.id === "teclado-completo") {
+      // Se conserva lo tecleado: llegar aquí después de escribir el monto y perderlo sería
+      // castigar a alguien por haber empezado por el camino corto.
+      const llevaba = tecleado;
+      cerrarHoja();
+      return hojaMovimiento(llevaba ? { valores: { monto: llevaba } } : {});
+    }
+
+    if (boton.id === "teclado-guardar") await guardar1(centavos(), elegida);
+  });
+
+  pintar();
+}
+
 function hojaMovimiento(config = {}) {
   const { movimiento = null, valores = {}, entradaId = null } = config;
   const tipo = config.tipo || TIPOS.GASTO;
@@ -2182,6 +2581,9 @@ function hojaMovimiento(config = {}) {
       const { datos, error } = agregarMovimiento(base, {
         id: editando ? movimiento.id : undefined,
         fecha: v.fecha,
+        // Editar algo viejo NO le inventa una hora: la que tenía, o ninguna. Lo nuevo sí la
+        // lleva, y es lo que hace que en dos semanas la app sepa a qué hora gastas.
+        hora: editando ? movimiento.hora : app.hora,
         monto: v.monto,
         tipo: v.tipo || tipo,
         categoria: (v.tipo || tipo) === TIPOS.GASTO ? v.categoria || "otros" : null,
@@ -2335,6 +2737,30 @@ export async function arrancar() {
     }
   });
 
+  // Elegir una captura desde el botón. Va por `change` y no por `input`: un campo de archivo
+  // no avisa de otra forma.
+  document.addEventListener("change", (e) => {
+    const cual = e.target.dataset.accionArchivo;
+    if (cual !== "captura" && cual !== "nomina") return;
+    const archivo = e.target.files && e.target.files[0];
+    e.target.value = ""; // que elegir el mismo archivo dos veces vuelva a disparar
+    if (!archivo) return;
+    if (cual === "captura") leerCaptura(archivo);
+    else aplicarNomina(archivo);
+  });
+
+  // Y pegar la captura directamente en la caja, que es lo que hace cualquiera después de
+  // tomarla: copiar y pegar donde ya pegaba texto.
+  document.addEventListener("paste", (e) => {
+    if (typeof leerImagen !== "function") return;
+    const archivos = e.clipboardData && e.clipboardData.files;
+    if (!archivos || !archivos.length) return;
+    const imagen = [...archivos].find((f) => f.type.startsWith("image/"));
+    if (!imagen) return;
+    e.preventDefault();
+    leerCaptura(imagen);
+  });
+
   document.addEventListener("click", (e) => {
     const boton = e.target.closest("[data-accion]");
     if (!boton) return;
@@ -2363,6 +2789,20 @@ export async function arrancar() {
   render();
   await atenderCompartido();
 
+  // Lo primero: lo que decidiste en la sombra mientras esto estaba cerrado. Antes de traer
+  // nada nuevo, para que aceptar un cargo y que llegue otro no se pisen.
+  await atenderLaSombra();
+
+  // Con la app abierta, el service worker no encola: manda la intención directo y se ve al
+  // instante, que es como debe sentirse tocar un botón.
+  try {
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data && e.data.de === "grip" && e.data.intencion) aplicarIntencion(e.data.intencion);
+      });
+    }
+  } catch (e) {}
+
   // Que la bandeja se llene sola. Va después de pintar y de atender lo compartido: nada de
   // esto debe hacer esperar a la pantalla.
   traerDelPuenteEnSilencio();
@@ -2386,12 +2826,15 @@ export async function arrancar() {
     render();
   });
 
-  // Si la app queda abierta y cambia el día, el ciclo se recalcula solo.
+  // Si la app queda abierta y cambia el día, el ciclo se recalcula solo. Y de paso se refresca
+  // la hora, que es lo que hace que a las 2 de la tarde te ofrezca los tacos: sin esto, una app
+  // abierta desde la mañana seguiría sugiriendo el café a media tarde.
   setInterval(() => {
     const ahora = hoyISO();
-    if (ahora !== app.hoy) {
-      app.hoy = ahora;
-      render();
-    }
+    const reloj = horaAhora();
+    const cambioDia = ahora !== app.hoy;
+    app.hoy = ahora;
+    app.hora = reloj;
+    if (cambioDia) render();
   }, 60000);
 }

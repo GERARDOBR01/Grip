@@ -285,6 +285,25 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
    las cerradas haría ver una caída donde solo hay tiempo que no ha pasado. */
 .tendencia rect.encurso { opacity: .4; }
 .tendencia .etiqueta { fill: var(--tinta-3); font-size: 9px; font-family: inherit; }
+
+/* El teclado de efectivo. Teclas grandes a propósito: esto se usa con una mano, de pie y con
+   prisa, que es exactamente cuando se gasta el efectivo. */
+.teclado-cifra {
+  font-size: 46px; font-weight: 650; letter-spacing: -.03em; text-align: center;
+  font-variant-numeric: tabular-nums; padding: 6px 0 12px; line-height: 1.1;
+}
+.teclado-cifra.vacia { color: var(--tinta-3); }
+.teclado {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 14px;
+}
+.tecla {
+  font: inherit; font-size: 22px; font-weight: 550; padding: 14px 0;
+  background: var(--superficie-2); color: var(--tinta);
+  border: 1px solid var(--borde); border-radius: 12px; cursor: pointer;
+  font-variant-numeric: tabular-nums; transition: transform .06s ease, background .12s ease;
+}
+.tecla:active { transform: scale(.96); background: var(--borde); }
+@media (prefers-reduced-motion: reduce) { .tecla { transition: none; } }
 </style>
 <div id="raiz"></div>
 <div id="hojas"></div>
@@ -452,6 +471,11 @@ function hoyISO(fecha = new Date()) {
   return `${a}-${m}-${d}`;
 }
 
+/** La hora del reloj del dispositivo, como "HH:MM". */
+function horaAhora(fecha = new Date()) {
+  return `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`;
+}
+
 function esISO(iso) {
   return typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso);
 }
@@ -470,6 +494,29 @@ function diasEnMes(anio, mes) {
 }
 
 /** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
+/**
+ * La hora del reloj como "HH:MM", o "" si no es una hora válida.
+ * Se guarda a propósito sin segundos ni zona: lo que importa es si gastas a las 2 de la tarde
+ * o a las 9 de la mañana, no el instante exacto.
+ */
+function horaValida(texto) {
+  const encontrada = String(texto || "").match(/^([01]\d|2[0-3]):([0-5]\d)/);
+  return encontrada ? `${encontrada[1]}:${encontrada[2]}` : "";
+}
+
+/** Los minutos desde medianoche, para poder comparar horas restando. */
+function minutosDelDia(hora) {
+  const limpia = horaValida(hora);
+  if (!limpia) return null;
+  return Number(limpia.slice(0, 2)) * 60 + Number(limpia.slice(3, 5));
+}
+
+/** 0 = domingo … 6 = sábado. El sábado no se gasta como el martes. */
+function diaDeSemana(iso) {
+  const { anio, mes, dia } = partes(iso);
+  return new Date(Date.UTC(anio, mes - 1, dia)).getUTCDay();
+}
+
 function mesDe(iso) {
   return iso.slice(0, 7);
 }
@@ -761,7 +808,7 @@ const ESTADOS_BANDEJA = {
   // copia vieja de la app la descartaría al normalizar, en silencio.
   ILEGIBLE: "ilegible",
 };
-const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo" };
+const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo", IMAGEN: "imagen" };
 
 /**
  * Una entrada de la bandeja: un movimiento propuesto, con de dónde salió y qué tan seguro
@@ -837,6 +884,10 @@ function normalizarMovimiento(m) {
   return {
     id: m.id || idNuevo("mov"),
     fecha: m.fecha,
+    // La hora, solo de lo que se capture de aquí en adelante. Lo viejo se queda en "" y no se
+    // inventa: no existe. Sirve para que a las 2 de la tarde te ofrezca los tacos y a las 9 el
+    // café, así que empieza a pagar a las dos semanas de uso y hasta entonces no estorba.
+    hora: horaValida(m.hora),
     monto: Math.abs(monto), // el signo lo da el tipo, no el número
     tipo,
     categoria: m.categoria ? String(m.categoria) : tipo === TIPOS.GASTO ? "otros" : null,
@@ -2288,66 +2339,124 @@ function patronContraparte() {
 // Captura rápida — lo que nunca va a llegar por correo.
 //
 // En México la mitad del gasto no deja rastro digital: los tacos, el OXXO de la esquina, el
-// camión, las propinas, la señora de la fruta. El puente no lo va a ver nunca, y si eso no
-// entra, los números mienten hacia abajo y la app pierde la autoridad que la hace útil —que
-// es la otra forma de morirse, más lenta que perder datos pero igual de definitiva.
+// camión, las propinas, la señora de la fruta. Y no es media: Banxico dice que el 78% de la
+// gente paga en efectivo la mayor parte de sus pagos, y el 76% de las compras de hasta $500.
+// Si eso no entra, los números mienten hacia abajo y la app pierde la autoridad que la hace
+// útil — que es la otra forma de morirse, más lenta que perder datos pero igual de definitiva.
 //
 // La respuesta no es un catálogo de montos inventado por mí. Es SU historial: la gente que
 // gasta en efectivo repite cantidades, y esas cantidades son distintas para cada quien. Si
 // todavía no hay historial, aquí no se propone nada y aparece el botón de siempre: inventarle
 // un "$50 · comida" a alguien que nunca ha gastado eso es la misma clase de mentira que un
 // cero disfrazado de dato.
+//
+// ── Lo que se adapta, y por qué así ──
+//
+// Antes esto exigía que se repitiera el monto EXACTO. Con eso, alguien que gasta $47, $48 y
+// $50 en el mismo puesto de tacos no tenía sugerencias: para la app eran tres cosas distintas
+// que pasaron una vez cada una. Ahora los montos parecidos cuentan juntos, pero **lo que se
+// ofrece es siempre un monto que esa persona gastó de verdad**, nunca un promedio: un botón
+// que mete $48 cuando nunca gastaste $48 es un dato inventado con otro nombre.
+//
+// Y pesa el contexto, porque nadie gasta igual a todas horas: lo reciente vale más que lo de
+// hace tres meses, el sábado se parece al sábado, y las 2 de la tarde se parecen a las 2 de la
+// tarde. Todo determinista y todo sacado de su propio historial — se puede explicar cada
+// número sin apelar a ningún modelo.
 
 
 
 /** Cuánto hacia atrás se mira. Lo de hace medio año ya no dice cómo gastas hoy. */
 const DIAS_DE_HISTORIA = 90;
 
-/** Cuántas veces tiene que repetirse un monto para que valga la pena ofrecerlo. */
+/** Cuántas veces tiene que repetirse un hábito para que valga la pena ofrecerlo. */
 const REPETICIONES_MINIMAS = 2;
 
-/**
- * Los montos que más repite, con la categoría que más les pone.
- *
- * Devuelve `[]` cuando no hay de dónde sacarlos, que es una respuesta válida y no un vacío
- * que haya que rellenar.
- */
-function montosFrecuentes(datos, iso = hoyISO(), cuantos = 3) {
-  const desde = sumarDias(iso, -DIAS_DE_HISTORIA);
+/** A los 30 días un gasto pesa la mitad; a los 60, la cuarta parte. */
+const SEMIVIDA_DIAS = 30;
 
-  const cuenta = new Map();
+/** Dos montos son el mismo hábito si se separan menos que esto. */
+const HOLGURA_RELATIVA = 0.08; // 8%
+const HOLGURA_MINIMA = 500; // …o $5, lo que sea más grande: en montos chicos el % no alcanza
+
+/** Cuánto premia coincidir en el día de la semana y en la hora. */
+const BONO_MISMO_DIA = 1.5;
+const BONO_MISMA_HORA = 1.8;
+const MINUTOS_CERCA = 120; // dos horas arriba o abajo siguen siendo "a esta hora"
+
+function holguraDe(centavos) {
+  return Math.max(Math.round(centavos * HOLGURA_RELATIVA), HOLGURA_MINIMA);
+}
+
+/** Lo reciente manda: peso 1 hoy, 0.5 a los 30 días, 0.25 a los 60. */
+function recencia(dias) {
+  return 0.5 ** (Math.max(dias, 0) / SEMIVIDA_DIAS);
+}
+
+/**
+ * Cuánto se parece este gasto pasado al momento en que estamos ahora.
+ * Sin hora capturada no hay bono ni castigo: se ignora, que es distinto de suponer.
+ */
+function afinidad(movimiento, iso, hora) {
+  let peso = 1;
+
+  if (diaDeSemana(movimiento.fecha) === diaDeSemana(iso)) peso *= BONO_MISMO_DIA;
+
+  const entonces = minutosDelDia(movimiento.hora);
+  const ahora = minutosDelDia(hora);
+  if (entonces !== null && ahora !== null && Math.abs(entonces - ahora) <= MINUTOS_CERCA) {
+    peso *= BONO_MISMA_HORA;
+  }
+
+  return peso;
+}
+
+/** Los gastos en efectivo de los últimos meses, que son la materia prima de todo esto. */
+function gastosRecientes(datos, iso) {
+  const desde = sumarDias(iso, -DIAS_DE_HISTORIA);
+  const salida = [];
+
   for (const lista of Object.values(datos.movimientos || {})) {
     for (const m of lista) {
       if (m.tipo !== TIPOS.GASTO) continue;
       if (comparar(m.fecha, desde) < 0) continue;
       // Los movimientos que nacieron de un fijo no son captura rápida: ya se pagan solos.
       if (m.fijoId) continue;
-
-      const previo = cuenta.get(m.monto) || { monto: m.monto, veces: 0, categorias: new Map(), ultima: "" };
-      previo.veces++;
-      previo.categorias.set(m.categoria, (previo.categorias.get(m.categoria) || 0) + 1);
-      if (comparar(m.fecha, previo.ultima) > 0) previo.ultima = m.fecha;
-      cuenta.set(m.monto, previo);
+      salida.push(m);
     }
   }
-
-  return [...cuenta.values()]
-    .filter((c) => c.veces >= REPETICIONES_MINIMAS)
-    // Más repetido primero; a igual repetición, lo más reciente, que es lo que sigue vigente.
-    .sort((a, b) => b.veces - a.veces || comparar(b.ultima, a.ultima))
-    .slice(0, cuantos)
-    .map((c) => ({
-      monto: c.monto,
-      veces: c.veces,
-      categoriaId: categoriaDominante(c.categorias),
-    }));
+  return salida;
 }
 
-function categoriaDominante(categorias) {
+/** El valor que más se repite; a empate, el más reciente. Nunca un promedio. */
+function representante(gastos) {
+  const cuenta = new Map();
+  for (const m of gastos) {
+    const previo = cuenta.get(m.monto) || { veces: 0, ultima: "" };
+    previo.veces++;
+    if (comparar(m.fecha, previo.ultima) > 0) previo.ultima = m.fecha;
+    cuenta.set(m.monto, previo);
+  }
+
+  let mejor = null;
+  for (const [monto, datos] of cuenta) {
+    if (!mejor || datos.veces > mejor.veces ||
+        (datos.veces === mejor.veces && comparar(datos.ultima, mejor.ultima) > 0)) {
+      mejor = { monto, veces: datos.veces, ultima: datos.ultima };
+    }
+  }
+  return mejor;
+}
+
+function categoriaDominante(gastos) {
+  const cuenta = new Map();
+  for (const m of gastos) {
+    if (m.categoria) cuenta.set(m.categoria, (cuenta.get(m.categoria) || 0) + 1);
+  }
+
   let mejor = null;
   let masVeces = 0;
-  for (const [categoriaId, veces] of categorias) {
-    if (categoriaId && veces > masVeces) {
+  for (const [categoriaId, veces] of cuenta) {
+    if (veces > masVeces) {
       mejor = categoriaId;
       masVeces = veces;
     }
@@ -2356,12 +2465,69 @@ function categoriaDominante(categorias) {
 }
 
 /**
+ * Junta los gastos parecidos en un solo hábito.
+ *
+ * Se recorren de mayor a menor y cada uno cae en el primer grupo cuyo representante le queda
+ * cerca. No es sofisticado y no falta que lo sea: los montos de efectivo de una persona son
+ * unas cuantas cantidades repetidas, no una nube que haya que analizar.
+ */
+function agrupar(gastos) {
+  const grupos = [];
+
+  for (const m of [...gastos].sort((a, b) => b.monto - a.monto)) {
+    const grupo = grupos.find((g) => Math.abs(g.centro - m.monto) <= holguraDe(g.centro));
+    if (grupo) {
+      grupo.gastos.push(m);
+    } else {
+      grupos.push({ centro: m.monto, gastos: [m] });
+    }
+  }
+  return grupos;
+}
+
+/**
+ * Los montos que conviene ofrecer AHORA, con la categoría que más les pone.
+ *
+ * Devuelve `[]` cuando no hay de dónde sacarlos, que es una respuesta válida y no un vacío que
+ * haya que rellenar. `hora` es opcional: sin ella funciona igual, solo que sin ese contexto.
+ */
+function montosFrecuentes(datos, iso = hoyISO(), cuantos = 3, hora = "") {
+  const candidatos = [];
+
+  for (const grupo of agrupar(gastosRecientes(datos, iso))) {
+    if (grupo.gastos.length < REPETICIONES_MINIMAS) continue;
+
+    const cabeza = representante(grupo.gastos);
+    if (!cabeza) continue;
+
+    let peso = 0;
+    for (const m of grupo.gastos) {
+      peso += recencia(diasEntre(m.fecha, iso)) * afinidad(m, iso, hora);
+    }
+
+    candidatos.push({
+      monto: cabeza.monto,
+      veces: grupo.gastos.length,
+      categoriaId: categoriaDominante(grupo.gastos),
+      peso,
+      ultima: grupo.gastos.reduce((v, m) => (comparar(m.fecha, v) > 0 ? m.fecha : v), ""),
+    });
+  }
+
+  return candidatos
+    .sort((a, b) => b.peso - a.peso || comparar(b.ultima, a.ultima))
+    .slice(0, cuantos)
+    .map(({ monto, veces, categoriaId }) => ({ monto, veces, categoriaId }));
+}
+
+/**
  * La categoría que le tocaría a un gasto de este monto, según lo que ha hecho antes.
  * `null` cuando no hay con qué decidirlo — y entonces se pregunta, no se adivina.
  */
 function categoriaProbable(datos, centavos, iso = hoyISO()) {
-  const encontrado = montosFrecuentes(datos, iso, 20).find((f) => f.monto === centavos);
-  return encontrado ? encontrado.categoriaId : null;
+  const grupo = agrupar(gastosRecientes(datos, iso))
+    .find((g) => Math.abs(g.centro - centavos) <= holguraDe(g.centro));
+  return grupo ? categoriaDominante(grupo.gastos) : null;
 }
 
 // ═══ motor/lectura.js ═══
@@ -3038,6 +3204,141 @@ function aplicarRegla(datos, clave, categoriaId) {
   return tocados ? { ...datos, movimientos } : datos;
 }
 
+// ═══ motor/nomina.js ═══
+// El recibo de nómina — el dato exacto, sin teclear y sin adivinar.
+//
+// El ingreso es el número del que cuelgan todos los demás: sin él, el disponible es "—" y la
+// app no puede contestar nada. Y hasta hoy se tecleaba a mano, "más o menos lo que gano",
+// que es justo la clase de dato que envejece mal y desalinea todo lo que toca.
+//
+// En México el recibo de nómina no es un papel: es un CFDI que tu patrón está OBLIGADO a
+// timbrar cada vez que te paga, y que puedes bajar tú mismo de sat.gob.mx hasta cinco años
+// atrás. Trae el neto exacto, y de regalo las fechas del periodo pagado — con eso la app
+// configura sola tu quincena, que es de lo poco que todavía se tecleaba.
+//
+// ── Por qué esto NO usa un parser de XML ──
+//
+// Todo lo que hace falta son atributos de dos elementos. Leerlos así deja este archivo en el
+// motor: sin DOM, sin navegador, y con pruebas que corren en cualquier lado — que es la regla
+// de la casa. Un DOMParser habría obligado a sacarlo a la interfaz y a probarlo a ciegas.
+//
+// El prefijo del espacio de nombres se busca flojo (`cfdi:` y `nomina12:` son la costumbre,
+// no una obligación del estándar), pero el nombre del elemento se exige exacto.
+
+
+
+
+/** La etiqueta de apertura de un elemento, sin importar con qué prefijo venga. */
+function etiqueta(xml, nombre) {
+  const patron = new RegExp(`<(?:[A-Za-z_][\\w.-]*:)?${nombre}\\b[^>]*>`, "i");
+  const encontrada = xml.match(patron);
+  return encontrada ? encontrada[0] : "";
+}
+
+/** Un atributo de esa etiqueta, o "" si no viene. */
+function atributo(etiquetaTexto, nombre) {
+  const encontrado = etiquetaTexto.match(new RegExp(`\\b${nombre}\\s*=\\s*"([^"]*)"`, "i"));
+  return encontrado ? encontrado[1] : "";
+}
+
+function centavosDe(texto) {
+  const valor = aCentavos(texto);
+  return valor === null ? null : Math.abs(valor);
+}
+
+/** El CFDI trae la fecha como "2026-09-15" o "2026-09-15T08:00:55". Nos quedamos con el día. */
+function soloFecha(texto) {
+  const dia = String(texto || "").slice(0, 10);
+  return esISO(dia) ? dia : "";
+}
+
+/**
+ * Lee un CFDI de nómina. Devuelve `{ nomina, veredicto }`; `nomina` es null si no se pudo.
+ *
+ * NUNCA lanza: un archivo que no es lo que dice ser tiene que dar una respuesta, no un error
+ * en la consola que nadie ve.
+ */
+function leerNomina(xml) {
+  const texto = String(xml || "");
+
+  const comprobante = etiqueta(texto, "Comprobante");
+  const nomina = etiqueta(texto, "Nomina");
+
+  if (!comprobante || !nomina) {
+    return {
+      nomina: null,
+      veredicto: veredicto(ESTADOS.SIN_DATOS_SUFICIENTES, SEVERIDADES.INFO,
+        "Esto no parece un recibo de nómina del SAT.",
+        { falta: "el XML del CFDI, no el PDF" }),
+    };
+  }
+
+  // El neto es el `Total` del comprobante: percepciones más otros pagos, menos deducciones.
+  // Es lo que de verdad te depositan, y por eso es el que manda.
+  const neto = centavosDe(atributo(comprobante, "Total"));
+  const percepciones = centavosDe(atributo(nomina, "TotalPercepciones"));
+  const deducciones = centavosDe(atributo(nomina, "TotalDeducciones"));
+  const otrosPagos = centavosDe(atributo(nomina, "TotalOtrosPagos"));
+
+  if (neto === null || neto === 0) {
+    return {
+      nomina: null,
+      veredicto: veredicto(ESTADOS.SIN_DATOS_SUFICIENTES, SEVERIDADES.INFO,
+        "El recibo no trae el total que te pagaron.", { falta: "cuánto" }),
+    };
+  }
+
+  const inicio = soloFecha(atributo(nomina, "FechaInicialPago"));
+  const fin = soloFecha(atributo(nomina, "FechaFinalPago"));
+  const dias = Number(atributo(nomina, "NumDiasPagados")) || null;
+
+  // Extraordinaria es aguinaldo, PTU, finiquito: dinero de verdad, pero no es tu quincena.
+  // Tomarlo como ingreso recurrente inflaría el disponible de todo un ciclo.
+  const tipo = (atributo(nomina, "TipoNomina") || "O").toUpperCase();
+  const ordinaria = tipo === "O";
+
+  return {
+    nomina: {
+      neto,
+      percepciones,
+      deducciones,
+      otrosPagos: otrosPagos === null ? 0 : otrosPagos,
+      fechaPago: soloFecha(atributo(nomina, "FechaPago")) || fin,
+      inicio,
+      fin,
+      dias,
+      tipo,
+      ordinaria,
+    },
+    veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK,
+      ordinaria
+        ? "Recibo leído: el neto sale del comprobante, no de una estimación."
+        : "Recibo leído, pero es una nómina extraordinaria (aguinaldo, PTU o finiquito): no es tu ingreso de cada quincena.",
+      { fuente: "CFDI", tipo }),
+  };
+}
+
+/**
+ * El día de corte que se deduce del periodo pagado, o null si no se deduce limpio.
+ *
+ * Un periodo del 1 al 15 dice, sin ambigüedad, que tu quincena corta el 15. Uno del 9 al 24 no
+ * dice nada que esta app pueda usar: sus ciclos viven dentro del mes. Y un periodo que termina
+ * el último día del mes tampoco aporta, porque el fin de mes ya es frontera siempre.
+ *
+ * Devolver null es la respuesta correcta en esos casos, no un fallo: se pregunta en vez de
+ * inventar un corte que desalinearía todos los ciclos.
+ */
+function corteDeNomina(nomina) {
+  if (!nomina || !esISO(nomina.inicio) || !esISO(nomina.fin)) return null;
+
+  const desde = partes(nomina.inicio);
+  const hasta = partes(nomina.fin);
+  if (desde.anio !== hasta.anio || desde.mes !== hasta.mes) return null;
+  if (hasta.dia >= diasEnMes(hasta.anio, hasta.mes)) return null;
+
+  return hasta.dia;
+}
+
 // ═══ motor/recurrentes.js ═══
 // Recurrentes — encontrar las suscripciones que ya estás pagando.
 //
@@ -3409,6 +3710,11 @@ function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, is
     // Un cargo final NO es un gasto nuevo: sustituye a la preautorización que ya está.
     reemplaza: duplicado && duplicado.datos.motivo === "liquidacion" ? duplicado.datos.id : null,
     aviso: [duplicado ? duplicado.motivo : "", ...razones].filter(Boolean).join(" "),
+    // De una captura de pantalla SÍ se guarda la primera línea leída, y solo de ella. No es
+    // para enseñarla bonito: es para que el ojo compare el monto grande contra lo que el OCR
+    // creyó ver, antes de aceptarlo. Un correo no la necesita —lo leíste tú— y por eso ahí se
+    // sigue tirando el texto, que es la promesa de este motor.
+    resumen: origen === ORIGENES.IMAGEN ? primeraLinea(texto) : "",
   });
 
   return { datos: { ...datos, bandeja: [entrada, ...(datos.bandeja || [])] }, entrada, duplicado, error: null };
@@ -3593,9 +3899,32 @@ function deshacerTanda(datos, ids) {
   return (ids || []).reduce((acumulado, id) => deshacerEntrada(acumulado, id), datos);
 }
 
+/**
+ * ¿Esta entrada se puede aceptar sin mirarla? Es el permiso más delicado del proyecto: gobierna
+ * tanto el «aceptar todo» de la bandeja como el botón de aceptar en la notificación, donde ni
+ * siquiera estás viendo la app.
+ *
+ * Tres cosas lo impiden, y cada una por su motivo:
+ *   · confianza que no sea alta — el lector tuvo que suponer algo;
+ *   · que reemplace a otra — hay que decidir si se suma o se sustituye, y eso no lo decide una app;
+ *   · que parezca un traspaso entre tus propias cuentas — aceptarlo cuenta como gasto un dinero
+ *     que solo se movió de bolsillo, y la app mentiría hacia arriba.
+ */
+function sinNadaQueRevisar(entrada) {
+  if (!entrada) return false;
+
+  // Lo que salió de una CAPTURA DE PANTALLA nunca entra aquí, por limpio que se vea el texto.
+  // Un OCR puede leer $89.00 donde decía $8,900.00, y un dígito de más en un monto es el peor
+  // error que esta app puede cometer: no se nota al aceptarlo, se nota a fin de quincena. Que
+  // el lector convierta píxeles en texto no lo vuelve testigo de nada — se acepta mirándola.
+  if (entrada.origen === ORIGENES.IMAGEN) return false;
+
+  return entrada.confianza === "alta" && !entrada.reemplaza && !entrada.posibleTraspaso;
+}
+
 /** Las que se pueden aceptar sin mirarlas una por una: no quedó nada que revisar en ellas. */
 function deConfianzaAlta(datos) {
-  return pendientes(datos).filter((e) => e.confianza === "alta" && !e.reemplaza);
+  return pendientes(datos).filter(sinNadaQueRevisar);
 }
 
 // ── Traer del correo ───────────────────────────────────────────────────────
@@ -3698,6 +4027,7 @@ function absorberAvisos(datos, avisos, iso = hoyISO()) {
 
 
 
+
 /** Cuántos avisos sin confirmar hacen falta para que valga la pena decirlo. */
 const AVISOS_PARA_MOLESTAR = 3;
 
@@ -3744,6 +4074,148 @@ function recordatoriosDeHoy(datos, iso = hoyISO()) {
   }
 
   return salida;
+}
+
+// ── La notificación como mesa de trabajo ───────────────────────────────────
+//
+// Aquí está la jugada del proyecto, y no es leer la notificación del banco —eso ninguna app
+// web puede hacerlo, y de todos modos la mitad de esas notificaciones ni traen el monto: «Nu ·
+// Retiraste dinero de tu Cajita» y ya. La jugada es que la notificación de GRIP sea donde
+// resuelves tu dinero, sin abrir nada.
+//
+// Aceptar un cargo hoy cuesta cinco pasos: desbloquear, abrir, ir a Bandeja, buscarlo, Aceptar.
+// Con un botón en la sombra es uno. Esto decide qué dice ese aviso y —lo que más importa— si
+// lleva botón de aceptar o no.
+
+/** El texto que ve alguien que NO va a abrir la app. Devuelve null si no hay nada que decir. */
+function avisoDeEntrada(datos, entrada) {
+  if (!entrada || entrada.estado !== ESTADOS_BANDEJA.PENDIENTE) return null;
+
+  const quien = entrada.comercio || (entrada.movimiento && entrada.movimiento.nota) || "Un movimiento";
+  const clave = `entrada:${entrada.id}`;
+
+  // Sin monto no hay nada que aceptar de un toque: lo que falta lo pones tú, mirando.
+  if (!entrada.movimiento || !entrada.movimiento.monto) {
+    return {
+      clave, entradaId: entrada.id, aceptable: false,
+      titulo: "Llegó un aviso que no supe leer",
+      cuerpo: `${quien} · dime cuánto y dónde`,
+      acuse: null,
+    };
+  }
+
+  const signo = entrada.movimiento.tipo === TIPOS.GASTO ? "−" : "+";
+  const cifra = `${signo}${formatear(entrada.movimiento.monto)}`;
+  const categoria = categoriaPorId(datos, entrada.movimiento.categoria);
+  const aceptable = sinNadaQueRevisar(entrada);
+
+  // El motivo va en el cuerpo cuando NO se puede aceptar de un toque. Un botón ausente sin
+  // explicación se lee como un error de la app; con el motivo, se lee como cuidado.
+  const porQueNo = entrada.posibleTraspaso
+    ? "parece movimiento entre tus cuentas"
+    : entrada.reemplaza
+      ? "puede ser el cargo final de uno que ya tienes"
+      : "tuve que suponer algo";
+
+  return {
+    clave,
+    entradaId: entrada.id,
+    aceptable,
+    titulo: `${quien} · ${cifra}`,
+    cuerpo: aceptable
+      ? [categoria ? categoria.nombre : null, "de tu correo"].filter(Boolean).join(" · ")
+      : `Ábrelo: ${porQueNo}`,
+    acuse: aceptable ? `Aceptado · ${quien} ${cifra}` : null,
+  };
+}
+
+/**
+ * La línea que se queda en la sombra: tu dinero, sin abrir la app.
+ *
+ * Va sellada con su fecha por la misma razón que el correo diario: si llevas dos días sin
+ * abrir, estos números son de hace dos días y decirlo cuesta una línea. Presentarlos como si
+ * fueran de ahora sería mentir en la pantalla de bloqueo, que es peor que no decir nada.
+ */
+function barraDeHoy(panel, iso = hoyISO()) {
+  if (!panel) return null;
+
+  // El sello va SIEMPRE, no solo cuando el número es viejo. El texto de una notificación se
+  // congela cuando se publica: nadie puede volver a redactarlo cuando tú lo lees, tres días
+  // después. Así que o lleva su fecha desde el principio, o miente en la pantalla de bloqueo
+  // el día que no abras la app. Es la misma regla del correo diario.
+  const sello = `al ${iso}`;
+
+  if (panel.disponible === null) {
+    return { titulo: "Grip", cuerpo: `Anota un gasto en dos segundos · ${sello}` };
+  }
+
+  return {
+    titulo: `Te quedan ${formatear(panel.disponible)}`,
+    cuerpo: panel.porDia === null
+      ? `Hasta el ${panel.ciclo.fin} · ${sello}`
+      : `${formatear(panel.porDia)} por día hasta el ${panel.ciclo.fin} · ${sello}`,
+  };
+}
+
+// ═══ almacen/intenciones.js ═══
+// La cola de intenciones — lo que decidiste en la sombra, esperando a que la app lo aplique.
+//
+// La otra mitad vive en el service worker (lo genera herramientas/armar.mjs). Él escribe, esto
+// lee y vacía, y son dos mitades a propósito: cada lado hace UNA cosa, así que no hay código
+// compartido que mantener en dos sitios ni riesgo de que se pisen.
+//
+// Va en su propia base de IndexedDB, aparte de tus datos. Una intención no es un movimiento:
+// es «dijiste que sí a esto». El movimiento lo crea el motor cuando la app la aplica, con las
+// mismas reglas de siempre. Si algo sale mal aquí, lo peor que pasa es que un cargo siga
+// esperando en la bandeja — nunca que se cuente dos veces ni que se pierda dinero.
+
+const BASE_INTENCIONES = "grip-intenciones";
+const COLA_INTENCIONES = "cola";
+
+function abrirCola() {
+  return new Promise((listo, falla) => {
+    let peticion;
+    try {
+      peticion = indexedDB.open(BASE_INTENCIONES, 1);
+    } catch (e) {
+      return falla(e); // hay navegadores donde tocar indexedDB ya lanza
+    }
+    peticion.onupgradeneeded = () => {
+      const base = peticion.result;
+      if (!base.objectStoreNames.contains(COLA_INTENCIONES)) base.createObjectStore(COLA_INTENCIONES, { autoIncrement: true });
+    };
+    peticion.onsuccess = () => listo(peticion.result);
+    peticion.onerror = () => falla(peticion.error || new Error("no se pudo abrir la cola"));
+  });
+}
+
+/**
+ * Saca todo lo que haya y deja la cola vacía, en UNA transacción.
+ *
+ * Leer y borrar juntos es deliberado: si se leyera primero y se borrara después, un cierre a
+ * media aplicación dejaría intenciones ya aplicadas listas para aplicarse otra vez. Un gasto
+ * duplicado es peor que uno perdido, porque el perdido lo notas.
+ *
+ * Nunca lanza: sin IndexedDB devuelve `[]` y la app sigue igual.
+ */
+async function drenarIntenciones() {
+  let base = null;
+  try {
+    base = await abrirCola();
+    return await new Promise((listo) => {
+      const trato = base.transaction(COLA_INTENCIONES, "readwrite");
+      const almacen = trato.objectStore(COLA_INTENCIONES);
+      const todas = almacen.getAll();
+      todas.onsuccess = () => almacen.clear();
+      trato.oncomplete = () => listo(todas.result || []);
+      trato.onerror = () => listo([]);
+      trato.onabort = () => listo([]);
+    });
+  } catch (e) {
+    return [];
+  } finally {
+    if (base) try { base.close(); } catch (e) {}
+  }
 }
 
 // ═══ almacen/archivo.js ═══
@@ -4605,6 +5077,23 @@ function podarMandados(mandados, iso) {
   return vivos;
 }
 
+/**
+ * El registro del service worker, o null.
+ *
+ * Los botones de la notificación SOLO existen a través del service worker: un `new
+ * Notification()` suelto no los admite, porque nadie recogería el toque. Así que donde no haya
+ * service worker —abierta desde el disco, por ejemplo— hay aviso pero no botones, y eso es una
+ * caída limpia, no un error.
+ */
+async function registro() {
+  try {
+    if (!globalThis.navigator || !navigator.serviceWorker) return null;
+    return await navigator.serviceWorker.ready;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function mostrarAviso(titulo, cuerpo) {
   const opciones = { body: cuerpo, icon: "./icono-192.png", badge: "./icono-192.png", tag: titulo };
   try {
@@ -4670,6 +5159,273 @@ function ponerGlobo(cuantos) {
 /** Cada cuánto conviene volver a mirar mientras la app siga abierta, en milisegundos. */
 const ESPERA_ENTRE_REVISIONES = MINUTOS_ENTRE_REVISIONES * 60000;
 
+// ── La sombra como mesa de trabajo ─────────────────────────────────────────
+//
+// Lo que se publica aquí no es «te informo»: es «resuélvelo desde aquí». El service worker
+// recoge el toque (lo genera herramientas/armar.mjs) y la app aplica la intención con el motor
+// de siempre.
+
+/**
+ * Publica el aviso de una entrada de la bandeja, con su botón de aceptar cuando toca.
+ *
+ * El `tag` es el id de la entrada: publicar dos veces la misma no apila dos avisos, la
+ * reemplaza. Sin eso, abrir la app tres veces dejaría tres avisos del mismo cargo.
+ */
+async function avisarDeEntrada(aviso) {
+  if (!aviso || !estadoDeAvisos().encendidos) return false;
+
+  const registrado = await registro();
+  if (!registrado || !registrado.showNotification) return false;
+
+  const acciones = aviso.aceptable
+    ? [{ action: "aceptar", title: "Aceptar" }, { action: "ver", title: "Ver" }]
+    : [{ action: "ver", title: "Ver" }];
+
+  try {
+    await registrado.showNotification(aviso.titulo, {
+      body: aviso.cuerpo,
+      icon: "./icono-192.png",
+      badge: "./icono-192.png",
+      tag: aviso.clave,
+      actions: acciones,
+      data: { entradaId: aviso.entradaId, acuse: aviso.acuse },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** El tag de la barra: fijo, para que se reemplace a sí misma en vez de acumularse. */
+const TAG_BARRA = "grip:barra";
+
+/**
+ * La barra que se queda en la sombra con tu número y un botón para anotar.
+ *
+ * Silenciosa a propósito: no vibra, no suena, no te llama. Está ahí para que la LEAS de reojo
+ * entre las demás notificaciones, no para interrumpirte. Es la app sin abrir la app.
+ */
+async function ponerBarra(barra) {
+  if (!barra || !estadoDeAvisos().encendidos) return false;
+
+  const registrado = await registro();
+  if (!registrado || !registrado.showNotification) return false;
+
+  try {
+    await registrado.showNotification(barra.titulo, {
+      body: barra.cuerpo,
+      icon: "./icono-192.png",
+      badge: "./icono-192.png",
+      tag: TAG_BARRA,
+      silent: true,
+      renotify: false,
+      requireInteraction: true, // que no se vaya sola: su gracia es quedarse
+      actions: [
+        // Donde el navegador ofrezca escribir en la sombra, se anota sin abrir nada. Donde no,
+        // `type` se ignora y queda un botón normal que abre el teclado. Las dos cosas sirven.
+        { action: "anotar", type: "text", title: "Anotar gasto", placeholder: "120 tacos" },
+        { action: "abrir", title: "Abrir" },
+      ],
+      data: { entradaId: null, acuse: null },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Quita la barra. Apagar los avisos tiene que quitarla de verdad, no solo dejar de moverla. */
+async function quitarBarra() {
+  const registrado = await registro();
+  if (!registrado || !registrado.getNotifications) return;
+  try {
+    for (const n of await registrado.getNotifications({ tag: TAG_BARRA })) n.close();
+  } catch (e) {}
+}
+
+// ═══ interfaz/lector-imagen.js ═══
+// Lector de capturas de pantalla — OPCIONAL Y BORRABLE.
+//
+// El texto de una notificación del banco no se puede seleccionar. Una captura de pantalla se
+// hace con dos botones. Así que esto lee la captura.
+//
+// Lo que hace es UNA cosa: convertir píxeles en texto. El monto, la fecha y el comercio los
+// saca después `interpretar()` de motor/lectura.js, con las mismas reglas deterministas que
+// leen un correo pegado — así que el lector hereda gratis todo lo que el motor ya sabe
+// (reconocer bancos, ver duplicados, fusionar preautorizaciones, aprender categorías) y ningún
+// modelo decide un peso. La regla 1 del proyecto queda en pie.
+//
+// Corre dentro del dispositivo, en un Web Worker. La imagen no sale de aquí: no hay a dónde
+// mandarla, y por eso el motor está commiteado en ocr/ en vez de bajarse de un CDN.
+//
+// Igual que el puente y el anfitrión: nadie lo importa. La app pregunta en tiempo de ejecución
+// si `leerImagen` existe, y si no, la puerta no se pinta. Bórralo, arma, y queda igual.
+
+const CARPETA_OCR = "./ocr/";
+
+/** Debajo de esto el texto de una captura recortada sale borroso al ampliarlo. */
+const ANCHO_MINIMO = 1000;
+
+/** Y arriba de esto no se gana precisión, solo segundos de espera. */
+const ANCHO_MAXIMO = 2200;
+
+// El motor pesa 4 MB y tarda en arrancar: se carga UNA vez y se queda para las siguientes.
+let motorEnCurso = null;
+
+/**
+ * Arranca el motor de OCR, o devuelve el que ya estaba.
+ *
+ * El `import()` va con `await` y asignado a propósito: el armado concatena todo en un solo
+ * ámbito y tumba cualquier línea que EMPIECE por `import`. Ésta empieza por `const`.
+ */
+async function arrancarMotor() {
+  if (motorEnCurso) return motorEnCurso;
+
+  motorEnCurso = (async () => {
+    const modulo = await import(`${CARPETA_OCR}lib.js`);
+    const cliente = new modulo.OCRClient({ workerURL: `${CARPETA_OCR}tesseract-worker.js` });
+    // El modelo se le pasa como dirección: lo baja él, de este mismo origen. Así este archivo
+    // no toca la red, y la guarda de independencia.test.js sigue diciendo la verdad.
+    await cliente.loadModel(`${CARPETA_OCR}spa.traineddata`);
+    return cliente;
+  })();
+
+  try {
+    return await motorEnCurso;
+  } catch (e) {
+    motorEnCurso = null; // que un arranque fallido no deje el lector muerto para siempre
+    throw e;
+  }
+}
+
+/**
+ * El umbral que mejor separa la tinta del fondo, por el método de Otsu.
+ *
+ * Es el paso que más precisión da, y en una captura de pantalla es casi trivial: el texto es
+ * renderizado, de alto contraste y sin sombras — el mejor caso posible del OCR. Se busca el
+ * corte que deja los dos grupos de píxeles lo más separados que se pueda entre sí.
+ */
+function umbralDeOtsu(histograma, total) {
+  let sumaTotal = 0;
+  for (let i = 0; i < 256; i++) sumaTotal += i * histograma[i];
+
+  let sumaFondo = 0;
+  let pesoFondo = 0;
+  let mejorVarianza = -1;
+  let mejorUmbral = 128;
+
+  for (let u = 0; u < 256; u++) {
+    pesoFondo += histograma[u];
+    if (pesoFondo === 0) continue;
+    const pesoFrente = total - pesoFondo;
+    if (pesoFrente === 0) break;
+
+    sumaFondo += u * histograma[u];
+    const mediaFondo = sumaFondo / pesoFondo;
+    const mediaFrente = (sumaTotal - sumaFondo) / pesoFrente;
+    const varianza = pesoFondo * pesoFrente * (mediaFondo - mediaFrente) ** 2;
+
+    if (varianza > mejorVarianza) {
+      mejorVarianza = varianza;
+      mejorUmbral = u;
+    }
+  }
+  return mejorUmbral;
+}
+
+/**
+ * Deja la imagen como al OCR le gusta: gris, del tamaño adecuado y en blanco y negro.
+ *
+ * Y siempre con la tinta oscura sobre fondo claro. Media México trae el teléfono en modo
+ * oscuro, y una notificación blanca sobre negro se lee bastante peor: si el fondo salió
+ * oscuro, se invierte.
+ */
+async function prepararImagen(archivo) {
+  const mapa = await createImageBitmap(archivo);
+
+  const escala = Math.min(
+    Math.max(ANCHO_MINIMO / mapa.width, 1),
+    Math.max(ANCHO_MAXIMO / mapa.width, 1),
+  );
+  const ancho = Math.round(mapa.width * escala);
+  const alto = Math.round(mapa.height * escala);
+
+  const lienzo = document.createElement("canvas");
+  lienzo.width = ancho;
+  lienzo.height = alto;
+  const pincel = lienzo.getContext("2d", { willReadFrequently: true });
+  pincel.imageSmoothingQuality = "high";
+  pincel.drawImage(mapa, 0, 0, ancho, alto);
+  mapa.close();
+
+  const datos = pincel.getImageData(0, 0, ancho, alto);
+  const pixeles = datos.data;
+  const histograma = new Uint32Array(256);
+  const grises = new Uint8ClampedArray(pixeles.length / 4);
+
+  for (let i = 0, g = 0; i < pixeles.length; i += 4, g++) {
+    // Los coeficientes de luminancia de siempre: el ojo no pesa igual los tres canales.
+    const gris = (pixeles[i] * 0.299 + pixeles[i + 1] * 0.587 + pixeles[i + 2] * 0.114) | 0;
+    grises[g] = gris;
+    histograma[gris]++;
+  }
+
+  const umbral = umbralDeOtsu(histograma, grises.length);
+
+  let oscuros = 0;
+  for (let g = 0; g < grises.length; g++) if (grises[g] <= umbral) oscuros++;
+  const fondoOscuro = oscuros > grises.length / 2;
+
+  for (let i = 0, g = 0; i < pixeles.length; i += 4, g++) {
+    const claro = grises[g] > umbral;
+    const valor = (fondoOscuro ? !claro : claro) ? 255 : 0;
+    pixeles[i] = pixeles[i + 1] = pixeles[i + 2] = valor;
+    pixeles[i + 3] = 255;
+  }
+
+  return datos;
+}
+
+/** ¿Este navegador puede? Se pregunta antes de ofrecer el botón, no después de fallar. */
+function puedeLeerImagenes() {
+  return typeof createImageBitmap === "function" &&
+    typeof document !== "undefined" &&
+    typeof WebAssembly === "object";
+}
+
+/**
+ * Lee una captura de pantalla y devuelve `{ texto, error }`. NUNCA lanza.
+ *
+ * La imagen no se guarda en ningún lado: se lee y se tira. Un álbum de capturas de tus gastos
+ * es exactamente lo que este proyecto no quiere tener.
+ */
+async function leerImagen(archivo, alAvanzar = () => {}) {
+  if (!archivo || !puedeLeerImagenes()) {
+    return { texto: "", error: "Este navegador no puede leer imágenes." };
+  }
+
+  let cliente = null;
+  try {
+    alAvanzar("preparando");
+    const imagen = await prepararImagen(archivo);
+
+    alAvanzar("arrancando");
+    cliente = await arrancarMotor();
+
+    alAvanzar("leyendo");
+    await cliente.loadImage(imagen);
+    const texto = await cliente.getText();
+
+    // Se suelta la imagen del motor en cuanto se leyó: el wasm no devuelve memoria al sistema
+    // y una captura de 2200px no es poca cosa.
+    await cliente.clearImage();
+
+    return { texto: String(texto || "").trim(), error: null };
+  } catch (e) {
+    return { texto: "", error: `No pude leer la imagen: ${e.message}` };
+  }
+}
+
 // ═══ interfaz/ui.js ═══
 // Interfaz — render directo, sin framework y sin dependencias.
 //
@@ -4699,6 +5455,8 @@ const ESPERA_ENTRE_REVISIONES = MINUTOS_ENTRE_REVISIONES * 60000;
 
 
 
+
+
 const app = {
   // Los ids de lo último aceptado en lote, para poder revertirlo entero.
   ultimaTanda: null,
@@ -4706,6 +5464,9 @@ const app = {
   almacen: null,
   vista: "hoy",
   hoy: hoyISO(),
+  // La hora del reloj, para que las sugerencias de efectivo sepan si son las 2 de la tarde o
+  // las 9 de la mañana. Se refresca con el mismo intervalo que ya vigila el cambio de día.
+  hora: horaAhora(),
   aviso: null,
   bloqueado: false,
   filtro: { texto: "", tipo: "" },
@@ -4796,6 +5557,16 @@ function bannerPropuesta() {
       <button class="boton chico tenue" data-accion="descartar-propuesta">Déjalos como están</button>
     </div>
   </div>`;
+}
+
+/**
+ * Un golpecito al guardar. No un zumbido: 12 milisegundos, lo justo para que la mano sepa que
+ * pasó algo sin tener que mirar la pantalla. Donde no exista, no hace nada y nadie se entera.
+ */
+function vibrar(ms = 12) {
+  try {
+    if (globalThis.navigator && navigator.vibrate) navigator.vibrate(ms);
+  } catch (e) {}
 }
 
 function monto(centavos, opciones) {
@@ -5005,7 +5776,7 @@ function vistaHoy() {
   // no entra, los números mienten hacia abajo. Los montos salen de SU historial —la gente
   // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
   // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
-  const frecuentes = montosFrecuentes(datos, hoy);
+  const frecuentes = montosFrecuentes(datos, hoy, 3, app.hora);
   const rapido = frecuentes.length
     ? `<div class="tarjeta">
         <div class="rotulo">Lo de siempre, en efectivo</div>
@@ -5155,13 +5926,23 @@ function vistaBandeja() {
   const sinLeer = ilegibles(app.datos);
   const impacto = impactoPendiente(app.datos);
 
+  // El lector de capturas se descubre, no se importa: si alguien borró interfaz/lector-imagen.js,
+  // esto da undefined, el botón no se pinta, y la app no se entera de que faltaba nada.
+  const hayLector = typeof leerImagen === "function" && typeof puedeLeerImagenes === "function" && puedeLeerImagenes();
+
   const pegar = `<div class="tarjeta">
     <div class="titulo-tarjeta">Pega el aviso de tu banco</div>
     <div class="rotulo">Copia el correo o la notificación y pégalo aquí. Saco el monto, la fecha y el
-      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.</div>
+      comercio; tú confirmas. Funciona con cualquier banco, lo reconozca o no.${hayLector
+        ? " ¿El texto no se deja seleccionar? Toma una captura de pantalla y súbela: también la leo." : ""}</div>
     <textarea id="aviso" class="campo area" rows="3" data-accion-input="borrador-aviso"
       placeholder="Compra por $189.00 en ... el 09/09/2026">${esc(app.borrador)}</textarea>
-    <div class="acciones"><button class="boton" data-accion="leer-aviso">Leer</button></div>
+    <div class="acciones">
+      <button class="boton" data-accion="leer-aviso">Leer</button>
+      ${hayLector ? `<button class="boton tenue" data-accion="elegir-captura">Leer una captura</button>
+        <input id="captura" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+          hidden data-accion-archivo="captura">` : ""}
+    </div>
   </div>`;
 
   // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
@@ -5216,7 +5997,10 @@ function vistaBandeja() {
         Ver ${faltan} ${faltan === 1 ? "más" : "más"}</button></div>`
     : "";
 
-  return `${seccionSinLeer}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}${pegar}`;
+  // Pegar y leer una captura van ARRIBA, no al final. Son las dos vías principales de la app y
+  // tenían que bajar por toda la lista de pendientes para encontrarlas. Lo único que va antes
+  // es lo que no se supo leer: si nadie lo completa, ahí desaparece un gasto de verdad.
+  return `${seccionSinLeer}${pegar}${deshacerLote}${lote}${resumen}${visibles.map(tarjetaEntrada).join("")}${masBoton}`;
 }
 
 /**
@@ -5652,12 +6436,17 @@ function vistaAjustes() {
         diario del puente, aquí abajo.</div>
     </div>`;
 
+  // El puente sigue funcionando y no se toca, pero deja de estar en el centro: la app gira
+  // ahora alrededor de pegar y de leer capturas, que no piden instalar nada ni dar permisos.
+  // Quien lo quiera lo abre; quien no, ni lo ve.
   const seccionPuente = hayPuente
     ? `<div class="titulo-seccion">Traer de mi correo</div>
-       <div class="tarjeta">
-         <div class="rotulo">Un script tuyo, dentro de tu cuenta de Google, le pasa a Grip los
-           avisos de tus bancos. Las instrucciones están en la carpeta <code>puente/</code> del
-           repositorio. La dirección y el token se guardan solo en este dispositivo.</div>
+       <details class="tarjeta"${puente.url ? " open" : ""}>
+         <summary class="rotulo" style="cursor:pointer">Un script tuyo, en tu cuenta de Google, que
+           le pasa a Grip los avisos de tus bancos. ${puente.url ? "Configurado." : "Opcional — toca para verlo."}</summary>
+         <div class="rotulo" style="margin-top:10px">Las instrucciones están en la carpeta
+           <code>puente/</code> del repositorio. La dirección y el token se guardan solo en este
+           dispositivo.</div>
          <div class="fila"><div class="crece">
            <div class="nombre">${puente.url ? "Puente configurado" : "Sin configurar"}</div>
            <div class="sub">${puente.url ? esc(puente.url.slice(0, 42)) + "…" : "pega la dirección que termina en /exec"}</div>
@@ -5688,7 +6477,7 @@ function vistaAjustes() {
          ${bancosParciales().map((b) => `<div class="rotulo aviso-linea">
            <b>${esc(b.nombre)}:</b> ${esc(b.nota)}. Para lo que no llegue, compártele el aviso a
            Grip desde el celular.</div>`).join("")}
-       </div>`
+       </details>`
     : "";
 
   const reglas = reglasAprendidas(app.datos);
@@ -5718,8 +6507,12 @@ function vistaAjustes() {
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
-        <div class="sub">lo que entra cada 15 días</div></div>
+        <div class="sub">lo que entra cada vez que te pagan</div></div>
         <button class="boton chico tenue" data-accion="editar-ingreso">${monto(perfil.ingresoQuincenal)}</button></div>
+      <div class="fila"><div class="crece"><div class="nombre">Sube tu recibo de nómina</div>
+        <div class="sub">el XML del SAT: pone el neto exacto y de paso tus días de corte</div></div>
+        <button class="boton chico" data-accion="subir-nomina">Subir</button>
+        <input id="nomina" type="file" accept="text/xml,application/xml,.xml" hidden data-accion-archivo="nomina"></div>
       <div class="fila"><div class="crece"><div class="nombre">Días de corte</div>
         <div class="sub">${perfil.cortes.length ? `quincenal (día ${perfil.cortes.join(", ")} y fin de mes)` : "mensual"}</div></div>
         <button class="boton chico tenue" data-accion="editar-cortes">Cambiar</button></div>
@@ -5933,28 +6726,68 @@ async function tirarLoViejo() {
  *
  * Es la única vía que sirve para bancos que solo notifican dentro de su app, como Nu.
  */
+/**
+ * Recoge lo que el service worker dejó en el buzón al compartir desde Android.
+ *
+ * Va por ahí y no por la dirección porque los ARCHIVOS solo viajan por POST, y un POST no deja
+ * nada en la barra de direcciones. Se vacía al recogerlo: es un buzón de una sola entrega, y
+ * dejar ahí la captura de un gasto sería justo lo que este proyecto no quiere guardar.
+ */
+async function vaciarBuzon() {
+  const vacio = { texto: "", imagen: null };
+  try {
+    if (!globalThis.caches) return vacio;
+    const buzon = await caches.open("grip-compartido");
+
+    const conTexto = await buzon.match("./buzon-texto");
+    const conImagen = await buzon.match("./buzon-imagen");
+    const texto = conTexto ? (await conTexto.text()).trim() : "";
+    const imagen = conImagen ? await conImagen.blob() : null;
+
+    await buzon.delete("./buzon-texto");
+    await buzon.delete("./buzon-imagen");
+    return { texto, imagen: imagen && imagen.size ? imagen : null };
+  } catch (e) {
+    return vacio;
+  }
+}
+
 async function atenderCompartido() {
   let texto = "";
   let atajo = "";
+  let compartido = false;
   try {
     const params = new URLSearchParams(location.search);
+    // El camino viejo, por la dirección, se queda: sirve para pegar un enlace a mano y para las
+    // apps que ya estaban instaladas con el manifiesto anterior, que compartían por GET.
     texto = [params.get("texto"), params.get("titulo"), params.get("enlace")].filter(Boolean).join("\n").trim();
     atajo = params.get("atajo") || "";
-    if (texto || atajo) history.replaceState(null, "", location.pathname);
+    compartido = params.get("compartido") === "1";
+    if (texto || atajo || compartido) history.replaceState(null, "", location.pathname);
   } catch (e) {
     return; // en un contexto sin acceso a la dirección esto simplemente no aplica
+  }
+
+  // Lo compartido por POST: puede traer una imagen, texto, o las dos cosas.
+  if (compartido) {
+    const buzon = await vaciarBuzon();
+    if (buzon.imagen) return leerCaptura(buzon.imagen);
+    if (buzon.texto) texto = buzon.texto;
   }
 
   // Los atajos de Android: dejar apretado el ícono y caer donde se iba a caer de todos modos,
   // dos toques antes. No traen datos, solo dicen a dónde ibas.
   if (!texto && atajo) {
-    if (atajo === "pegar") {
+    if (atajo === "bandeja") {
+      app.vista = "bandeja";
+      render();
+    } else if (atajo === "pegar") {
       app.vista = "bandeja";
       render();
       const caja = document.getElementById("aviso");
       if (caja) caja.focus();
     } else if (atajo === "rapido") {
-      hojaMovimiento();
+      hojaTeclado();
     }
     return;
   }
@@ -6047,9 +6880,180 @@ async function revisarRecordatorios() {
   try {
     ponerGlobo(resumenBandeja(app.datos).pendientes);
     await avisarDe(recordatoriosDeHoy(app.datos, app.hoy), app.hoy);
+    if (estadoDeAvisos().encendidos) await ponerBarra(barraDeHoy(panelHoy(app.datos, app.hoy), app.hoy));
+    else await quitarBarra();
   } catch (e) {
     // Un recordatorio que no sale no es un problema de nadie.
   }
+}
+
+/**
+ * Publica en la sombra lo que acaba de caer a la bandeja, con su botón de aceptar.
+ *
+ * Es la mitad que convierte la bandeja de un trámite en un toque: llegó el cargo, lo aceptas
+ * desde la pantalla de bloqueo y nunca abriste la app. El `tag` por entrada evita que abrir la
+ * app tres veces deje tres avisos del mismo cargo.
+ */
+async function avisarDeLoQueLlego(entradasNuevas) {
+  if (!estadoDeAvisos().encendidos) return;
+  for (const entrada of entradasNuevas) {
+    try {
+      await avisarDeEntrada(avisoDeEntrada(app.datos, entrada));
+    } catch (e) {
+      // Que un aviso no salga no puede impedir que salgan los demás.
+    }
+  }
+}
+
+/**
+ * Aplica lo que la persona decidió en la sombra.
+ *
+ * El service worker no calcula nada: recoge la intención y llega aquí, donde se aplica con el
+ * mismo `aceptarEntrada` que usa el botón de la bandeja. Un solo camino, como con el puente.
+ */
+async function aplicarIntencion(intencion) {
+  if (!intencion) return;
+
+  if (intencion.accion === "aceptar" && intencion.entradaId) {
+    const { datos, error } = aceptarEntrada(app.datos, intencion.entradaId, {}, app.hoy);
+    // Que ya no esté no es un error que valga la pena contar: la aceptaste dos veces, o la
+    // aceptaste aquí después de aceptarla allá. El resultado es el mismo y es el correcto.
+    if (!error) await guardar(datos);
+    return;
+  }
+
+  if (intencion.accion === "ver") {
+    app.vista = "bandeja";
+    return render();
+  }
+
+  if (intencion.accion === "anotar") {
+    // Con respuesta escrita en la sombra viene el texto; sin ella, viene vacío y se abre la
+    // captura en blanco, que es exactamente a lo que ibas.
+    if (intencion.texto) hojaMovimiento({ valores: { monto: primerNumero(intencion.texto), nota: intencion.texto } });
+    else hojaTeclado();
+  }
+}
+
+/** El primer número de un texto suelto, como campo de monto. «120 tacos» → «120». */
+function primerNumero(texto) {
+  const encontrado = String(texto || "").match(/\d+(?:[.,]\d{1,2})?/);
+  return encontrado ? encontrado[0].replace(",", ".") : "";
+}
+
+/** Lo que quedó pendiente de la sombra mientras la app estaba cerrada. */
+async function atenderLaSombra() {
+  try {
+    for (const intencion of await drenarIntenciones()) await aplicarIntencion(intencion);
+  } catch (e) {
+    // Una intención que no se pudo aplicar deja el cargo esperando en la bandeja. Se pierde un
+    // toque, no un gasto.
+  }
+}
+
+/**
+ * Toma el ingreso del recibo de nómina, que es el dato exacto y no una estimación tecleada.
+ *
+ * Nunca lo aplica solo: el ingreso es el número del que cuelgan todos los demás, así que se
+ * enseña lo que se leyó y lo confirmas. Y si el recibo trae un corte que se deduce limpio, se
+ * ofrece aparte — cambiarle los ciclos a alguien sin avisar le movería todo el historial.
+ */
+async function aplicarNomina(archivo) {
+  if (!archivo) return;
+
+  let texto = "";
+  try {
+    texto = await archivo.text();
+  } catch (e) {
+    app.aviso = "No pude abrir ese archivo.";
+    return render();
+  }
+
+  const { nomina, veredicto: leido } = leerNomina(texto);
+  if (!nomina) {
+    app.aviso = `${leido.motivo}${leido.datos && leido.datos.falta ? ` Falta ${leido.datos.falta}.` : ""}`;
+    return render();
+  }
+
+  const corte = corteDeNomina(nomina);
+  const yaTieneEseCorte = corte !== null && app.datos.perfil.cortes.includes(corte);
+
+  abrirHoja({
+    titulo: "Tu recibo de nómina",
+    textoGuardar: "Usar estos datos",
+    extra: `<div class="rotulo" style="margin:0 0 10px;line-height:1.7">
+      Neto del periodo <b>${esc(nomina.inicio)} al ${esc(nomina.fin)}</b>:
+      <b>${monto(nomina.neto)}</b><br>
+      Percepciones ${monto(nomina.percepciones)} · deducciones ${monto(nomina.deducciones)}<br>
+      ${!nomina.ordinaria
+        ? `<span class="marca AJUSTADO">OJO</span> Es una nómina extraordinaria (aguinaldo, PTU o
+           finiquito). Es dinero de verdad, pero no es lo que entra cada quincena: si la usas
+           como ingreso, el disponible de todo el ciclo se infla.`
+        : corte === null
+          ? "El periodo no cae dentro de un solo mes, así que de aquí no puedo deducir tus días de corte. Ésos los pones tú."
+          : yaTieneEseCorte
+            ? `Y coincide con tu corte del día ${corte}, que ya tenías puesto.`
+            : `Y dice que tu quincena corta el día <b>${corte}</b>: lo pongo también.`}
+    </div>`,
+    campos: [],
+    async alGuardar() {
+      const perfil = { ...app.datos.perfil, ingresoQuincenal: nomina.neto };
+      if (corte !== null && !yaTieneEseCorte) perfil.cortes = [corte];
+      await guardar({ ...app.datos, perfil });
+      app.aviso = `Ingreso puesto en ${monto(nomina.neto)}, del recibo del ${nomina.fechaPago}.`;
+      return null;
+    },
+  });
+}
+
+/**
+ * Lee una captura de pantalla y la mete a la bandeja.
+ *
+ * El OCR convierte píxeles en TEXTO y ahí se acaba su trabajo: el monto, la fecha y el comercio
+ * los saca `recibirAviso` con las mismas reglas que leen un correo pegado. Ningún modelo decide
+ * un peso, y de paso esto hereda gratis todo lo que el motor ya sabe hacer.
+ *
+ * La imagen no se guarda en ningún lado. Se lee y se tira.
+ */
+async function leerCaptura(archivo) {
+  if (!archivo || typeof leerImagen !== "function") return;
+
+  const pasos = {
+    preparando: "Preparando la imagen…",
+    arrancando: "Arrancando el lector (la primera vez tarda)…",
+    leyendo: "Leyendo…",
+  };
+  app.aviso = pasos.preparando;
+  render();
+
+  const { texto, error } = await leerImagen(archivo, (paso) => {
+    app.aviso = pasos[paso] || app.aviso;
+    render();
+  });
+
+  if (error) {
+    app.aviso = error;
+    return render();
+  }
+  if (!texto) {
+    app.aviso = "No encontré texto en esa imagen. Prueba con una captura más cerrada del aviso.";
+    return render();
+  }
+
+  const paso = recibirAviso(app.datos, texto, "", ORIGENES.IMAGEN, app.hoy);
+
+  // Sin entrada solo puede ser un duplicado: lo ilegible SÍ deja entrada cuando el origen no es
+  // pegado, y así una captura nunca se pierde — se queda pidiendo cuánto y dónde.
+  if (!paso.entrada) {
+    app.aviso = paso.duplicado ? paso.duplicado.motivo : "Ese aviso ya estaba.";
+    return render();
+  }
+
+  app.vista = "bandeja";
+  app.aviso = paso.entrada.estado === ESTADOS_BANDEJA.ILEGIBLE
+    ? "Leí la captura pero no reconocí el formato. Dime cuánto y dónde y la registro."
+    : "Leí la captura. Revisa el monto contra lo que dice y acéptala.";
+  await guardar(paso.datos);
 }
 
 /**
@@ -6103,9 +7107,14 @@ async function traerDelPuenteEnSilencio() {
   if (!tocaTraer(previa ? previa.sello : 0)) return;
 
   try {
+    const antes = new Set((app.datos.bandeja || []).map((e) => e.id));
     const { datos, nuevos, sinLeer } = await irPorCorreo(config);
     if (nuevos + sinLeer === 0) return;
     await guardar(datos);
+
+    // Y ahora lo que importa: que aparezca en la sombra, con su botón. Va después de guardar
+    // —nunca antes— para que aceptar desde la notificación encuentre la entrada donde debe.
+    await avisarDeLoQueLlego((app.datos.bandeja || []).filter((e) => !antes.has(e.id)));
   } catch (e) {
     // `guardar` ya avisó y revirtió si fue el disco. Traer correo no puede tumbar la app.
   }
@@ -6129,6 +7138,12 @@ const acciones = {
   },
 
   capturar() {
+    // El botón grande abre el teclado, no el formulario: nueve de cada diez capturas son un
+    // gasto en efectivo. Lo demás (ingresos, apartar, retirar) sigue a un toque de distancia.
+    hojaTeclado();
+  },
+
+  "capturar-completo"() {
     hojaMovimiento();
   },
 
@@ -6262,6 +7277,16 @@ const acciones = {
     render();
   },
 
+  "subir-nomina"() {
+    const campo = document.getElementById("nomina");
+    if (campo) campo.click();
+  },
+
+  "elegir-captura"() {
+    const campo = document.getElementById("captura");
+    if (campo) campo.click();
+  },
+
   async "encender-avisos"() {
     const { ok, motivo } = await encenderAvisos();
     if (!ok) app.aviso = motivo;
@@ -6269,8 +7294,9 @@ const acciones = {
     render();
   },
 
-  "apagar-avisos"() {
+  async "apagar-avisos"() {
     apagarAvisos();
+    await quitarBarra(); // dejar de moverla no basta: hay que bajarla
     render();
   },
 
@@ -6349,6 +7375,7 @@ const acciones = {
 
     const { datos, error } = agregarMovimiento(app.datos, {
       fecha: app.hoy,
+      hora: app.hora,
       monto: centavos,
       tipo: TIPOS.GASTO,
       categoria: el.dataset.categoria || "otros",
@@ -6776,6 +7803,133 @@ const TIPOS_CAPTURA = [
  * ya tecleaste. También sirve para CORREGIR un movimiento: conserva su id, así que editar
  * no es borrar y volver a capturar.
  */
+/**
+ * El teclado de efectivo. La pantalla donde se juega si esta app sirve o estorba.
+ *
+ * El 78% de los pagos en México son en efectivo, y anotarlos costaba seis pasos: abrir, tocar
+ * `+`, tocar el campo, escribir con el teclado del sistema, elegir categoría, guardar. Seis
+ * pasos para $50 de tacos, y la investigación de abandono dice exactamente eso — la gente deja
+ * de registrar porque el hueco entre gastar y anotar es demasiado ancho.
+ *
+ * Aquí son dos toques cuando el monto ya lo conoce, y teclear-tocar-guardar cuando no.
+ *
+ * El teclado es propio y no el del sistema a propósito: el del sistema tarda en aparecer, tapa
+ * media pantalla y trae teclas que aquí no sirven de nada.
+ */
+function hojaTeclado() {
+  const contenedor = document.getElementById("hojas");
+  const sugeridos = montosFrecuentes(app.datos, app.hoy, 3, app.hora);
+  const categorias = categoriasACalce(sugeridos.length ? sugeridos[0].categoriaId : "");
+
+  let tecleado = "";
+  let elegida = (sugeridos[0] && sugeridos[0].categoriaId) || (categorias[0] && categorias[0].valor) || "otros";
+
+  const centavos = () => aCentavos(tecleado || "0") || 0;
+
+  contenedor.innerHTML = `<div class="velo" data-velo="1"><div class="hoja">
+    <div class="teclado-cifra" id="teclado-cifra">${monto(0)}</div>
+    ${sugeridos.length ? `<div class="rotulo">Lo de siempre, a esta hora</div>
+      <div class="chips apretados">${sugeridos.map((f) => {
+        const categoria = categoriaPorId(app.datos, f.categoriaId);
+        return `<button type="button" class="chip" data-repetir="${f.monto}"
+          data-categoria="${esc(f.categoriaId || "otros")}"
+          title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
+      }).join("")}</div>` : ""}
+    <div class="rotulo" style="margin-top:10px">En qué</div>
+    <div class="chips apretados" id="teclado-categorias">${categorias.map((c) => `
+      <button type="button" class="chip" aria-pressed="${c.valor === elegida}"
+        data-categoria-teclado="${esc(c.valor)}">${esc(c.etiqueta)}</button>`).join("")}</div>
+    <div class="teclado">
+      ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => `<button type="button" class="tecla" data-tecla="${n}">${n}</button>`).join("")}
+      <button type="button" class="tecla" data-tecla=".">.</button>
+      <button type="button" class="tecla" data-tecla="0">0</button>
+      <button type="button" class="tecla" data-tecla="borrar" aria-label="Borrar">⌫</button>
+    </div>
+    <div class="acciones">
+      <button type="button" class="boton tenue" data-accion="cerrar-hoja">Cancelar</button>
+      <button type="button" class="boton" id="teclado-guardar">Guardar</button>
+    </div>
+    <!-- El teclado solo hace gastos, que son nueve de cada diez capturas. Lo demás vive aquí,
+         a un toque, y no escondido: sin esta línea, capturar un ingreso o un apartado se
+         volvería imposible desde el botón grande. -->
+    <button type="button" class="boton tenue chico" id="teclado-completo"
+      style="width:100%;margin-top:10px">Ingreso, apartar o retirar</button>
+  </div></div>`;
+
+  cerrarHoja = () => {
+    contenedor.innerHTML = "";
+    cerrarHoja = null;
+  };
+
+  const pantalla = document.getElementById("teclado-cifra");
+  const pintar = () => {
+    pantalla.textContent = monto(centavos());
+    pantalla.classList.toggle("vacia", !tecleado);
+  };
+
+  const guardar1 = async (cuanto, categoria) => {
+    if (!cuanto || cuanto <= 0) return;
+    const { datos, error } = agregarMovimiento(app.datos, {
+      fecha: app.hoy, hora: app.hora, monto: cuanto, tipo: TIPOS.GASTO,
+      categoria: categoria || "otros", nota: "",
+    });
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    cerrarHoja();
+    vibrar();
+    await guardar(datos);
+  };
+
+  contenedor.querySelector(".velo").addEventListener("click", (e) => {
+    if (e.target.dataset.velo) cerrarHoja();
+  });
+
+  contenedor.querySelector(".hoja").addEventListener("click", async (e) => {
+    const boton = e.target.closest("button");
+    if (!boton) return;
+
+    // Un monto de los de siempre: un toque y ya está guardado. Ése es el camino de dos segundos.
+    if (boton.dataset.repetir) {
+      return guardar1(Number(boton.dataset.repetir), boton.dataset.categoria);
+    }
+
+    if (boton.dataset.categoriaTeclado) {
+      elegida = boton.dataset.categoriaTeclado;
+      for (const chip of document.querySelectorAll("#teclado-categorias .chip")) {
+        chip.setAttribute("aria-pressed", String(chip.dataset.categoriaTeclado === elegida));
+      }
+      return;
+    }
+
+    const tecla = boton.dataset.tecla;
+    if (tecla) {
+      if (tecla === "borrar") tecleado = tecleado.slice(0, -1);
+      else if (tecla === ".") {
+        if (!tecleado.includes(".")) tecleado = `${tecleado || "0"}.`;
+      } else if (!/\.\d\d$/.test(tecleado)) {
+        // Se cortan los centavos en dos dígitos: nadie paga $50.123 y dejarlo crecer solo
+        // produce montos absurdos por un dedo torpe.
+        tecleado += tecla;
+      }
+      return pintar();
+    }
+
+    if (boton.id === "teclado-completo") {
+      // Se conserva lo tecleado: llegar aquí después de escribir el monto y perderlo sería
+      // castigar a alguien por haber empezado por el camino corto.
+      const llevaba = tecleado;
+      cerrarHoja();
+      return hojaMovimiento(llevaba ? { valores: { monto: llevaba } } : {});
+    }
+
+    if (boton.id === "teclado-guardar") await guardar1(centavos(), elegida);
+  });
+
+  pintar();
+}
+
 function hojaMovimiento(config = {}) {
   const { movimiento = null, valores = {}, entradaId = null } = config;
   const tipo = config.tipo || TIPOS.GASTO;
@@ -6845,6 +7999,9 @@ function hojaMovimiento(config = {}) {
       const { datos, error } = agregarMovimiento(base, {
         id: editando ? movimiento.id : undefined,
         fecha: v.fecha,
+        // Editar algo viejo NO le inventa una hora: la que tenía, o ninguna. Lo nuevo sí la
+        // lleva, y es lo que hace que en dos semanas la app sepa a qué hora gastas.
+        hora: editando ? movimiento.hora : app.hora,
         monto: v.monto,
         tipo: v.tipo || tipo,
         categoria: (v.tipo || tipo) === TIPOS.GASTO ? v.categoria || "otros" : null,
@@ -6998,6 +8155,30 @@ async function arrancar() {
     }
   });
 
+  // Elegir una captura desde el botón. Va por `change` y no por `input`: un campo de archivo
+  // no avisa de otra forma.
+  document.addEventListener("change", (e) => {
+    const cual = e.target.dataset.accionArchivo;
+    if (cual !== "captura" && cual !== "nomina") return;
+    const archivo = e.target.files && e.target.files[0];
+    e.target.value = ""; // que elegir el mismo archivo dos veces vuelva a disparar
+    if (!archivo) return;
+    if (cual === "captura") leerCaptura(archivo);
+    else aplicarNomina(archivo);
+  });
+
+  // Y pegar la captura directamente en la caja, que es lo que hace cualquiera después de
+  // tomarla: copiar y pegar donde ya pegaba texto.
+  document.addEventListener("paste", (e) => {
+    if (typeof leerImagen !== "function") return;
+    const archivos = e.clipboardData && e.clipboardData.files;
+    if (!archivos || !archivos.length) return;
+    const imagen = [...archivos].find((f) => f.type.startsWith("image/"));
+    if (!imagen) return;
+    e.preventDefault();
+    leerCaptura(imagen);
+  });
+
   document.addEventListener("click", (e) => {
     const boton = e.target.closest("[data-accion]");
     if (!boton) return;
@@ -7026,6 +8207,20 @@ async function arrancar() {
   render();
   await atenderCompartido();
 
+  // Lo primero: lo que decidiste en la sombra mientras esto estaba cerrado. Antes de traer
+  // nada nuevo, para que aceptar un cargo y que llegue otro no se pisen.
+  await atenderLaSombra();
+
+  // Con la app abierta, el service worker no encola: manda la intención directo y se ve al
+  // instante, que es como debe sentirse tocar un botón.
+  try {
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.addEventListener("message", (e) => {
+        if (e.data && e.data.de === "grip" && e.data.intencion) aplicarIntencion(e.data.intencion);
+      });
+    }
+  } catch (e) {}
+
   // Que la bandeja se llene sola. Va después de pintar y de atender lo compartido: nada de
   // esto debe hacer esperar a la pantalla.
   traerDelPuenteEnSilencio();
@@ -7049,13 +8244,16 @@ async function arrancar() {
     render();
   });
 
-  // Si la app queda abierta y cambia el día, el ciclo se recalcula solo.
+  // Si la app queda abierta y cambia el día, el ciclo se recalcula solo. Y de paso se refresca
+  // la hora, que es lo que hace que a las 2 de la tarde te ofrezca los tacos: sin esto, una app
+  // abierta desde la mañana seguiría sugiriendo el café a media tarde.
   setInterval(() => {
     const ahora = hoyISO();
-    if (ahora !== app.hoy) {
-      app.hoy = ahora;
-      render();
-    }
+    const reloj = horaAhora();
+    const cambioDia = ahora !== app.hoy;
+    app.hoy = ahora;
+    app.hora = reloj;
+    if (cambioDia) render();
   }, 60000);
 }
 

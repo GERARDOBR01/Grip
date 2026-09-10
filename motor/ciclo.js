@@ -16,6 +16,11 @@ export function hoyISO(fecha = new Date()) {
   return `${a}-${m}-${d}`;
 }
 
+/** La hora del reloj del dispositivo, como "HH:MM". */
+export function horaAhora(fecha = new Date()) {
+  return `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`;
+}
+
 export function esISO(iso) {
   return typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso);
 }
@@ -34,6 +39,29 @@ export function diasEnMes(anio, mes) {
 }
 
 /** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
+/**
+ * La hora del reloj como "HH:MM", o "" si no es una hora válida.
+ * Se guarda a propósito sin segundos ni zona: lo que importa es si gastas a las 2 de la tarde
+ * o a las 9 de la mañana, no el instante exacto.
+ */
+export function horaValida(texto) {
+  const encontrada = String(texto || "").match(/^([01]\d|2[0-3]):([0-5]\d)/);
+  return encontrada ? `${encontrada[1]}:${encontrada[2]}` : "";
+}
+
+/** Los minutos desde medianoche, para poder comparar horas restando. */
+export function minutosDelDia(hora) {
+  const limpia = horaValida(hora);
+  if (!limpia) return null;
+  return Number(limpia.slice(0, 2)) * 60 + Number(limpia.slice(3, 5));
+}
+
+/** 0 = domingo … 6 = sábado. El sábado no se gasta como el martes. */
+export function diaDeSemana(iso) {
+  const { anio, mes, dia } = partes(iso);
+  return new Date(Date.UTC(anio, mes - 1, dia)).getUTCDay();
+}
+
 export function mesDe(iso) {
   return iso.slice(0, 7);
 }

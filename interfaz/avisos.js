@@ -114,6 +114,23 @@ function podarMandados(mandados, iso) {
   return vivos;
 }
 
+/**
+ * El registro del service worker, o null.
+ *
+ * Los botones de la notificación SOLO existen a través del service worker: un `new
+ * Notification()` suelto no los admite, porque nadie recogería el toque. Así que donde no haya
+ * service worker —abierta desde el disco, por ejemplo— hay aviso pero no botones, y eso es una
+ * caída limpia, no un error.
+ */
+async function registro() {
+  try {
+    if (!globalThis.navigator || !navigator.serviceWorker) return null;
+    return await navigator.serviceWorker.ready;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function mostrarAviso(titulo, cuerpo) {
   const opciones = { body: cuerpo, icon: "./icono-192.png", badge: "./icono-192.png", tag: titulo };
   try {
@@ -178,3 +195,87 @@ export function ponerGlobo(cuantos) {
 
 /** Cada cuánto conviene volver a mirar mientras la app siga abierta, en milisegundos. */
 export const ESPERA_ENTRE_REVISIONES = MINUTOS_ENTRE_REVISIONES * 60000;
+
+// ── La sombra como mesa de trabajo ─────────────────────────────────────────
+//
+// Lo que se publica aquí no es «te informo»: es «resuélvelo desde aquí». El service worker
+// recoge el toque (lo genera herramientas/armar.mjs) y la app aplica la intención con el motor
+// de siempre.
+
+/**
+ * Publica el aviso de una entrada de la bandeja, con su botón de aceptar cuando toca.
+ *
+ * El `tag` es el id de la entrada: publicar dos veces la misma no apila dos avisos, la
+ * reemplaza. Sin eso, abrir la app tres veces dejaría tres avisos del mismo cargo.
+ */
+export async function avisarDeEntrada(aviso) {
+  if (!aviso || !estadoDeAvisos().encendidos) return false;
+
+  const registrado = await registro();
+  if (!registrado || !registrado.showNotification) return false;
+
+  const acciones = aviso.aceptable
+    ? [{ action: "aceptar", title: "Aceptar" }, { action: "ver", title: "Ver" }]
+    : [{ action: "ver", title: "Ver" }];
+
+  try {
+    await registrado.showNotification(aviso.titulo, {
+      body: aviso.cuerpo,
+      icon: "./icono-192.png",
+      badge: "./icono-192.png",
+      tag: aviso.clave,
+      actions: acciones,
+      data: { entradaId: aviso.entradaId, acuse: aviso.acuse },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** El tag de la barra: fijo, para que se reemplace a sí misma en vez de acumularse. */
+const TAG_BARRA = "grip:barra";
+
+/**
+ * La barra que se queda en la sombra con tu número y un botón para anotar.
+ *
+ * Silenciosa a propósito: no vibra, no suena, no te llama. Está ahí para que la LEAS de reojo
+ * entre las demás notificaciones, no para interrumpirte. Es la app sin abrir la app.
+ */
+export async function ponerBarra(barra) {
+  if (!barra || !estadoDeAvisos().encendidos) return false;
+
+  const registrado = await registro();
+  if (!registrado || !registrado.showNotification) return false;
+
+  try {
+    await registrado.showNotification(barra.titulo, {
+      body: barra.cuerpo,
+      icon: "./icono-192.png",
+      badge: "./icono-192.png",
+      tag: TAG_BARRA,
+      silent: true,
+      renotify: false,
+      requireInteraction: true, // que no se vaya sola: su gracia es quedarse
+      actions: [
+        // Donde el navegador ofrezca escribir en la sombra, se anota sin abrir nada. Donde no,
+        // `type` se ignora y queda un botón normal que abre el teclado. Las dos cosas sirven.
+        { action: "anotar", type: "text", title: "Anotar gasto", placeholder: "120 tacos" },
+        { action: "abrir", title: "Abrir" },
+      ],
+      data: { entradaId: null, acuse: null },
+    });
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Quita la barra. Apagar los avisos tiene que quitarla de verdad, no solo dejar de moverla. */
+export async function quitarBarra() {
+  const registrado = await registro();
+  if (!registrado || !registrado.getNotifications) return;
+  try {
+    for (const n of await registrado.getNotifications({ tag: TAG_BARRA })) n.close();
+  } catch (e) {}
+}

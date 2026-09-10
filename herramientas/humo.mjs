@@ -62,11 +62,13 @@ await pagina.waitForSelector(".velo", { state: "detached" });
 const trasIngreso = (await pagina.textContent(".cifra")).trim();
 revisar("con el ingreso capturado aparece el disponible", trasIngreso === "$8,000.00", trasIngreso);
 
-// 4. Capturar un gasto: + → monto → categoría → guardar
+// 4. Capturar un gasto en efectivo: + → teclear → categoría → guardar.
+// El botón grande abre el teclado propio, que es el camino de nueve de cada diez capturas.
 await pagina.click('[data-accion="capturar"]');
-await pagina.fill('[data-clave="monto"]', "450.50");
-await pagina.click('.chips [data-valor="super"]');
-await pagina.click('button[type="submit"]');
+await pagina.waitForSelector(".teclado");
+for (const tecla of ["4", "5", "0", ".", "5", "0"]) await pagina.click(`[data-tecla="${tecla}"]`);
+await pagina.click('[data-categoria-teclado="super"]');
+await pagina.click("#teclado-guardar");
 await pagina.waitForSelector(".velo", { state: "detached" });
 const trasGasto = (await pagina.textContent(".cifra")).trim();
 revisar("el gasto se descuenta del disponible", trasGasto === "$7,549.50", trasGasto);
@@ -119,6 +121,8 @@ const cifra = async () => {
   return Number(texto.replace(/[^\d.]/g, "")) * (texto.includes("−") ? -1 : 1);
 };
 await pagina.click('[data-accion="capturar"]');
+await pagina.waitForSelector("#teclado-completo");
+await pagina.click("#teclado-completo");
 await pagina.click('[data-clave="tipo"] [data-valor="ingreso"]');
 await pagina.waitForTimeout(120);
 revisar("un ingreso no pide categoría", (await pagina.locator('[data-clave="categoria"]').count()) === 0);
@@ -128,6 +132,8 @@ await pagina.waitForSelector(".velo", { state: "detached" });
 
 const antesApartar = await cifra();
 await pagina.click('[data-accion="capturar"]');
+await pagina.waitForSelector("#teclado-completo");
+await pagina.click("#teclado-completo");
 await pagina.click('[data-clave="tipo"] [data-valor="ahorro"]');
 await pagina.waitForTimeout(120);
 await pagina.fill('[data-clave="monto"]', "200");
@@ -135,6 +141,8 @@ await pagina.click('button[type="submit"]');
 await pagina.waitForSelector(".velo", { state: "detached" });
 const apartado = await cifra();
 await pagina.click('[data-accion="capturar"]');
+await pagina.waitForSelector("#teclado-completo");
+await pagina.click("#teclado-completo");
 await pagina.click('[data-clave="tipo"] [data-valor="retiro"]');
 await pagina.waitForTimeout(120);
 await pagina.fill('[data-clave="monto"]', "50");
@@ -478,6 +486,393 @@ await atajo.waitForTimeout(500);
 revisar("al abrir NO se pide permiso de avisos: eso se enciende en Ajustes",
   (await atajo.evaluate(() => window.__pidioPermiso)) === false);
 await contextoAtajo.close();
+
+// ── Leer una captura de pantalla ────────────────────────────────────────────────
+//
+// El texto de una notificación del banco no se puede seleccionar; una captura se hace con dos
+// botones. Esto comprueba el camino entero, con OCR de verdad: se dibuja un aviso en un canvas
+// —para no meter capturas de nadie al repositorio—, se pega como si vinieras de la galería, y
+// tiene que caer leído en la bandeja con su monto.
+//
+// Si alguien borró interfaz/lector-imagen.js, esto se salta solo: que el lector no esté es un
+// escenario válido, no un fallo.
+
+const HAY_LECTOR = existsSync(join(RAIZ, "interfaz/lector-imagen.js"));
+
+if (HAY_LECTOR) {
+const contextoOCR = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const ocr = await contextoOCR.newPage();
+await ocr.goto(`http://127.0.0.1:${puerto}/index.html`);
+await ocr.waitForSelector(".barra", { timeout: 8000 });
+await ocr.click('[data-vista="bandeja"]');
+await ocr.waitForSelector("#aviso");
+
+revisar("con el lector puesto, la app ofrece leer una captura",
+  (await ocr.locator('[data-accion="elegir-captura"]').count()) === 1);
+
+// El aviso, dibujado. Texto renderizado y de alto contraste: el mejor caso posible del OCR, y
+// exactamente lo que es una captura de pantalla de verdad.
+await ocr.evaluate(async () => {
+  const lienzo = document.createElement("canvas");
+  lienzo.width = 1000;
+  lienzo.height = 340;
+  const pincel = lienzo.getContext("2d");
+  pincel.fillStyle = "#ffffff";
+  pincel.fillRect(0, 0, 1000, 340);
+  pincel.fillStyle = "#000000";
+  pincel.font = "bold 34px sans-serif";
+  pincel.fillText("Banorte", 40, 70);
+  pincel.font = "32px sans-serif";
+  pincel.fillText("Compra por $189.00 MXN en OXXO CENTRO", 40, 160);
+  pincel.fillText("el 09/09/2026 con tu tarjeta 4821", 40, 230);
+
+  const trozo = await new Promise((listo) => lienzo.toBlob(listo, "image/png"));
+  const archivo = new File([trozo], "captura.png", { type: "image/png" });
+  const porta = new DataTransfer();
+  porta.items.add(archivo);
+  document.dispatchEvent(new ClipboardEvent("paste", { clipboardData: porta, bubbles: true }));
+});
+
+// El motor son 4 MB y arranca una vez: aquí se le da tiempo de verdad.
+let entradaLeida = null;
+for (let i = 0; i < 120; i++) {
+  entradaLeida = await ocr.evaluate(() => {
+    const tarjeta = document.querySelector(".tarjeta.entrada");
+    return tarjeta ? tarjeta.innerText : null;
+  });
+  if (entradaLeida) break;
+  await ocr.waitForTimeout(500);
+}
+
+revisar(
+  "pegar una captura la lee y cae en la bandeja con su monto",
+  Boolean(entradaLeida) && entradaLeida.includes("189.00"),
+  (entradaLeida || "no llegó nada a la bandeja").split("\n").slice(0, 2).join(" · "),
+);
+
+// La regla que no se rompe: un dígito mal leído no se acepta sin mirarlo.
+const sinAceptarEnLote = await ocr.evaluate(() =>
+  document.querySelectorAll('[data-accion="aceptar-tanda"]').length === 0);
+revisar("y NO se ofrece aceptarla en lote: un OCR no acepta dinero solo", sinAceptarEnLote);
+
+const guardoLaImagen = await ocr.evaluate(() =>
+  JSON.stringify(window.localStorage).includes("data:image"));
+revisar("y la imagen no se guarda en ningún lado", !guardoLaImagen);
+
+await contextoOCR.close();
+} else {
+  console.log("  · el lector de imágenes no está: se salta. La app corre sin él, que es lo que se promete.");
+}
+
+// ── El teclado de efectivo ──────────────────────────────────────────────────────
+//
+// El 78% de los pagos en México son en efectivo y anotarlos costaba seis pasos. Aquí se
+// comprueba que el teclado propio guarde un gasto SIN tocar el teclado del sistema, y que
+// tocar un monto de los de siempre lo guarde de un toque.
+
+const contextoTeclado = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const teclado = await contextoTeclado.newPage();
+await teclado.goto(`http://127.0.0.1:${puerto}/index.html`);
+await teclado.waitForSelector(".barra", { timeout: 8000 });
+
+await teclado.click('[data-accion="capturar"]');
+await teclado.waitForSelector(".teclado", { timeout: 8000 });
+revisar("el botón grande abre el teclado propio, no un formulario",
+  (await teclado.locator(".tecla").count()) === 12, `${await teclado.locator(".tecla").count()} teclas`);
+
+// $128, tecleado. Sin campos de texto: si hubiera uno, saldría el teclado del sistema.
+for (const tecla of ["1", "2", "8"]) await teclado.click(`[data-tecla="${tecla}"]`);
+revisar("lo tecleado se ve en grande mientras lo escribes",
+  (await teclado.textContent(".teclado-cifra")).trim() === "$128.00",
+  (await teclado.textContent(".teclado-cifra")).trim());
+
+const sinCampos = await teclado.evaluate(() =>
+  document.querySelectorAll(".hoja input, .hoja textarea").length === 0);
+revisar("y no hay ni un campo de texto: nunca sale el teclado del sistema", sinCampos);
+
+await teclado.click("#teclado-guardar");
+await teclado.waitForTimeout(600);
+revisar("guardar deja el gasto en los movimientos",
+  (await teclado.textContent("body")).includes("128.00"));
+
+// Y el camino de dos segundos: repetir un monto que ya gastaste.
+await teclado.click('[data-accion="capturar"]');
+await teclado.waitForSelector(".teclado", { timeout: 8000 });
+for (const tecla of ["1", "2", "8"]) await teclado.click(`[data-tecla="${tecla}"]`);
+await teclado.click("#teclado-guardar");
+await teclado.waitForTimeout(600);
+
+await teclado.click('[data-accion="capturar"]');
+await teclado.waitForSelector(".teclado", { timeout: 8000 });
+const hayRepetir = await teclado.locator("[data-repetir]").count();
+revisar("con el hábito ya formado, ofrece repetirlo de un toque", hayRepetir > 0, `${hayRepetir} sugerencias`);
+
+if (hayRepetir) {
+  await teclado.click("[data-repetir]");
+  await teclado.waitForTimeout(600);
+  const veces = (await teclado.textContent("body")).match(/128\.00/g) || [];
+  revisar("y ese toque guarda: tres gastos de $128 en el historial", veces.length >= 3,
+    `${veces.length} apariciones`);
+}
+
+await contextoTeclado.close();
+
+// ── Sube tu recibo de nómina ────────────────────────────────────────────────────
+//
+// El ingreso es el número del que cuelgan todos los demás, y hasta hoy se tecleaba a ojo. Del
+// CFDI sale exacto — y de regalo los días de corte, que es de lo poco que quedaba a mano.
+// Nunca se aplica solo: se enseña lo leído y se confirma.
+
+const contextoNomina = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const nomina = await contextoNomina.newPage();
+await nomina.goto(`http://127.0.0.1:${puerto}/index.html`);
+await nomina.waitForSelector(".barra", { timeout: 8000 });
+await nomina.click('[data-vista="ajustes"]');
+await nomina.waitForSelector('[data-accion="subir-nomina"]');
+
+await nomina.setInputFiles("#nomina", join(RAIZ, "pruebas/nominas/decenal.xml"));
+await nomina.waitForSelector(".hoja, [data-accion=\"guardar-hoja\"]", { timeout: 8000 }).catch(() => {});
+await nomina.waitForTimeout(400);
+
+const loLeido = await nomina.textContent("body");
+revisar(
+  "el recibo se lee y se ENSEÑA antes de aplicarlo",
+  loLeido.includes("$3,500.00") && loLeido.includes("corta el día"),
+  loLeido.includes("$3,500.00") ? "" : "no salió el neto",
+);
+
+// Confirmar: y solo entonces cambia el perfil.
+const botonGuardar = await nomina.$('.hoja .boton:not(.tenue), [data-accion="guardar-hoja"]');
+if (botonGuardar) await botonGuardar.click();
+await nomina.waitForTimeout(600);
+
+const perfil = await nomina.evaluate(() => {
+  const filas = [...document.querySelectorAll(".fila")].map((f) => f.innerText);
+  return filas.join(" | ");
+});
+// El corte del recibo es 10, y la app venía con 15 puesto por defecto: si sale 10, salió del
+// recibo. Comprobarlo con un recibo que corta el 15 no habría probado nada.
+revisar(
+  "y al confirmarlo pone el ingreso exacto Y los días de corte del recibo",
+  perfil.includes("$3,500.00") && /d[íi]a 10\b/.test(perfil) && !/d[íi]a 15\b/.test(perfil),
+  perfil.split(" | ").filter((f) => /Ingreso|corte/i.test(f)).map((f) => f.replace(/\n/g, " ")).join(" · "),
+);
+
+await contextoNomina.close();
+
+// ── Compartir a la app desde Android ────────────────────────────────────────────
+//
+// El share_target pasó de GET a POST para poder recibir archivos, y ésa es la regresión más
+// probable de todo el trabajo: el texto compartido desde Gmail viajaba por el camino viejo.
+// Aquí se comprueban los dos, con un formulario de verdad que el service worker intercepta.
+
+const contextoCompartir = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const compartir = await contextoCompartir.newPage();
+await compartir.goto(`http://127.0.0.1:${puerto}/index.html`);
+await compartir.waitForSelector(".barra", { timeout: 8000 });
+await compartir.evaluate(async () => { await navigator.serviceWorker.ready; });
+
+/** Manda un formulario a ./compartir, como hace Android al compartir a una app instalada. */
+async function compartirComoAndroid(pagina, campos) {
+  await pagina.evaluate(async (partes) => {
+    const formulario = document.createElement("form");
+    formulario.method = "POST";
+    formulario.action = "./compartir";
+    formulario.enctype = "multipart/form-data";
+
+    if (partes.texto) {
+      const campo = document.createElement("input");
+      campo.type = "hidden";
+      campo.name = "texto";
+      campo.value = partes.texto;
+      formulario.appendChild(campo);
+    }
+
+    if (partes.conImagen) {
+      const lienzo = document.createElement("canvas");
+      lienzo.width = 1000;
+      lienzo.height = 260;
+      const pincel = lienzo.getContext("2d");
+      pincel.fillStyle = "#ffffff";
+      pincel.fillRect(0, 0, 1000, 260);
+      pincel.fillStyle = "#000000";
+      pincel.font = "32px sans-serif";
+      pincel.fillText("Compra por $77.00 MXN en CAFE LA ESQUINA", 40, 110);
+      pincel.fillText("el 09/09/2026 con tu tarjeta 4821", 40, 180);
+      const trozo = await new Promise((listo) => lienzo.toBlob(listo, "image/png"));
+
+      const campo = document.createElement("input");
+      campo.type = "file";
+      campo.name = "imagen";
+      const porta = new DataTransfer();
+      porta.items.add(new File([trozo], "captura.png", { type: "image/png" }));
+      campo.files = porta.files;
+      formulario.appendChild(campo);
+    }
+
+    document.body.appendChild(formulario);
+    formulario.submit();
+  }, campos);
+}
+
+// 1) Texto. Es lo que ya funcionaba y lo que no se puede romper.
+await compartirComoAndroid(compartir, { texto: "Banorte: Compra por $312.00 MXN en FARMACIA SAN JORGE el 09/09/2026 con tu tarjeta terminación 4821." });
+await compartir.waitForURL((u) => !u.toString().includes("/compartir"), { timeout: 10000 });
+await compartir.waitForSelector(".tarjeta.entrada", { timeout: 10000 });
+revisar(
+  "compartir TEXTO por POST sigue llegando leído a la bandeja",
+  (await compartir.textContent("body")).includes("312.00"),
+  (await compartir.textContent(".entrada .monto") || "").trim(),
+);
+revisar("y la dirección queda limpia", !compartir.url().includes("compartido"), compartir.url());
+
+// 2) Imagen. Lo nuevo: compartir la captura de una notificación desde la galería.
+if (HAY_LECTOR) {
+  await compartirComoAndroid(compartir, { conImagen: true });
+  await compartir.waitForURL((u) => !u.toString().includes("/compartir"), { timeout: 10000 });
+
+  let conCafe = false;
+  for (let i = 0; i < 120; i++) {
+    conCafe = (await compartir.textContent("body")).includes("77.00");
+    if (conCafe) break;
+    await compartir.waitForTimeout(500);
+  }
+  revisar("compartir una CAPTURA la lee y la mete a la bandeja", conCafe,
+    conCafe ? "" : "no apareció el monto de la captura");
+
+  const buzonVacio = await compartir.evaluate(async () => {
+    const buzon = await caches.open("grip-compartido");
+    return (await buzon.keys()).length === 0;
+  });
+  revisar("y el buzón queda vacío: la captura no se queda guardada", buzonVacio);
+}
+
+await contextoCompartir.close();
+
+// ── La sombra de notificaciones, que es donde vive la gente ─────────────────────
+//
+// La jugada del proyecto: aceptar un cargo desde la pantalla de bloqueo, sin abrir nada. Hoy
+// eso son cinco pasos —desbloquear, abrir, ir a Bandeja, buscarlo, Aceptar—; aquí es uno.
+//
+// Un navegador sin cabeza no concede permiso de notificaciones y no hay bandera que lo cambie,
+// así que las notificaciones se DOBLAN: se apunta lo que la app pidió publicar. Eso no debilita
+// la prueba, la afila — lo que importa no es que Chromium sepa pintar un aviso (eso es cosa
+// suya), sino que la app pida el aviso correcto y que el service worker haga lo correcto al
+// tocarlo. Las dos cosas se comprueban de verdad, y el manejador que se dispara es el mismo
+// que corre en tu teléfono.
+
+const contextoSombra = await navegador.newContext({ viewport: { width: 390, height: 844 } });
+const sombra = await contextoSombra.newPage();
+await sombra.addInitScript(() => {
+  try { localStorage.setItem("grip:avisos", JSON.stringify({ encendidos: true, mandados: {} })); } catch (e) {}
+  // El doble: permiso concedido del lado de la página, y showNotification apuntando en vez de
+  // pintando. Nada llega al navegador de verdad, así que nada depende de su permiso.
+  try { Object.defineProperty(Notification, "permission", { get: () => "granted" }); } catch (e) {}
+  window.__avisos = [];
+  const original = ServiceWorkerRegistration.prototype.showNotification;
+  ServiceWorkerRegistration.prototype.showNotification = function (titulo, opciones) {
+    window.__avisos.push({ titulo, ...(opciones || {}) });
+    return Promise.resolve();
+  };
+  window.__showNotificationReal = original;
+});
+await sombra.goto(`http://127.0.0.1:${puerto}/index.html`);
+await sombra.waitForSelector(".barra", { timeout: 8000 });
+await sombra.evaluate(async () => { await navigator.serviceWorker.ready; });
+
+// La barra: se publica sola al guardar, con su fecha, y con un tag fijo para no apilarse.
+await sombra.click('[data-vista="bandeja"]');
+await sombra.waitForSelector("#aviso");
+await sombra.fill("#aviso", "Banorte: Compra por $89.00 MXN en OXXO CENTRO el 09/09/2026 con tu tarjeta terminación 4821.");
+await sombra.click('[data-accion="leer-aviso"]');
+await sombra.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+await sombra.waitForTimeout(600);
+
+const barras = await sombra.evaluate(() => window.__avisos.filter((a) => a.tag === "grip:barra"));
+revisar(
+  "la barra se queda en la sombra, con su fecha y un botón para anotar",
+  barras.length > 0 &&
+    /al \d{4}-\d{2}-\d{2}/.test(barras[barras.length - 1].body || "") &&
+    (barras[barras.length - 1].actions || []).some((a) => a.action === "anotar") &&
+    barras.every((b) => b.tag === "grip:barra"),
+  barras.length ? `${barras[barras.length - 1].titulo} — ${barras[barras.length - 1].body}` : "no se publicó",
+);
+
+// Y ahora lo que de verdad importa: tocar «Aceptar» en la sombra.
+const idEntrada = await sombra.evaluate(() =>
+  document.querySelector('.tarjeta.entrada [data-accion="aceptar-entrada"]').dataset.id);
+
+/** Dispara la acción DENTRO del service worker, como si la hubieras tocado en la sombra. */
+async function tocarEnLaSombra(accion, entradaId) {
+  const [obrero] = contextoSombra.serviceWorkers();
+  if (!obrero) return false;
+  return obrero.evaluate(async ([accionTocada, id]) => {
+    const evento = new Event("notificationclick");
+    Object.defineProperty(evento, "notification", {
+      value: { data: { entradaId: id, acuse: "Aceptado" }, tag: `entrada:${id}`, close() {} },
+    });
+    Object.defineProperty(evento, "action", { value: accionTocada });
+    const esperas = [];
+    evento.waitUntil = (p) => esperas.push(p);
+    self.dispatchEvent(evento);
+    await Promise.all(esperas);
+    return true;
+  }, [accion, entradaId]);
+}
+
+// Camino 1: la app abierta. El service worker manda la intención directo y se ve al instante.
+revisar("el service worker escucha el toque", await tocarEnLaSombra("aceptar", idEntrada));
+await sombra.waitForTimeout(800);
+// A «Hoy» antes de mirar: aceptar no cambia de pantalla —sigues en Bandeja— y los movimientos
+// ya aceptados solo se listan en Hoy. Buscarlos en Bandeja sería buscarlos donde no van.
+await sombra.click('[data-vista="hoy"]');
+await sombra.waitForTimeout(200);
+const trasAceptar = await sombra.evaluate(() => ({
+  entradas: document.querySelectorAll(".tarjeta.entrada").length,
+  cuerpo: document.body.innerText,
+}));
+revisar(
+  "aceptar desde la sombra crea el movimiento, con la app abierta",
+  trasAceptar.entradas === 0 && trasAceptar.cuerpo.includes("OXXO CENTRO"),
+  `${trasAceptar.entradas} entradas siguen esperando`,
+);
+
+// Camino 2: la app CERRADA. La intención se encola en IndexedDB y se aplica al abrir.
+await sombra.click('[data-vista="bandeja"]');
+await sombra.waitForSelector("#aviso");
+await sombra.fill("#aviso", "Banorte: Compra por $47.00 MXN en FARMACIA SAN JORGE el 09/09/2026 con tu tarjeta terminación 4821.");
+await sombra.click('[data-accion="leer-aviso"]');
+await sombra.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
+const idCerrada = await sombra.evaluate(() =>
+  document.querySelector('.tarjeta.entrada [data-accion="aceptar-entrada"]').dataset.id);
+
+await sombra.close(); // sin ninguna ventana abierta: la intención tiene que encolarse
+await tocarEnLaSombra("aceptar", idCerrada);
+
+const reabierta = await contextoSombra.newPage();
+await reabierta.goto(`http://127.0.0.1:${puerto}/index.html`);
+await reabierta.waitForSelector(".barra", { timeout: 8000 });
+await reabierta.waitForTimeout(1200);
+const trasReabrir = await reabierta.evaluate(() => ({
+  entradas: document.querySelectorAll(".tarjeta.entrada").length,
+  cuerpo: document.body.innerText,
+}));
+revisar(
+  "y con la app CERRADA se encola y se aplica al abrir",
+  trasReabrir.cuerpo.includes("FARMACIA SAN JORGE") && trasReabrir.entradas === 0,
+  `${trasReabrir.entradas} entradas siguen esperando`,
+);
+
+// La cola se vacía al drenarla: una intención aplicada dos veces sería un gasto duplicado, y
+// un gasto duplicado es peor que uno perdido porque el perdido lo notas.
+await reabierta.reload();
+await reabierta.waitForSelector(".barra", { timeout: 8000 });
+await reabierta.waitForTimeout(800);
+const dobles = await reabierta.evaluate(() =>
+  (document.body.innerText.match(/FARMACIA SAN JORGE/g) || []).length);
+revisar("y no se aplica dos veces al volver a abrir", dobles === 1, `${dobles} veces en pantalla`);
+
+await contextoSombra.close();
 
 // ── Corregir una vez, no veinte ─────────────────────────────────────────────────
 //

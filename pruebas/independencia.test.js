@@ -16,8 +16,9 @@ import { fileURLToPath } from "node:url";
 const RAIZ = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ADAPTADOR = "almacen/anfitrion-claude.js";
 const PUENTE = "almacen/puente-correo.js";
-// Los dos son opcionales: la app tiene que quedar intacta si alguien borra cualquiera.
-const OPCIONALES = [ADAPTADOR, PUENTE];
+const LECTOR = "interfaz/lector-imagen.js";
+// Los tres son opcionales: la app tiene que quedar intacta si alguien borra cualquiera.
+const OPCIONALES = [ADAPTADOR, PUENTE, LECTOR];
 
 /** Quita comentarios: lo que importa es el CÓDIGO, no lo que digan las notas. */
 function soloCodigo(texto) {
@@ -87,6 +88,25 @@ test("y lo mismo del puente: es el único que puede pedir algo a la red", (t) =>
     return t.skip("el puente no está — la app corre sin él, que es justo lo que se promete");
   }
   assert.match(soloCodigo(readFileSync(join(RAIZ, PUENTE), "utf8")), /\bfetch\s*\(/);
+});
+
+// El lector de imágenes carga 4 MB de motor de OCR. Que lo haga del MISMO origen, y no de un
+// CDN, es lo que mantiene cierto que la app no le pide nada a internet.
+test("el lector de imágenes trae su motor de casa, no de un CDN", (t) => {
+  if (!existsSync(join(RAIZ, LECTOR))) {
+    return t.skip("el lector no está — la app corre sin él, que es justo lo que se promete");
+  }
+  const lector = soloCodigo(readFileSync(join(RAIZ, LECTOR), "utf8"));
+  const externas = lector.match(/["'`]https?:\/\/[^"'`]+/g) || [];
+  assert.deepEqual(externas, [], "el motor de OCR vive en ocr/, dentro de este repositorio");
+  assert.match(lector, /\.\/ocr\//, "y se carga desde ahí");
+});
+
+test("el motor de OCR está donde el lector lo busca", (t) => {
+  if (!existsSync(join(RAIZ, LECTOR))) return t.skip("el lector no está");
+  for (const archivo of ["lib.js", "tesseract-worker.js", "tesseract-core.wasm", "spa.traineddata"]) {
+    assert.ok(existsSync(join(RAIZ, "ocr", archivo)), `falta ocr/${archivo}`);
+  }
 });
 
 test("el motor tampoco depende del navegador: se puede probar y reusar en cualquier lado", () => {
