@@ -1,9 +1,9 @@
-// Service worker de Grip — versión 5ec3bcad, que es el hash de lo armado.
+// Service worker de Grip — versión 1bc3f3b8, que es el hash de lo armado.
 //
 // Guarda la app para poder abrirla sin conexión. No guarda NINGÚN dato tuyo: los movimientos
 // viven en el almacenamiento del navegador, que esto ni toca.
 
-const CACHE = "grip-5ec3bcad";
+const CACHE = "grip-1bc3f3b8";
 const ARCHIVOS = ["./", "./index.html", "./manifest.webmanifest", "./icono-192.png", "./icono-512.png", "./icono-180.png"];
 
 self.addEventListener("install", (evento) => {

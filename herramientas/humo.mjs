@@ -1124,6 +1124,84 @@ servidor.close();
   await roto.close();
 }
 
+// ── El historial con años de uso encima ─────────────────────────────────────────
+//
+// Medido antes de tocar nada, con tres años de movimientos y la CPU frenada a lo que da un
+// Android de gama media: 907 ms la primera tecla del buscador y 157 ms cada una de las
+// siguientes, con 4068 filas pintadas de golpe. Eso no es lento, es un buscador que no se puede
+// usar. Aquí se comprueba que se pinta un tramo, que los totales siguen hablando del historial
+// ENTERO, y que escribir no le quita el foco al campo.
+{
+  const largo = await contexto.newPage();
+  await largo.goto(`http://127.0.0.1:${puerto}/index.html`);
+  await largo.waitForSelector(".barra", { timeout: 8000 });
+
+  const sembrados = await largo.evaluate(async () => {
+    const movimientos = {};
+    let n = 0;
+    for (let a = 2023; a <= 2025; a++) {
+      for (let m = 1; m <= 12; m++) {
+        const mes = `${a}-${String(m).padStart(2, "0")}`;
+        const lista = [];
+        for (let d = 1; d <= 28; d++) {
+          for (let k = 0; k < 4; k++) {
+            lista.push({
+              id: `m_${a}${m}${d}${k}`, fecha: `${mes}-${String(d).padStart(2, "0")}`, hora: "14:30",
+              monto: 5000, tipo: "gasto", categoria: "super", nota: `Compra ${d}-${k}`,
+              metodo: "efectivo", ref: null, fijoId: null, deudaId: null, metaId: null,
+            });
+            n++;
+          }
+        }
+        movimientos[mes] = lista;
+      }
+    }
+    const bd = await new Promise((r) => { const p = indexedDB.open("finanzas", 1); p.onsuccess = () => r(p.result); });
+    const leer = () => new Promise((r) => { const t = bd.transaction("documento", "readonly").objectStore("documento").get("raiz"); t.onsuccess = () => r(t.result); });
+    const doc = (await leer()) || { version: 4, creado: "2023-01-01", actualizado: "2025-12-28",
+      perfil: { moneda: "MXN", ingresoQuincenal: 800000, cortes: [15], colchonObjetivo: null },
+      categorias: [], presupuestos: {}, fijos: [], deudas: [], metas: [], bandeja: [], reglas: [], borrados: [], ultimoRespaldo: null };
+    doc.movimientos = movimientos;
+    await new Promise((r) => { const t = bd.transaction("documento", "readwrite").objectStore("documento").put(doc, "raiz"); t.onsuccess = r; });
+    return n;
+  });
+
+  await largo.reload();
+  await largo.waitForSelector(".barra", { timeout: 15000 });
+  await largo.click('[data-accion="ver-historial"]');
+  await largo.waitForSelector("#buscador", { timeout: 15000 });
+
+  const filas = await largo.locator(".fila").count();
+  revisar("el historial pinta un tramo, no los miles de movimientos de golpe",
+    filas > 0 && filas < 200, `${filas} filas con ${sembrados} movimientos guardados`);
+
+  // Lo que NO puede pasar: que por pintar menos, los totales cuenten menos. Un resumen que
+  // solo suma lo que cabe en pantalla es un número que miente.
+  await largo.fill("#buscador", "Compra 1-0");
+  await largo.waitForTimeout(400);
+  const resumen = await largo.textContent("#buscador ~ .rotulo, .tarjeta.plana .rotulo").catch(() => "");
+  revisar("y el resumen sigue contando el historial entero, no solo lo pintado",
+    /\b36 movimiento/.test(resumen || ""), (resumen || "sin resumen").trim());
+
+  // El foco: cada repintado destruye el campo y crea otro. Sin devolverlo, en un celular esto
+  // es el teclado del sistema cerrándose a media palabra.
+  const siguioEscribiendo = await largo.evaluate(() => {
+    const caja = document.getElementById("buscador");
+    caja.focus();
+    caja.value = "Compra 2";
+    caja.setSelectionRange(8, 8);
+    caja.dispatchEvent(new Event("input", { bubbles: true }));
+    const ahora = document.getElementById("buscador");
+    return document.activeElement === ahora && ahora.selectionStart === 8;
+  });
+  revisar("y escribir no le quita el foco al buscador ni mueve el cursor", siguioEscribiendo);
+
+  revisar("con más de un tramo, se ofrece ver el resto",
+    (await largo.locator('[data-accion="ver-mas-historial"]').count()) === 1);
+
+  await largo.close();
+}
+
 // La promesa que no se toca, comprobada al final: el archivo suelto no depende de nada.
 revisar("el archivo autónomo no arrastra manifest ni service worker", (await pagina.locator('link[rel="manifest"]').count()) === 0);
 revisar(

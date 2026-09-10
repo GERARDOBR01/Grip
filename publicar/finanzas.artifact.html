@@ -5807,6 +5807,10 @@ const app = {
   eleccion: {},
   // Cuántas entradas de la bandeja se pintan. Sube cuando la persona pide ver más.
   verBandeja: 25,
+  // Y cuántas FILAS del historial. A tres años de uso son más de cuatro mil movimientos, y
+  // pintarlos todos costaba casi un segundo por tecla en el buscador de un Android de gama
+  // media. Nadie mira cuatro mil filas: se miran las de arriba y se busca el resto.
+  verHistorial: 0,
   // Lo que lleva escrito en la caja de pegar. Vive en el estado y no solo en el DOM porque
   // cualquier re-dibujo —un guardado, o que otro dispositivo escriba— lo borraría a media
   // captura. Perder lo que alguien acaba de pegar es la clase de detalle que hace que una
@@ -5822,6 +5826,9 @@ const VISTAS = [
   { id: "fijos", icono: "⏱", nombre: "Fijos" },
   { id: "ajustes", icono: "⚙", nombre: "Ajustes" },
 ];
+
+/** Cuántas filas del historial se pintan de una vez, y de cuántas en cuántas crece. */
+const FILAS_HISTORIAL = 80;
 
 const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -5946,11 +5953,67 @@ function vacio(texto) {
  */
 function render() {
   if (app.rescatada) return; // la pantalla de rescate se queda: repintar la borraría
+
+  const atencion = recordarAtencion();
   try {
     dibujar();
   } catch (e) {
-    rescatar(e, "dibujando la pantalla");
+    return rescatar(e, "dibujando la pantalla");
   }
+  devolverAtencion(atencion);
+}
+
+/**
+ * Dónde estaba la atención antes de repintar: qué campo tenía el foco, por dónde iba el cursor
+ * dentro de él, y a qué altura estaba la página.
+ *
+ * Toda la pantalla se pinta de una pasada, así que cada repintado destruye el campo en el que
+ * estabas escribiendo y crea otro igual pero vacío de foco. En un celular eso no es un detalle:
+ * es el teclado del sistema cerrándose a media palabra. El buscador del historial ya tenía un
+ * parche a mano para su caso; esto lo hace general, que es lo que debía haber sido desde el
+ * principio — cualquier campo, en cualquier vista.
+ */
+function recordarAtencion() {
+  const activo = document.activeElement;
+  if (!activo || activo === document.body) return null;
+
+  const datos = activo.dataset || {};
+  const marcas = activo.id
+    ? `#${activo.id}`
+    : datos.accionInput
+      ? `[data-accion-input="${datos.accionInput}"]`
+      : null;
+  if (!marcas) return null;
+
+  let inicio = null;
+  let fin = null;
+  try {
+    inicio = activo.selectionStart;
+    fin = activo.selectionEnd;
+  } catch (e) {} // los campos de tipo number y date no dejan preguntar, y no pasa nada
+
+  return { marcas, inicio, fin, altura: window.scrollY };
+}
+
+/**
+ * Devuelve el foco, el cursor y la altura.
+ *
+ * La altura se devuelve SOLO cuando había un campo enfocado, y a propósito: eso quiere decir
+ * que alguien estaba escribiendo ahí mismo. Cambiar de vista también repinta, y ahí devolver
+ * la altura sería dejar a alguien a media pantalla de una vista que acaba de abrir.
+ */
+function devolverAtencion(atencion) {
+  if (!atencion) return;
+
+  const campo = document.querySelector(atencion.marcas);
+  if (!campo) return;
+
+  campo.focus({ preventScroll: true });
+  try {
+    if (atencion.inicio !== null) campo.setSelectionRange(atencion.inicio, atencion.fin);
+  } catch (e) {}
+
+  if (window.scrollY !== atencion.altura) window.scrollTo(0, atencion.altura);
 }
 
 /**
@@ -6505,12 +6568,28 @@ function vistaHistorial() {
   let encontrados = 0;
   let sumaFiltrada = 0;
 
-  const bloques = meses
+  // Dos pasadas, y hacen falta las dos. La primera cuenta y suma TODO lo que empata, porque el
+  // resumen de arriba y los totales de cada mes tienen que hablar del historial entero: un
+  // total que solo sumara lo que cabe en pantalla sería un número que miente. La segunda pinta
+  // nada más un tramo. Contar es barato; construir cuatro mil filas de HTML no lo es.
+  const porMes = meses
     .map((mes) => {
       const lista = app.datos.movimientos[mes].filter(pasa);
-      if (!lista.length) return "";
       encontrados += lista.length;
       sumaFiltrada += lista.reduce((t, m) => t + (m.tipo === TIPOS.GASTO ? m.monto : 0), 0);
+      return { mes, lista };
+    })
+    .filter((bloque) => bloque.lista.length);
+
+  const tope = app.verHistorial || FILAS_HISTORIAL;
+  let pintadas = 0;
+
+  const bloques = porMes
+    .map(({ mes, lista }) => {
+      if (pintadas >= tope) return "";
+      const visibles = lista.slice(0, tope - pintadas);
+      pintadas += visibles.length;
+
       const suman = (filtro) => lista.reduce((t, m) => (filtro(m) ? t + m.monto : t), 0);
       const gastos = suman((m) => m.tipo === TIPOS.GASTO);
       const ingresos = suman((m) => m.tipo === TIPOS.INGRESO);
@@ -6525,10 +6604,21 @@ function vistaHistorial() {
               ${ingresos ? `<span style="color:var(--bien)">+${monto(ingresos)}</span> ` : ""}−${monto(gastos)}${ahorros ? ` · →${monto(ahorros)}` : ""}
             </div>
           </div>
-          ${lista.map(filaMovimiento).join("")}
+          ${visibles.map(filaMovimiento).join("")}
+          ${visibles.length < lista.length
+            ? `<div class="fila"><div class="sub">y ${lista.length - visibles.length} más de este mes</div></div>`
+            : ""}
         </div>`;
     })
     .join("");
+
+  const faltan = encontrados - pintadas;
+  const masBoton = faltan > 0
+    ? `<div class="tarjeta plana centro">
+         <button class="boton tenue" data-accion="ver-mas-historial">Ver ${Math.min(faltan, FILAS_HISTORIAL)} más</button>
+         <div class="rotulo">Quedan ${faltan}. Para llegar a uno en concreto, búscalo arriba.</div>
+       </div>`
+    : "";
 
   const chipsTipo = [
     { valor: "", etiqueta: "Todo" },
@@ -6559,7 +6649,8 @@ function vistaHistorial() {
   return `<div class="acciones" style="margin:0 0 10px"><button class="boton tenue" data-accion="ir" data-vista="hoy">← Volver a Hoy</button></div>
     ${tarjetaTendencia()}
     ${buscador}
-    ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}`;
+    ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}
+    ${masBoton}`;
 }
 
 // --- Vista: Presupuesto ---
@@ -7623,6 +7714,11 @@ const acciones = {
     render();
   },
 
+  "ver-mas-historial"() {
+    app.verHistorial = (app.verHistorial || FILAS_HISTORIAL) + FILAS_HISTORIAL;
+    render();
+  },
+
   "elegir-categoria"(el) {
     app.eleccion = { ...app.eleccion, [el.dataset.id]: el.dataset.categoria };
     render();
@@ -7840,10 +7936,12 @@ const acciones = {
   "ver-historial"() {
     app.vista = "historial";
     app.filtro = { texto: "", tipo: "" };
+    app.verHistorial = FILAS_HISTORIAL; // se entra por arriba, no por donde se quedó la vez pasada
     render();
   },
 
   "filtrar-tipo"(el) {
+    app.verHistorial = FILAS_HISTORIAL;
     app.filtro = { ...(app.filtro || { texto: "" }), tipo: el.dataset.tipo };
     render();
     const caja = document.getElementById("buscador");
@@ -8579,16 +8677,12 @@ async function arrancar() {
       return;
     }
     if (e.target.dataset.accionInput !== "filtrar-texto") return;
-    // Se guarda el texto y se re-dibuja solo la lista: volver a pintar todo en cada tecla
-    // le quitaría el foco al buscador.
+    // El foco y el cursor los devuelve `render()` para cualquier campo, así que aquí ya no hay
+    // nada que remendar a mano. Buscar empieza siempre desde arriba de los resultados: filtrar
+    // y quedarse en la página 4 de lo anterior no tiene sentido.
     app.filtro = { ...(app.filtro || { tipo: "" }), texto: e.target.value };
-    const posicion = e.target.selectionStart;
+    app.verHistorial = FILAS_HISTORIAL;
     render();
-    const caja = document.getElementById("buscador");
-    if (caja) {
-      caja.focus();
-      caja.setSelectionRange(posicion, posicion);
-    }
   });
 
   // Elegir una captura desde el botón. Va por `change` y no por `input`: un campo de archivo
