@@ -123,6 +123,9 @@ export function comprometidoAMeses(datos, iso = hoyISO(), tarjetaId = null) {
     const fin = ultimoMes(p);
     return !tope || fin > tope ? fin : tope;
   }, null);
+  // Cuántos meses faltan, no en qué mes acaba: "durante 4 meses más" se entiende de un vistazo
+  // y "hasta 2026-12" hay que descifrarlo contando con los dedos.
+  const mesesQueFaltan = hastaMes ? mesesEntre(mes, hastaMes) + 1 : 0;
 
   if (!vivos.length) {
     return {
@@ -149,8 +152,8 @@ export function comprometidoAMeses(datos, iso = hoyISO(), tarjetaId = null) {
       : veredicto(
           ESTADOS.AJUSTADO,
           SEVERIDADES.INFO,
-          `${formatear(alMes)} al mes comprometidos hasta ${hastaMes} — ${formatear(total)} en total`,
-          { alMes, total, hastaMes, cuantos: vivos.length },
+          `${formatear(alMes)} al mes durante ${plural(mesesQueFaltan, "mes", "meses")} más — ${formatear(total)} en total`,
+          { alMes, total, hastaMes, mesesQueFaltan, cuantos: vivos.length },
         ),
   };
 }

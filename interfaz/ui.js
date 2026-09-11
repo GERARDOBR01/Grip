@@ -181,6 +181,12 @@ function fechaCorta(iso) {
   return `${d} ${MESES_CORTOS[m - 1]}`;
 }
 
+/** "diciembre de 2026" — un mes para leer, no un "2026-12" para descifrar. */
+function mesLargo(mes) {
+  const [anio, m] = mes.split("-").map(Number);
+  return `${MESES[m - 1]} de ${anio}`;
+}
+
 function fechaLarga(iso) {
   const [a, m, d] = iso.split("-").map(Number);
   return `${d} de ${MESES[m - 1]} de ${a}`;
@@ -522,7 +528,7 @@ function vistaHoy() {
       (v) => `<div class="fila">
         <div class="crece">
           <div class="nombre">${esc(v.tarjeta.nombre)}</div>
-          <div class="sub ${v.vencido ? "urgente" : ""}">${esc(cuandoVence(v.dias, v.fecha))} · para no generar intereses</div>
+          <div class="sub ${v.vencido ? "urgente" : ""}">${esc(cuandoVence(v.dias, v.fecha))}</div>
         </div>
         <div class="monto">${monto(v.monto)}</div>
         <button class="boton chico" data-accion="pagar-tarjeta" data-id="${esc(v.tarjeta.id)}">Pagar</button>
@@ -1320,7 +1326,7 @@ function bloqueMSI(datos, tarjeta, hoy) {
           <div class="nombre">${esc(p.nombre)}</div>
           <div class="monto">${monto(mensualidadEnMes(p, mes))}<span class="de">al mes</span></div>
         </div>
-        <div class="sub">van ${van} de ${p.meses} · faltan ${monto(falta)} · termina en ${esc(ultimoMes(p))}</div>
+        <div class="sub">van ${van} de ${p.meses} · faltan ${monto(falta)} · termina en ${esc(mesLargo(ultimoMes(p)))}</div>
         <div class="barra-progreso"><i class="VA_BIEN" style="width:${pct}%"></i></div>
         <div class="acciones-fila">
           <button class="boton chico tenue" data-accion="editar-plazo" data-id="${esc(p.id)}">Editar</button>
@@ -1331,7 +1337,7 @@ function bloqueMSI(datos, tarjeta, hoy) {
 
   return `<div class="tarjeta plana">
     <div class="rotulo">A meses: <b>${monto(resumen.alMes)}</b> al mes${
-      resumen.hastaMes ? ` hasta ${esc(resumen.hastaMes)}` : ""
+      resumen.hastaMes ? ` hasta ${esc(mesLargo(resumen.hastaMes))}` : ""
     } · ${plural(suyos.length, "compra", "compras")}</div>
     ${filas}
   </div>`;
@@ -1382,7 +1388,9 @@ function tarjetaDeCredito(datos, hoy, { tarjeta, corte }) {
     </div>
     <div class="rotulo">Para no generar intereses</div>
     ${principal}
-    ${veredictoHTML(corte.veredicto)}
+    ${corte.porPagar === null || corte.porPagar === 0 || corte.vencido || corte.diasParaPagar <= 3
+      ? veredictoHTML(corte.veredicto)
+      : ""}
     ${corte.porPagar !== null ? trio : ""}
     ${bloqueIntereses(datos, tarjeta, corte)}
     ${bloqueMSI(datos, tarjeta, hoy)}

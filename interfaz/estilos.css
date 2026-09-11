@@ -125,8 +125,14 @@ body {
 .dato { font-variant-numeric: tabular-nums; }
 
 .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.duo .tarjeta { margin: 0; }
-.duo .cifra { font-size: 25px; letter-spacing: -.02em; color: var(--tinta-2); }
+/* `min-width: 0` porque una celda de rejilla no baja de lo que mide su contenido por defecto:
+   con «Cierre proyectado $10,540.00» dentro, las dos columnas crecían más allá de la mitad y
+   la pantalla de Hoy se iba 10 px a la derecha en un teléfono de 390. Y la cifra se encoge
+   con la pantalla en vez de recortarse: un número de dinero a medias no sirve de nada. */
+.duo .tarjeta { margin: 0; min-width: 0; }
+.duo .cifra {
+  font-size: clamp(19px, 6.2vw, 25px); letter-spacing: -.02em; color: var(--tinta-2);
+}
 /* Las dos tarjetas de abajo son APOYO del número grande, no competencia. Cuando todo pesa
    igual, no hay nada grande: solo una pantalla con muchos números. */
 
@@ -185,7 +191,9 @@ button { font: inherit; cursor: pointer; }
 .boton.chico { width: auto; padding: 7px 12px; font-size: 13px; border-radius: 9px; white-space: nowrap; flex: none; }
 .boton.peligro { background: transparent; color: var(--mal); border: 1px solid var(--borde); }
 .boton:active { transform: scale(.985); }
-.acciones { display: flex; gap: 8px; margin-top: 12px; }
+/* Con envoltura: tres botones cortos («Registrar pago · Compra a meses · Editar») no caben en
+   una fila de 390 px, y sin esto se salían de la pantalla en vez de bajar al siguiente renglón. */
+.acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
 /* --- Navegación inferior --- */
 .nav {
@@ -262,6 +270,10 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 /* Filas de dos líneas: en un teléfono, nombre + monto + botones en la misma línea
    deja el nombre partido a la mitad. */
 .fila.apilada { display: block; }
+/* Y en una fila apilada el subtítulo SÍ puede ocupar dos renglones. El recorte con puntos
+   suspensivos es lo correcto en una lista de un renglón, pero aquí se comía justo la mitad
+   informativa: «van 9 de 12 · faltan $4,000.00 · termina en …». */
+.fila.apilada .sub { white-space: normal; overflow: visible; }
 .fila.apilada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .fila.apilada .nombre { flex: 1; min-width: 0; }
 .fila.apilada .acciones-fila { display: flex; gap: 8px; justify-content: flex-end; margin-top: 9px; }
@@ -363,10 +375,12 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 
 /* «$0.00 de $30,000.00» — la segunda mitad es contexto, no cifra. Iba dentro de la .cifra con
    un espacio suelto por delante, y el espacio se lo comía el ajuste de línea: salía pegado. */
-.cifra .de {
+.cifra .de, .monto .de {
   font-size: 14px; font-weight: 500; color: var(--tinta-2);
   letter-spacing: 0; margin-left: 8px; white-space: nowrap;
 }
+/* En una fila, el rótulo va más chico que en una cifra grande: compite con el monto. */
+.monto .de { font-size: 11.5px; margin-left: 5px; }
 
 /* El veredicto de cada renglón del presupuesto: va debajo de su fila, alineado con el nombre y
    sin la raya de arriba, que ahí separaría cosas que van juntas. */

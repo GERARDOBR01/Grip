@@ -7,7 +7,7 @@ import {
   sinNadaQueRevisar, deConfianzaAlta,
 } from "../motor/bandeja.js";
 import { sugerirCategoria, recordar, olvidar, categoriaMasUsada, reglasAprendidas } from "../motor/aprendizaje.js";
-import { ESTADOS_BANDEJA, TIPOS, ORIGENES } from "../motor/modelo.js";
+import { ESTADOS_BANDEJA, TIPOS, ORIGENES, normalizarTarjeta } from "../motor/modelo.js";
 import { migrar } from "../motor/migraciones.js";
 import { ESTADOS } from "../motor/veredicto.js";
 import { datosDePrueba, conMovimientos } from "./ayuda.js";
@@ -169,6 +169,52 @@ test("cambiar de opinión sobre un comercio no deja dos reglas peleando", () => 
 test("una regla se puede borrar igual de fácil que se creó", () => {
   const d = recordar(datosDePrueba(), "OXXO", "super", HOY);
   assert.equal(sugerirCategoria(olvidar(d, "oxxo"), "OXXO"), null);
+});
+
+// --- La liga con la tarjeta ---
+//
+// El lector ya sacaba los últimos 4 del aviso y nadie los usaba para nada. Con una tarjeta
+// capturada que termine igual, el cargo nace ligado a ella sin teclear nada: es la liga más
+// barata que hay en toda la app, porque el dato ya venía en el correo.
+
+const tarjetaTerminada = (ultimos4, extra = {}) =>
+  normalizarTarjeta({
+    id: `t_${ultimos4}`, nombre: `Tarjeta ${ultimos4}`, ultimos4, diaCorte: 5, diaLimite: 25,
+    saldoInicial: 0, saldoInicialDesde: "2026-09-01", activa: true, ...extra,
+  });
+
+test("un cargo cuyos últimos 4 coinciden con una tarjeta nace ligado a ella", () => {
+  const base = { ...datosDePrueba(), tarjetas: [tarjetaTerminada("4821")] };
+  const { datos, entrada } = recibirAviso(base, AVISO, "alertas@banorte.com", "correo", HOY);
+  assert.equal(entrada.ultimos4, "4821");
+
+  const { movimiento } = aceptarEntrada(datos, entrada.id, {}, HOY);
+  assert.equal(movimiento.tarjetaId, "t_4821");
+});
+
+test("con dos tarjetas terminadas igual NO se adivina: se deja suelto", () => {
+  // Cargarle el gasto a la equivocada descuadra dos estados de cuenta en vez de uno.
+  const base = {
+    ...datosDePrueba(),
+    tarjetas: [tarjetaTerminada("4821"), tarjetaTerminada("4821", { id: "otra", nombre: "Otra" })],
+  };
+  const { datos, entrada } = recibirAviso(base, AVISO, "alertas@banorte.com", "correo", HOY);
+  const { movimiento } = aceptarEntrada(datos, entrada.id, {}, HOY);
+  assert.equal(movimiento.tarjetaId, null);
+});
+
+test("sin tarjeta que coincida, el cargo entra suelto y sin estorbar", () => {
+  const base = { ...datosDePrueba(), tarjetas: [tarjetaTerminada("9999")] };
+  const { datos, entrada } = recibirAviso(base, AVISO, "alertas@banorte.com", "correo", HOY);
+  const { movimiento } = aceptarEntrada(datos, entrada.id, {}, HOY);
+  assert.equal(movimiento.tarjetaId, null);
+});
+
+test("lo que elija la persona manda sobre la liga automática", () => {
+  const base = { ...datosDePrueba(), tarjetas: [tarjetaTerminada("4821")] };
+  const { datos, entrada } = recibirAviso(base, AVISO, "alertas@banorte.com", "correo", HOY);
+  const { movimiento } = aceptarEntrada(datos, entrada.id, { tarjetaId: "a-mano" }, HOY);
+  assert.equal(movimiento.tarjetaId, "a-mano");
 });
 
 // --- Migración ---
