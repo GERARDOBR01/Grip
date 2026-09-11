@@ -11,6 +11,7 @@ import { prorratear, formatear, plural } from "./dinero.js";
 import { cicloDe, mesDe, vencimientoEnMes, entre } from "./ciclo.js";
 import { TIPOS, movimientosEntre, suma } from "./modelo.js";
 import { venceEnMes, montoMensualizado } from "./fijos.js";
+import { comprometidoAMeses } from "./plazos.js";
 import { ESTADOS, SEVERIDADES, veredicto, sinDatos } from "./veredicto.js";
 
 /** Días corridos del ciclo antes de aceptar proyectar un ritmo de gasto. */
@@ -169,23 +170,30 @@ export function capacidadPorCiclo(datos, iso, topesDelMes) {
   const fijosMes = datos.fijos.filter((f) => f.activo && f.monto !== null).reduce((t, f) => t + montoMensualizado(f), 0);
   const fijosCiclo = prorratear(fijosMes, 1, ciclosPorMes);
   const variableCiclo = prorratear(topesDelMes.total, 1, ciclosPorMes);
-  const monto = ingreso - fijosCiclo - variableCiclo;
+  // Las compras a meses también. "Sin intereses" no quiere decir sin costo: son mensualidades
+  // que ya están comprometidas, exactamente igual que la renta, y hasta hoy no aparecían en
+  // ninguna cuenta. Sin esto, la capacidad de ahorro daba un número alto y falso justo a quien
+  // acababa de firmar doce mensualidades.
+  const aMeses = comprometidoAMeses(datos, iso);
+  const mesesCiclo = prorratear(aMeses.alMes, 1, ciclosPorMes);
+  const monto = ingreso - fijosCiclo - variableCiclo - mesesCiclo;
 
+  const conMeses = mesesCiclo ? ` − compras a meses ${formatear(mesesCiclo)}` : "";
   const nota = topesDelMes.completo
     ? veredicto(
         monto > 0 ? ESTADOS.VA_BIEN : ESTADOS.NO_ALCANZA,
         monto > 0 ? SEVERIDADES.OK : SEVERIDADES.ALTA,
-        `ingreso ${formatear(ingreso)} − fijos ${formatear(fijosCiclo)} − presupuesto variable ${formatear(variableCiclo)}`,
-        { ingreso, fijosCiclo, variableCiclo },
+        `ingreso ${formatear(ingreso)} − fijos ${formatear(fijosCiclo)} − presupuesto variable ${formatear(variableCiclo)}${conMeses}`,
+        { ingreso, fijosCiclo, variableCiclo, mesesCiclo },
       )
     : veredicto(
         ESTADOS.AJUSTADO,
         SEVERIDADES.INFO,
         `${plural(topesDelMes.sinTope.length, "categoría", "categorías")} sin tope no ${topesDelMes.sinTope.length === 1 ? "entra" : "entran"} en esta cuenta`,
-        { ingreso, fijosCiclo, variableCiclo, sinTope: topesDelMes.sinTope },
+        { ingreso, fijosCiclo, variableCiclo, mesesCiclo, sinTope: topesDelMes.sinTope },
       );
 
-  return { monto, ingreso, fijosCiclo, variableCiclo, ciclo, veredicto: nota };
+  return { monto, ingreso, fijosCiclo, variableCiclo, mesesCiclo, ciclo, veredicto: nota };
 }
 
 /**

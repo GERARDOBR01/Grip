@@ -125,6 +125,17 @@ export function resumenBandeja(datos) {
 }
 
 /**
+ * La tarjeta cuyos últimos 4 coinciden con los del aviso — solo si es UNA.
+ * Dos tarjetas terminadas en los mismos dígitos no es imposible, y cargarle el gasto a la
+ * equivocada descuadra dos estados de cuenta en vez de uno.
+ */
+export function tarjetaDeLosUltimos4(datos, ultimos4) {
+  if (!ultimos4) return null;
+  const candidatas = (datos.tarjetas || []).filter((t) => t.activa && t.ultimos4 === ultimos4);
+  return candidatas.length === 1 ? candidatas[0] : null;
+}
+
+/**
  * Acepta una entrada: crea el movimiento de verdad y aprende de lo que se corrigió.
  * `cambios` es lo que la persona editó antes de aceptar (categoría, monto, tipo, fecha, nota).
  */
@@ -144,6 +155,13 @@ export function aceptarEntrada(datos, id, cambios = {}, iso = hoyISO()) {
   // llegó el aviso como punto de partida, que es lo más cercano a la verdad que se sabe.
   const base = entrada.movimiento || { fecha: entrada.recibido, tipo: TIPOS.GASTO, categoria: "otros" };
   const propuesto = { ...base, ...camposCambiados };
+  // Si el aviso traía los últimos 4 y hay UNA tarjeta con esos mismos dígitos, el cargo nace
+  // ligado a ella. Es una liga gratis: el lector ya sacaba ese dato y nadie lo usaba. Con dos
+  // tarjetas que terminen igual no se adivina — se deja suelto, que es lo honesto.
+  if (!propuesto.tarjetaId) {
+    const ligada = tarjetaDeLosUltimos4(datos, entrada.ultimos4);
+    if (ligada) propuesto.tarjetaId = ligada.id;
+  }
   const { datos: conMovimiento, movimiento, error } = agregarMovimiento(partida, propuesto);
   if (error) return { datos, movimiento: null, error };
 

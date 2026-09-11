@@ -183,12 +183,14 @@ test("un documento v1 de verdad se abre en la versión actual sin perder un movi
   };
   const r = migrar(v1);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.aplicadas, ["v1→v2", "v2→v3", "v3→v4"], "la cadena se aplica entera, en orden");
+  assert.deepEqual(r.aplicadas, ["v1→v2", "v2→v3", "v3→v4", "v4→v5"], "la cadena se aplica entera, en orden");
   assert.equal(r.datos.movimientos["2026-09"][0].monto, 12345);
   assert.equal(r.datos.fijos[0].nombre, "Renta");
   assert.deepEqual(r.datos.bandeja, []);
   assert.deepEqual(r.datos.reglas, []);
   assert.deepEqual(r.datos.borrados, [], "y las lápidas nacen vacías: no sabemos qué se borró antes");
+  assert.deepEqual(r.datos.tarjetas, [], "y las tarjetas también: un documento v1 no tenía ninguna");
+  assert.deepEqual(r.datos.plazos, []);
 });
 
 test("un documento de una versión más nueva sigue sin abrirse", () => {

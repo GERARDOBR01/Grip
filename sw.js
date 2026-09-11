@@ -1,9 +1,9 @@
-// Service worker de Grip — versión aeabb083, que es el hash de lo armado.
+// Service worker de Grip — versión b32292c9, que es el hash de lo armado.
 //
 // Guarda la app para poder abrirla sin conexión. No guarda NINGÚN dato tuyo: los movimientos
 // viven en el almacenamiento del navegador, que esto ni toca.
 
-const CACHE = "grip-aeabb083";
+const CACHE = "grip-b32292c9";
 const ARCHIVOS = ["./", "./index.html", "./manifest.webmanifest", "./icono-192.png", "./icono-512.png", "./icono-180.png"];
 
 // El motor de OCR vive en su PROPIA caché, con su propio sello. Son 4 MB que no cambian casi

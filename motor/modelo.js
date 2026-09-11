@@ -11,11 +11,16 @@ import { aCentavos, montoUtilizable } from "./dinero.js";
 import { hoyISO, mesDe, esISO, horaValida } from "./ciclo.js";
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-export const VERSION_DATOS = 4;
+export const VERSION_DATOS = 5;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
-export const TIPOS = { GASTO: "gasto", INGRESO: "ingreso", AHORRO: "ahorro", RETIRO: "retiro" };
+//
+// PAGO es el quinto y es de la misma familia que AHORRO y RETIRO: mueve dinero pero NO es
+// consumo. Un pago a la tarjeta no es un gasto nuevo — el gasto fue el día que compraste, y
+// ya se descontó de aquel ciclo. Sin un tipo propio, ese pago se contaba dos veces y la
+// quincena en que se paga la tarjeta salía en rojo sin haber gastado de más.
+export const TIPOS = { GASTO: "gasto", INGRESO: "ingreso", AHORRO: "ahorro", RETIRO: "retiro", PAGO: "pago" };
 
 /** Catálogo inicial pensado para México. Son valores por defecto de la app, no datos suyos. */
 export const CATEGORIAS_BASE = [
@@ -50,6 +55,13 @@ export function datosVacios(iso = hoyISO()) {
     presupuestos: {}, // "AAAA-MM" → { categoriaId: topeCentavos }
     fijos: [],
     deudas: [],
+    // Las tarjetas de crédito. No caben en `deudas` y no es un detalle: una deuda es un saldo
+    // que solo baja (original menos pagos), y una tarjeta es revolvente — el saldo SUBE con
+    // cada compra. Meterlas ahí haría que `saldoDeuda` mienta el primer día.
+    tarjetas: [],
+    // Compras a meses sin intereses. Una compra a 12 meses no es un gasto de este mes: es una
+    // mensualidad durante un año, y hasta hoy nadie la sumaba.
+    plazos: [],
     metas: [],
     // Lo que llegó solo y todavía no confirma nadie. Nada de aquí cuenta en ningún número
     // hasta que la persona lo acepta: un aviso mal leído no debe poder ensuciar las cuentas.
@@ -142,6 +154,8 @@ export function normalizar(entrada) {
     presupuestos,
     fijos: (Array.isArray(datos.fijos) ? datos.fijos : []).map(normalizarFijo).filter(Boolean),
     deudas: (Array.isArray(datos.deudas) ? datos.deudas : []).map(normalizarDeuda).filter(Boolean),
+    tarjetas: (Array.isArray(datos.tarjetas) ? datos.tarjetas : []).map(normalizarTarjeta).filter(Boolean),
+    plazos: (Array.isArray(datos.plazos) ? datos.plazos : []).map(normalizarPlazo).filter(Boolean),
     metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
@@ -248,12 +262,19 @@ export function normalizarMovimiento(m) {
     hora: horaValida(m.hora),
     monto: Math.abs(monto), // el signo lo da el tipo, no el número
     tipo,
-    categoria: m.categoria ? String(m.categoria) : tipo === TIPOS.GASTO ? "otros" : null,
+    // Un PAGO nunca lleva categoría, aunque alguien se la mande: no es consumo, y darle una
+    // lo metería en el presupuesto de esa categoría — pagar la tarjeta no es volver a gastar.
+    categoria:
+      tipo === TIPOS.PAGO ? null : m.categoria ? String(m.categoria) : tipo === TIPOS.GASTO ? "otros" : null,
     metodo: m.metodo ? String(m.metodo) : null,
     nota: m.nota ? String(m.nota).slice(0, 280) : "",
     fijoId: m.fijoId || null,
     deudaId: m.deudaId || null,
     metaId: m.metaId || null,
+    // Con qué tarjeta. En un GASTO dice dónde se cargó; en un PAGO, qué tarjeta se abonó.
+    tarjetaId: m.tarjetaId || null,
+    // Si este cargo es la mensualidad de una compra a meses, cuál.
+    plazoId: m.plazoId || null,
     // El identificador que traía el aviso: clave de rastreo SPEI o folio de autorización.
     // No se guarda para enseñarlo, se guarda porque es lo que permite saber, sin adivinar,
     // que un aviso que llega hoy es el mismo movimiento que ya está registrado.
@@ -297,6 +318,75 @@ export function normalizarDeuda(d) {
     tasaAnual: Number.isFinite(d.tasaAnual) ? d.tasaAnual : null, // sin tasa no se proyecta interés
     diaCorte: Number.isInteger(d.diaCorte) ? Math.min(Math.max(d.diaCorte, 1), 31) : 1,
     activa: d.activa !== false,
+  };
+}
+
+/** Un día del mes válido para un corte o una fecha límite. Fuera de rango se recorta. */
+function diaDelMes(valor, porDefecto) {
+  return Number.isInteger(valor) ? Math.min(Math.max(valor, 1), 31) : porDefecto;
+}
+
+/**
+ * Una tarjeta de crédito.
+ *
+ * Dos fechas, no una, y ahí está todo el asunto: el CORTE cierra el periodo y la FECHA
+ * LÍMITE es cuándo hay que pagarlo. Entre las dos hay semanas, y no distinguirlas es
+ * exactamente por lo que la gente paga intereses creyendo que iba al corriente.
+ *
+ * `saldoInicial` es lo que ya debías el día que capturaste la tarjeta. Es `null` hasta que
+ * alguien lo escriba, y eso NO es cero: una tarjeta que nace en $0.00 miente desde el primer
+ * día, y todos los números que cuelgan de ella heredan la mentira. Sin él se declara
+ * SIN_DATOS_SUFICIENTES, que es la respuesta honesta.
+ */
+export function normalizarTarjeta(t) {
+  if (!t || !t.nombre) return null;
+  const saldoInicial = entero(t.saldoInicial, null);
+  return {
+    id: t.id || idNuevo("tar"),
+    nombre: String(t.nombre).slice(0, 80),
+    // Los últimos 4 del plástico. Es lo que ya extrae el lector de avisos, así que con esto
+    // un cargo que llega por correo se liga solo con su tarjeta, sin teclear nada.
+    ultimos4: /^\d{3,4}$/.test(t.ultimos4 || "") ? String(t.ultimos4) : null,
+    limite: entero(t.limite, null), // null = no capturado: no hay porcentaje de utilización
+    diaCorte: diaDelMes(t.diaCorte, 1),
+    diaLimite: diaDelMes(t.diaLimite, 20),
+    tasaAnual: Number.isFinite(t.tasaAnual) ? t.tasaAnual : null, // sin tasa no se proyecta interés
+    saldoInicial,
+    // Desde cuándo cuentan los cargos capturados. Sin esta fecha, los movimientos viejos que
+    // ya estaban dentro del saldo inicial se sumarían otra vez y el saldo saldría al doble.
+    saldoInicialDesde: esISO(t.saldoInicialDesde) ? t.saldoInicialDesde : null,
+    // La anualidad: dinero real, una vez al año, que todo el mundo olvida hasta que cae.
+    anualidad: entero(t.anualidad, null),
+    mesAnualidad: Number.isInteger(t.mesAnualidad) ? Math.min(Math.max(t.mesAnualidad, 1), 12) : null,
+    activa: t.activa !== false,
+  };
+}
+
+/** Cuántos meses admite una compra a plazos. Lo que de verdad ofrecen los bancos aquí. */
+export const PLAZOS_MSI = [3, 6, 9, 12, 18, 24];
+
+/**
+ * Una compra a meses sin intereses.
+ *
+ * No se guarda como un gasto de $12,000 el día que se hizo: se guarda como lo que es, una
+ * mensualidad durante N meses. Eso es lo que de verdad le pasa a tu dinero, y es la misma
+ * decisión que ya tomó `fijos.js` al separar el promedio mensual de lo que se paga este mes.
+ *
+ * Tampoco genera doce movimientos futuros: aquí no se inventan movimientos que no han pasado.
+ */
+export function normalizarPlazo(p) {
+  if (!p || !p.nombre || !p.tarjetaId) return null;
+  const meses = Number.isInteger(p.meses) && p.meses >= 2 && p.meses <= 48 ? p.meses : 12;
+  return {
+    id: p.id || idNuevo("plazo"),
+    tarjetaId: String(p.tarjetaId),
+    nombre: String(p.nombre).slice(0, 80),
+    montoTotal: entero(p.montoTotal, null),
+    meses,
+    // El mes del PRIMER cargo. Sin ancla no se sabe cuántas mensualidades van ni cuándo acaba.
+    primerCargo: /^\d{4}-\d{2}$/.test(p.primerCargo || "") ? p.primerCargo : mesDe(hoyISO()),
+    categoria: p.categoria ? String(p.categoria) : "otros",
+    activo: p.activo !== false,
   };
 }
 

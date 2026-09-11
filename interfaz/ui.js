@@ -10,8 +10,8 @@
 import { formatear, aCentavos, plural } from "../motor/dinero.js";
 import { horaAhora, hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
-  TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
-  ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
+  TIPOS, FRECUENCIAS, PLAZOS_MSI, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo,
+  datosVacios, ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
 } from "../motor/modelo.js";
 import { claveDeTope } from "../motor/fusion.js";
 import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presupuesto.js";
@@ -19,6 +19,15 @@ import { panelHoy, capacidadPorCiclo, estadoColchon, ahorroLibre } from "../moto
 import { resumenMetas, exigenciaTotal } from "../motor/metas.js";
 import { proximosVencimientos, totalFijosMensual, movimientoDeFijo, venceEnMes, montoMensualizado } from "../motor/fijos.js";
 import { planDeDeuda, siPagarasMas } from "../motor/deudas.js";
+import {
+  estadoDeCorte, saldoTarjeta, creditoUsado, siSoloPagas, interesDeNoPagar, historialDeCortes,
+  tarjetasPorUrgencia, proximosLimites, calendarioDelMes, resumenTarjetas, cargosDelPeriodo,
+  periodoDeCorte, periodoAnterior, UTILIZACION_SANA,
+} from "../motor/tarjetas.js";
+import {
+  mensualidadEnMes, mensualidadesCargadas, porCargarDesde, ultimoMes, sigueViva,
+  comprometidoAMeses, calendarioMSI,
+} from "../motor/plazos.js";
 import {
   recibirAviso, pendientes, ilegibles, aceptarEntrada, descartarEntrada, deshacerEntrada, resumenBandeja,
   impactoPendiente, purgarBandeja, aceptarTanda, deshacerTanda, deConfianzaAlta,
@@ -81,6 +90,7 @@ const VISTAS = [
   { id: "presupuesto", icono: "▤", nombre: "Presupuesto" },
   { id: "metas", icono: "◎", nombre: "Metas" },
   { id: "fijos", icono: "⏱", nombre: "Fijos" },
+  { id: "tarjetas", icono: "▭", nombre: "Tarjetas" },
   { id: "ajustes", icono: "⚙", nombre: "Ajustes" },
 ];
 
@@ -357,6 +367,8 @@ function dibujar() {
   // no existen para nadie y volvemos al punto de partida, solo que con la entrada guardada.
   const resumen = resumenBandeja(app.datos);
   const esperando = resumen.pendientes + resumen.ilegibles;
+  // Lo que urge de las tarjetas: lo vencido y lo que vence esta semana. Nada más.
+  const urgentes = proximosLimites(app.datos, app.hoy, 7).length;
 
   const etiquetaEstado = sincronizado
     ? "Sincronizado"
@@ -388,7 +400,15 @@ function dibujar() {
     <nav class="nav"><div class="envoltura">
       ${VISTAS.map((v) => {
         // El contador solo existe si hay algo que hacer. Un globo en cero es ruido.
-        const globo = v.id === "bandeja" && esperando > 0 ? `<i class="globo">${esperando}</i>` : "";
+        // El contador de Tarjetas no cuenta tarjetas: cuenta lo que urge. Un globo con el
+        // número de tarjetas que tienes sería decoración; uno con las que vencen esta semana
+        // es la razón de abrir la app.
+        const globo =
+          v.id === "bandeja" && esperando > 0
+            ? `<i class="globo">${esperando}</i>`
+            : v.id === "tarjetas" && urgentes > 0
+              ? `<i class="globo mal">${urgentes}</i>`
+              : "";
         return `<button data-accion="ir" data-vista="${v.id}" aria-current="${app.vista === v.id || (app.vista === 'historial' && v.id === 'hoy')}">
         <span>${v.icono}${globo}</span>${esc(v.nombre)}</button>`;
       }).join("")}
@@ -401,6 +421,7 @@ function vistaActual() {
   if (app.vista === "presupuesto") return vistaPresupuesto();
   if (app.vista === "metas") return vistaMetas();
   if (app.vista === "fijos") return vistaFijos();
+  if (app.vista === "tarjetas") return vistaTarjetas();
   if (app.vista === "ajustes") return vistaAjustes();
   return vistaHoy();
 }
@@ -493,8 +514,24 @@ function vistaHoy() {
           <div class="cifra ${panel.capacidad.monto < 0 ? "mal" : ""}">${monto(panel.capacidad.monto)}</div>
           <div class="rotulo">a ${monto(panel.capacidad.ritmoDiario)} por día</div></div>`;
 
-  const listaVencimientos = vencimientos.length
-    ? `<div class="titulo-seccion">Por pagar</div><div class="tarjeta">${vencimientos
+  // Las tarjetas que vencen esta semana van en la MISMA lista que los fijos, no en una aparte:
+  // a quien le toca pagar, lo que le importa es qué le toca pagar, no de qué tipo es cada cosa.
+  const limites = proximosLimites(datos, hoy, 7);
+  const filasLimites = limites
+    .map(
+      (v) => `<div class="fila">
+        <div class="crece">
+          <div class="nombre">${esc(v.tarjeta.nombre)}</div>
+          <div class="sub ${v.vencido ? "urgente" : ""}">${esc(cuandoVence(v.dias, v.fecha))} · para no generar intereses</div>
+        </div>
+        <div class="monto">${monto(v.monto)}</div>
+        <button class="boton chico" data-accion="pagar-tarjeta" data-id="${esc(v.tarjeta.id)}">Pagar</button>
+      </div>`,
+    )
+    .join("");
+
+  const listaVencimientos = vencimientos.length || limites.length
+    ? `<div class="titulo-seccion">Por pagar</div><div class="tarjeta">${filasLimites}${vencimientos
         .map(
           (v) => `<div class="fila">
             <div class="crece">
@@ -784,14 +821,19 @@ function tarjetaIlegible(entrada) {
 
 function filaMovimiento(m) {
   const categoria = categoriaPorId(app.datos, m.categoria);
-  const signo = m.tipo === TIPOS.INGRESO || m.tipo === TIPOS.RETIRO ? "+" : m.tipo === TIPOS.AHORRO ? "→" : "−";
+  const tarjeta = m.tarjetaId ? (app.datos.tarjetas || []).find((t) => t.id === m.tarjetaId) : null;
+  // Un PAGO lleva "→" y no "−" a propósito: no salió de tu bolsillo otra vez, cambió de lugar.
+  const signo =
+    m.tipo === TIPOS.INGRESO || m.tipo === TIPOS.RETIRO ? "+" : m.tipo === TIPOS.AHORRO || m.tipo === TIPOS.PAGO ? "→" : "−";
   const nombre =
     m.tipo === TIPOS.INGRESO ? "Ingreso"
     : m.tipo === TIPOS.AHORRO ? "Apartado"
     : m.tipo === TIPOS.RETIRO ? "Retiro de lo apartado"
+    : m.tipo === TIPOS.PAGO ? `Pago a ${tarjeta ? tarjeta.nombre : "tarjeta"}`
     : categoria ? categoria.nombre : "Gasto";
   const icono =
-    m.tipo === TIPOS.INGRESO ? "↓" : m.tipo === TIPOS.AHORRO ? "◎" : m.tipo === TIPOS.RETIRO ? "↑" : categoria ? categoria.emoji : "•";
+    m.tipo === TIPOS.INGRESO ? "↓" : m.tipo === TIPOS.AHORRO ? "◎" : m.tipo === TIPOS.RETIRO ? "↑"
+    : m.tipo === TIPOS.PAGO ? "▭" : categoria ? categoria.emoji : "•";
 
   // La fila entera abre el movimiento, y ahí dentro está Borrar. Aquí ya no hay ✕:
   // era la única acción destructiva de la app que no preguntaba nada, y estaba a un dedo del
@@ -801,7 +843,9 @@ function filaMovimiento(m) {
     <div class="emoji">${esc(icono)}</div>
     <button class="crece toque" data-accion="editar-movimiento" data-id="${esc(m.id)}">
       <div class="nombre">${esc(m.nota || nombre)}</div>
-      <div class="sub">${fechaCorta(m.fecha)}${m.nota ? ` · ${esc(nombre)}` : ""}</div>
+      <div class="sub">${fechaCorta(m.fecha)}${m.nota ? ` · ${esc(nombre)}` : ""}${
+        tarjeta && m.tipo !== TIPOS.PAGO ? ` · ${esc(tarjeta.nombre)}` : ""
+      }</div>
     </button>
     <div class="monto">${signo}${formatear(m.monto)}</div>
   </div>`;
@@ -928,6 +972,7 @@ function vistaHistorial() {
     { valor: TIPOS.INGRESO, etiqueta: "Ingresos" },
     { valor: TIPOS.AHORRO, etiqueta: "Apartados" },
     { valor: TIPOS.RETIRO, etiqueta: "Retiros" },
+    { valor: TIPOS.PAGO, etiqueta: "Pagos de tarjeta" },
   ];
 
   const buscador = `<div class="tarjeta plana">
@@ -1170,6 +1215,262 @@ function vistaFijos() {
     <div class="acciones"><button class="boton tenue" data-accion="nuevo-fijo">Nuevo fijo</button></div>
     <div class="titulo-seccion">Deudas</div>${deudas}
     <div class="acciones"><button class="boton tenue" data-accion="nueva-deuda">Nueva deuda</button></div>`;
+}
+
+// --- Vista: Tarjetas ---
+//
+// La pantalla donde se pierde el control, y por eso la que más cuida qué número va arriba.
+//
+// Arriba NO va el saldo. El saldo es el número que enseñan los bancos y es el dato equivocado
+// para decidir: incluye lo que compraste después del corte, que todavía no se cobra. Arriba va
+// lo que hay que pagar para no generar intereses, y para cuándo. Todo lo demás es contexto.
+
+/** El día del mes con su nombre corto, para las fechas que se leen de un vistazo. */
+function cuandoVence(dias, fecha) {
+  if (dias < 0) return Math.abs(dias) === 1 ? "venció ayer" : `venció hace ${plural(Math.abs(dias), "día", "días")}`;
+  if (dias === 0) return `vence hoy · ${fechaCorta(fecha)}`;
+  if (dias === 1) return `vence mañana · ${fechaCorta(fecha)}`;
+  return `en ${plural(dias, "día", "días")} · ${fechaCorta(fecha)}`;
+}
+
+/**
+ * Tu mes en una línea: los cortes y las fechas límite de todas las tarjetas, en orden.
+ *
+ * Con una tarjeta esto es obvio y casi no hace falta. Con dos ya son cuatro fechas que nadie
+ * lleva en la cabeza, y ahí es exactamente donde empieza el desorden que cuesta dinero.
+ */
+function lineaDelMes(datos, hoy) {
+  const eventos = calendarioDelMes(datos, hoy, 45);
+  if (eventos.length < 2) return "";
+
+  return `<div class="titulo-seccion">Tu mes</div>
+    <div class="tarjeta">
+      <ol class="linea-mes">
+        ${eventos
+          .map(
+            (e) => `<li class="${e.tipo}">
+              <b>${fechaCorta(e.fecha)}</b>
+              <span>${e.tipo === "corte" ? "corta" : "se paga"} ${esc(e.tarjeta.nombre)}</span>
+            </li>`,
+          )
+          .join("")}
+      </ol>
+      <div class="rotulo">Lo que compres después de un corte se paga hasta el siguiente.</div>
+    </div>`;
+}
+
+/** Los últimos cortes como puntos: verde el que se pagó completo, rojo el que no. */
+function puntosDeCortes(historial) {
+  if (!historial.cortes.length) return "";
+  const puntos = historial.cortes
+    .slice()
+    .reverse()
+    .map(
+      (c) => `<i class="punto ${c.enCurso ? "curso" : c.completo ? "bien" : "mal"}"
+        title="corte del ${esc(c.corte)}: ${c.enCurso ? "en curso" : c.completo ? "pagado completo" : "quedó saldo"}"></i>`,
+    )
+    .join("");
+  return `<div class="cortes-racha">${puntos}<span class="rotulo">${esc(historial.veredicto.motivo)}</span></div>`;
+}
+
+/**
+ * Lo que cuesta no pagar el total.
+ *
+ * Va con el supuesto escrito, como todo lo que aquí se proyecta, y con el que es particular de
+ * las tarjetas y casi nadie conoce: el interés se cobra sobre TODO el saldo, no solo sobre lo
+ * que dejaste de pagar. Por eso "ya casi lo pagué" cuesta casi lo mismo que no haber pagado.
+ */
+function bloqueIntereses(datos, tarjeta, corte) {
+  if (corte.porPagar === null || corte.porPagar === 0) return "";
+
+  if (tarjeta.tasaAnual === null) {
+    return `<div class="rotulo aviso-linea">
+      Captura la tasa anual de esta tarjeta y aquí te digo, en pesos, cuánto te cuesta no pagar el total.
+    </div>`;
+  }
+
+  const interes = interesDeNoPagar(datos, tarjeta, app.hoy);
+  // Se simula con la décima parte del corte, redondeada: es lo más cercano a "pagar el mínimo"
+  // que se puede decir sin inventarse la fórmula del mínimo, que cambia por banco y por mes.
+  const poco = Math.max(Math.round(corte.porPagar / 10 / 100) * 100, 10000);
+  const escenario = siSoloPagas(datos, tarjeta, poco, app.hoy);
+
+  return `<div class="tarjeta plana peligro-suave">
+    <div class="rotulo">Si no pagas el total</div>
+    <div class="sub">Te cobran alrededor de <b>${monto(interes)}</b> de intereses este mes — calculados sobre
+      <b>todo</b> el saldo, no solo sobre lo que dejes de pagar. Así funciona una tarjeta en México.</div>
+    ${escenario && escenario.veredicto ? veredictoHTML(escenario.veredicto) : ""}
+  </div>`;
+}
+
+/** Las compras a meses de una tarjeta: cuánto cargan y cuánto les falta. */
+function bloqueMSI(datos, tarjeta, hoy) {
+  const mes = mesDe(hoy);
+  const suyos = (datos.plazos || []).filter((p) => p.tarjetaId === tarjeta.id && sigueViva(p, mes));
+  if (!suyos.length) return "";
+
+  const resumen = comprometidoAMeses(datos, hoy, tarjeta.id);
+  const filas = suyos
+    .map((p) => {
+      const van = mensualidadesCargadas(p, mes);
+      const falta = porCargarDesde(p, mes);
+      const pct = p.montoTotal ? Math.min(Math.round(((p.meses - van) === 0 ? 100 : (van * 100) / p.meses)), 100) : 0;
+      return `<div class="fila apilada">
+        <div class="linea">
+          <div class="nombre">${esc(p.nombre)}</div>
+          <div class="monto">${monto(mensualidadEnMes(p, mes))}<span class="de">al mes</span></div>
+        </div>
+        <div class="sub">van ${van} de ${p.meses} · faltan ${monto(falta)} · termina en ${esc(ultimoMes(p))}</div>
+        <div class="barra-progreso"><i class="VA_BIEN" style="width:${pct}%"></i></div>
+        <div class="acciones-fila">
+          <button class="boton chico tenue" data-accion="editar-plazo" data-id="${esc(p.id)}">Editar</button>
+        </div>
+      </div>`;
+    })
+    .join("");
+
+  return `<div class="tarjeta plana">
+    <div class="rotulo">A meses: <b>${monto(resumen.alMes)}</b> al mes${
+      resumen.hastaMes ? ` hasta ${esc(resumen.hastaMes)}` : ""
+    } · ${plural(suyos.length, "compra", "compras")}</div>
+    ${filas}
+  </div>`;
+}
+
+/** Una tarjeta entera. El orden de arriba abajo es el orden de lo que importa. */
+function tarjetaDeCredito(datos, hoy, { tarjeta, corte }) {
+  const credito = creditoUsado(datos, tarjeta, hoy);
+  const historial = historialDeCortes(datos, tarjeta, hoy, 6);
+  const cargos = cargosDelPeriodo(datos, tarjeta, corte.cerrado);
+
+  // La cifra grande: lo que hay que pagar, no lo que se debe. Sin saldo capturado, el hueco
+  // declarado — nunca un $0.00 que parecería una tarjeta al corriente.
+  const principal =
+    corte.porPagar === null
+      ? `<div class="cifra vacia">—</div>`
+      : corte.porPagar === 0
+        ? `<div class="cifra bien">Al corriente</div>`
+        : `<div class="cifra ${corte.vencido ? "mal" : ""}">${monto(corte.porPagar)}</div>
+           <div class="sub ${corte.vencido || corte.diasParaPagar <= 3 ? "urgente" : ""}">
+             ${esc(cuandoVence(corte.diasParaPagar, corte.fechaLimite))}</div>`;
+
+  const trio = `<div class="trio">
+    <div><div class="rotulo">Saldo hoy</div><div class="dato">${monto(corte.saldo)}</div></div>
+    <div><div class="rotulo">Desde el corte</div><div class="dato">${monto(corte.desdeElCorte)}</div>
+      <div class="rotulo">se cobra el ${fechaCorta(corte.proximoCorte)}</div></div>
+    <div><div class="rotulo">Utilización</div>
+      <div class="dato">${credito.utilizacion === null ? "—" : `${credito.utilizacion}%`}</div>
+      ${tarjeta.limite !== null ? `<div class="rotulo">de ${monto(tarjeta.limite)}</div>` : ""}</div>
+  </div>
+  ${credito.utilizacion !== null
+    ? `<div class="barra-progreso"><i class="${esc(credito.veredicto.estado)}"
+        style="width:${Math.min(credito.utilizacion, 100)}%"></i></div>`
+    : ""}
+  ${veredictoHTML(credito.veredicto)}`;
+
+  const listaCargos = cargos.length
+    ? `<details class="cargos">
+        <summary>Ver los ${plural(cargos.length, "cargo", "cargos")} de este corte</summary>
+        ${cargos.map(filaMovimiento).join("")}
+      </details>`
+    : "";
+
+  return `<div class="tarjeta ${corte.vencido ? "vencida" : ""}">
+    <div class="linea encabezado-tarjeta">
+      <div class="nombre grande">${esc(tarjeta.nombre)}</div>
+      <div class="rotulo">${tarjeta.ultimos4 ? `••${esc(tarjeta.ultimos4)}` : ""}</div>
+    </div>
+    <div class="rotulo">Para no generar intereses</div>
+    ${principal}
+    ${veredictoHTML(corte.veredicto)}
+    ${corte.porPagar !== null ? trio : ""}
+    ${bloqueIntereses(datos, tarjeta, corte)}
+    ${bloqueMSI(datos, tarjeta, hoy)}
+    ${puntosDeCortes(historial)}
+    ${listaCargos}
+    <div class="acciones">
+      <button class="boton chico" data-accion="pagar-tarjeta" data-id="${esc(tarjeta.id)}">Registrar pago</button>
+      <button class="boton chico tenue" data-accion="nuevo-plazo" data-id="${esc(tarjeta.id)}">Compra a meses</button>
+      <button class="boton chico tenue" data-accion="editar-tarjeta" data-id="${esc(tarjeta.id)}">Editar</button>
+    </div>
+  </div>`;
+}
+
+/** Lo comprometido a meses entre TODAS las tarjetas, mes por mes, bajando. */
+function bloqueMSIGlobal(datos, hoy) {
+  const calendario = calendarioMSI(datos, hoy, 18);
+  if (calendario.length < 2) return "";
+
+  const resumen = comprometidoAMeses(datos, hoy);
+  const tope = Math.max(...calendario.map((c) => c.monto)) || 1;
+
+  return `<div class="titulo-seccion">Comprometido a meses</div>
+    <div class="tarjeta">
+      <div class="cifra" style="font-size:30px">${monto(resumen.alMes)}<span class="de">al mes</span></div>
+      ${veredictoHTML(resumen.veredicto)}
+      <div class="calendario-msi">
+        ${calendario
+          .map(
+            (c) => `<div class="mes-msi" title="${esc(c.mes)}: ${monto(c.monto)}">
+              <i style="height:${Math.max(Math.round((c.monto * 100) / tope), 2)}%"></i>
+              <span>${esc(MESES_CORTOS[Number(c.mes.slice(5, 7)) - 1])}</span>
+            </div>`,
+          )
+          .join("")}
+      </div>
+      <div class="rotulo">Cada barra es lo que cargan tus compras a meses en ese corte. Baja conforme se acaban.</div>
+    </div>`;
+}
+
+function vistaTarjetas() {
+  const { datos, hoy } = app;
+
+  if (!(datos.tarjetas || []).length) {
+    return `<div class="tarjeta">
+      ${vacio("Todavía no capturas ninguna tarjeta.")}
+      <div class="rotulo">Con cinco datos —que vienen en tu estado de cuenta— esta pantalla te dice cada día
+        cuánto tienes que pagar y para cuándo:</div>
+      <ul class="lista-ayuda">
+        <li><b>Día de corte</b> — cuándo cierra el periodo. Lo que compres después se paga hasta el siguiente,
+          y ahí están las semanas de plazo que casi nadie aprovecha.</li>
+        <li><b>Día límite de pago</b> — la fecha que de verdad importa. Un día tarde y pierdes el periodo sin
+          intereses sobre <b>todo</b> el saldo.</li>
+        <li><b>Cuánto debes hoy</b> — el punto de partida. Sin esto no hay saldo: una tarjeta que empieza en
+          $0.00 miente desde el primer día.</li>
+        <li><b>Límite de crédito</b> — para saber qué tan alto vas, que es lo que mira tu historial.</li>
+        <li><b>Tasa anual</b> — opcional. Con ella te digo en pesos lo que cuesta no pagar el total.</li>
+      </ul>
+      <div class="acciones"><button class="boton" data-accion="nueva-tarjeta">Agregar mi primera tarjeta</button></div>
+    </div>`;
+  }
+
+  const resumen = resumenTarjetas(datos, hoy);
+  const encabezado = tarjetaCifra({
+    rotulo: "Debes en total",
+    valor: resumen.sinSaldo.length === resumen.cuantas ? "—" : monto(resumen.deuda),
+    clase: resumen.sinSaldo.length === resumen.cuantas ? "vacia" : "",
+    extra: `${resumen.proximo
+      ? `<div class="rotulo">A pagar antes del <b>${fechaLarga(resumen.proximo.fecha)}</b>:
+          <b>${monto(resumen.proximo.monto)}</b> de ${esc(resumen.proximo.tarjeta.nombre)}</div>`
+      : ""}
+      ${resumen.limite && resumen.utilizacion !== null
+        ? `<div class="rotulo">${resumen.utilizacion}% de ${monto(resumen.limite)} de línea${
+            resumen.utilizacion >= UTILIZACION_SANA ? "" : " — vas bien"
+          }</div>`
+        : ""}`,
+    veredicto: resumen.veredicto,
+  });
+
+  const lista = tarjetasPorUrgencia(datos, hoy)
+    .map((fila) => tarjetaDeCredito(datos, hoy, fila))
+    .join("");
+
+  return `${encabezado}
+    ${lineaDelMes(datos, hoy)}
+    <div class="titulo-seccion">Tus tarjetas</div>
+    ${lista}
+    <div class="acciones"><button class="boton tenue" data-accion="nueva-tarjeta">Nueva tarjeta</button></div>
+    ${bloqueMSIGlobal(datos, hoy)}`;
 }
 
 // --- Vista: Ajustes ---
@@ -2480,6 +2781,68 @@ const acciones = {
     });
   },
 
+  "nueva-tarjeta"() {
+    hojaTarjeta(null);
+  },
+
+  "editar-tarjeta"(el) {
+    hojaTarjeta(app.datos.tarjetas.find((t) => t.id === el.dataset.id));
+  },
+
+  "borrar-tarjeta"(el) {
+    const tarjeta = app.datos.tarjetas.find((t) => t.id === el.dataset.id);
+    const plazos = (app.datos.plazos || []).filter((p) => p.tarjetaId === el.dataset.id);
+    confirmar({
+      titulo: `¿Borrar "${tarjeta ? tarjeta.nombre : "la tarjeta"}"?`,
+      // Se dice qué se lleva por delante ANTES de preguntar. Borrar una tarjeta y descubrir
+      // después que se fueron tres compras a meses no es una sorpresa que se pueda deshacer.
+      mensaje: `Los cargos y pagos que ya capturaste se quedan en tu historial; lo que se borra es la tarjeta${
+        plazos.length ? ` y sus ${plural(plazos.length, "compra a meses", "compras a meses")}` : ""
+      }.`,
+      textoBoton: "Sí, borrar la tarjeta",
+      async alConfirmar() {
+        let datos = {
+          ...app.datos,
+          tarjetas: app.datos.tarjetas.filter((t) => t.id !== el.dataset.id),
+          plazos: (app.datos.plazos || []).filter((p) => p.tarjetaId !== el.dataset.id),
+        };
+        // Lápida para cada cosa enterrada: sin ellas, el otro dispositivo las resucita.
+        for (const id of [el.dataset.id, ...plazos.map((p) => p.id)]) datos = marcarBorrado(datos, id);
+        await guardar(datos);
+      },
+    });
+  },
+
+  "pagar-tarjeta"(el) {
+    const tarjeta = app.datos.tarjetas.find((t) => t.id === el.dataset.id);
+    if (tarjeta) hojaPagoTarjeta(tarjeta);
+  },
+
+  "nuevo-plazo"(el) {
+    hojaPlazo(null, el.dataset.id);
+  },
+
+  "editar-plazo"(el) {
+    hojaPlazo((app.datos.plazos || []).find((p) => p.id === el.dataset.id));
+  },
+
+  "borrar-plazo"(el) {
+    const plazo = (app.datos.plazos || []).find((p) => p.id === el.dataset.id);
+    confirmar({
+      titulo: `¿Borrar "${plazo ? plazo.nombre : "la compra"}"?`,
+      mensaje: "Dejará de contar en tu saldo y en lo que tienes comprometido al mes.",
+      textoBoton: "Sí, borrar la compra",
+      async alConfirmar() {
+        await guardar(
+          marcarBorrado(
+            { ...app.datos, plazos: (app.datos.plazos || []).filter((p) => p.id !== el.dataset.id) },
+            el.dataset.id,
+          ),
+        );
+      },
+    });
+  },
+
   "nueva-deuda"() {
     hojaDeuda(null);
   },
@@ -2942,6 +3305,188 @@ function hojaDeuda(deuda) {
       };
       const deudas = deuda ? app.datos.deudas.map((d) => (d.id === deuda.id ? nueva : d)) : [...app.datos.deudas, nueva];
       await guardar({ ...app.datos, deudas });
+    },
+  });
+}
+
+/**
+ * Alta y edición de una tarjeta.
+ *
+ * El saldo inicial va acompañado SIEMPRE de su fecha, y los dos juntos o ninguno: sin la fecha
+ * no se sabe qué cargos del historial ya estaban contados dentro de ese saldo y cuáles no, y
+ * sumarlos otra vez daría un saldo al doble. Por eso la fecha viene rellena con hoy.
+ */
+function hojaTarjeta(tarjeta) {
+  abrirHoja({
+    titulo: tarjeta ? `Editar ${tarjeta.nombre}` : "Nueva tarjeta",
+    campos: [
+      { clave: "nombre", etiqueta: "Cómo le dices", tipo: "texto", valor: tarjeta ? tarjeta.nombre : "", requerido: true },
+      {
+        clave: "ultimos4", etiqueta: "Últimos 4 dígitos (opcional)", tipo: "texto",
+        valor: tarjeta && tarjeta.ultimos4 ? tarjeta.ultimos4 : "",
+        ayuda: "Con esto, los cargos que llegan por correo se ligan solos a esta tarjeta.",
+      },
+      {
+        clave: "diaCorte", etiqueta: "Día de corte", tipo: "numero",
+        valor: tarjeta ? tarjeta.diaCorte : "", requerido: true,
+        ayuda: "El día que cierra tu periodo. Lo que compres después se paga hasta el corte siguiente.",
+      },
+      {
+        clave: "diaLimite", etiqueta: "Día límite de pago", tipo: "numero",
+        valor: tarjeta ? tarjeta.diaLimite : "", requerido: true,
+        ayuda: "Si cae antes que el corte, se entiende que es del mes siguiente. No hay que decir cuál.",
+      },
+      {
+        clave: "saldoInicial", etiqueta: "Cuánto debes hoy", tipo: "monto",
+        valor: tarjeta && tarjeta.saldoInicial !== null ? (tarjeta.saldoInicial / 100).toFixed(2) : "", requerido: true,
+        ayuda: "El punto de partida. Sin esto no hay saldo: una tarjeta que empieza en $0.00 miente.",
+      },
+      {
+        clave: "saldoInicialDesde", etiqueta: "…a esta fecha", tipo: "fecha",
+        valor: tarjeta && tarjeta.saldoInicialDesde ? tarjeta.saldoInicialDesde : app.hoy, requerido: true,
+      },
+      {
+        clave: "limite", etiqueta: "Límite de crédito (opcional)", tipo: "monto",
+        valor: tarjeta && tarjeta.limite !== null ? (tarjeta.limite / 100).toFixed(2) : "",
+        ayuda: "Sin límite no hay porcentaje de utilización: se declara, no se inventa.",
+      },
+      {
+        clave: "tasaAnual", etiqueta: "Tasa anual % (opcional)", tipo: "numero",
+        valor: tarjeta ? tarjeta.tasaAnual : "",
+        ayuda: "Con ella te digo en pesos lo que cuesta no pagar el total. Sin ella no se proyecta ninguno.",
+      },
+      {
+        clave: "anualidad", etiqueta: "Anualidad (opcional)", tipo: "monto",
+        valor: tarjeta && tarjeta.anualidad !== null ? (tarjeta.anualidad / 100).toFixed(2) : "",
+      },
+      {
+        clave: "mesAnualidad", etiqueta: "¿En qué mes te la cobran?", tipo: "select",
+        valor: tarjeta && tarjeta.mesAnualidad ? String(tarjeta.mesAnualidad) : "",
+        opciones: [{ valor: "", etiqueta: "No aplica" }, ...MESES.map((m, i) => ({ valor: String(i + 1), etiqueta: m }))],
+      },
+    ],
+    extra: tarjeta
+      ? `<button type="button" class="boton chico peligro" data-accion="borrar-tarjeta" data-id="${esc(tarjeta.id)}">Borrar esta tarjeta</button>`
+      : "",
+    async alGuardar(v) {
+      const dia = (valor) => (valor === null ? null : Math.round(Number(valor)));
+      if (!Number.isInteger(dia(v.diaCorte)) || dia(v.diaCorte) < 1 || dia(v.diaCorte) > 31) {
+        return "El día de corte es un día del mes, del 1 al 31.";
+      }
+      if (!Number.isInteger(dia(v.diaLimite)) || dia(v.diaLimite) < 1 || dia(v.diaLimite) > 31) {
+        return "El día límite de pago es un día del mes, del 1 al 31.";
+      }
+      const nueva = {
+        id: tarjeta ? tarjeta.id : idNuevo("tar"),
+        nombre: v.nombre,
+        ultimos4: v.ultimos4,
+        limite: v.limite,
+        diaCorte: dia(v.diaCorte),
+        diaLimite: dia(v.diaLimite),
+        tasaAnual: v.tasaAnual,
+        saldoInicial: v.saldoInicial,
+        saldoInicialDesde: v.saldoInicialDesde,
+        anualidad: v.anualidad,
+        mesAnualidad: v.mesAnualidad ? Number(v.mesAnualidad) : null,
+        activa: true,
+      };
+      const tarjetas = tarjeta
+        ? app.datos.tarjetas.map((t) => (t.id === tarjeta.id ? nueva : t))
+        : [...app.datos.tarjetas, nueva];
+      await guardar({ ...app.datos, tarjetas });
+    },
+  });
+}
+
+/** Una compra a meses. No crea movimientos: crea mensualidades, que es lo que de verdad pasa. */
+function hojaPlazo(plazo, tarjetaId) {
+  const tarjetas = (app.datos.tarjetas || []).filter((t) => t.activa);
+  abrirHoja({
+    titulo: plazo ? `Editar ${plazo.nombre}` : "Compra a meses",
+    campos: [
+      { clave: "nombre", etiqueta: "Qué compraste", tipo: "texto", valor: plazo ? plazo.nombre : "", requerido: true },
+      {
+        clave: "montoTotal", etiqueta: "Cuánto costó en total", tipo: "monto",
+        valor: plazo && plazo.montoTotal !== null ? (plazo.montoTotal / 100).toFixed(2) : "", requerido: true,
+        ayuda: "El precio completo, no la mensualidad: la mensualidad la calcula la app al centavo.",
+      },
+      {
+        clave: "meses", etiqueta: "A cuántos meses", tipo: "chips",
+        valor: String(plazo ? plazo.meses : 12),
+        opciones: PLAZOS_MSI.map((m) => ({ valor: String(m), etiqueta: `${m} meses` })),
+      },
+      {
+        clave: "primerCargo", etiqueta: "Mes del primer cargo", tipo: "mes",
+        valor: plazo ? plazo.primerCargo : mesDe(app.hoy), requerido: true,
+      },
+      {
+        clave: "tarjetaId", etiqueta: "En qué tarjeta", tipo: "chips",
+        valor: plazo ? plazo.tarjetaId : tarjetaId || (tarjetas[0] && tarjetas[0].id) || "",
+        opciones: tarjetas.map((t) => ({ valor: t.id, etiqueta: t.nombre })),
+      },
+      {
+        clave: "categoria", etiqueta: "Categoría", tipo: "select",
+        valor: plazo ? plazo.categoria : "otros", opciones: opcionesCategorias(),
+      },
+    ],
+    extra: plazo
+      ? `<button type="button" class="boton chico peligro" data-accion="borrar-plazo" data-id="${esc(plazo.id)}">Borrar esta compra</button>`
+      : "",
+    async alGuardar(v) {
+      if (!v.tarjetaId) return "Elige en qué tarjeta la compraste.";
+      const nuevo = {
+        id: plazo ? plazo.id : idNuevo("plazo"),
+        tarjetaId: v.tarjetaId,
+        nombre: v.nombre,
+        montoTotal: v.montoTotal,
+        meses: Number(v.meses) || 12,
+        primerCargo: v.primerCargo,
+        categoria: v.categoria,
+        activo: true,
+      };
+      const plazos = plazo
+        ? app.datos.plazos.map((p) => (p.id === plazo.id ? nuevo : p))
+        : [...(app.datos.plazos || []), nuevo];
+      await guardar({ ...app.datos, plazos });
+    },
+  });
+}
+
+/**
+ * Registrar un pago a la tarjeta.
+ *
+ * Trae de entrada lo que hay que pagar para no generar intereses, porque ése es el monto que
+ * la gente quiere teclear y el que casi nadie sabe de memoria. Y lleva escrita, en la hoja, la
+ * frase que evita la duda de todos: esto no vuelve a contar como gasto.
+ */
+function hojaPagoTarjeta(tarjeta) {
+  const corte = estadoDeCorte(app.datos, tarjeta, app.hoy);
+  const sugerido = corte.porPagar ? (corte.porPagar / 100).toFixed(2) : "";
+
+  abrirHoja({
+    titulo: `Pago a ${tarjeta.nombre}`,
+    campos: [
+      { clave: "fecha", etiqueta: "Cuándo", tipo: "fecha", valor: app.hoy, requerido: true },
+      {
+        clave: "monto", etiqueta: "Cuánto", tipo: "monto", valor: sugerido, requerido: true,
+        ayuda: corte.porPagar
+          ? `Para no generar intereses hay que cubrir ${formatear(corte.porPagar)} antes del ${corte.fechaLimite}.`
+          : "Este corte ya está cubierto: lo que abones ahora baja el saldo del siguiente.",
+      },
+    ],
+    extra: `<p class="rotulo" style="margin:0 0 14px">Un pago a tu tarjeta <b>no es un gasto nuevo</b>: el gasto
+      fue cuando compraste y ya se descontó de aquella quincena. Aquí solo baja tu saldo.</p>`,
+    async alGuardar(v) {
+      const { datos, error } = agregarMovimiento(app.datos, {
+        fecha: v.fecha,
+        monto: v.monto,
+        tipo: TIPOS.PAGO,
+        tarjetaId: tarjeta.id,
+        nota: `Pago: ${tarjeta.nombre}`,
+      });
+      if (error) return error;
+      await guardar(datos);
+      vibrar();
     },
   });
 }

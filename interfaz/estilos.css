@@ -376,3 +376,70 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 /* Lo vencido se ve vencido. Iba del mismo gris que todo lo demás, así que «venció hace 9 días»
    pesaba lo mismo que «vence mañana» — y son cosas muy distintas para quien tiene que pagarlo. */
 .fila .sub.urgente { color: var(--mal); font-weight: 500; }
+
+/* --- Tarjetas de crédito --- */
+
+/* El globo rojo de Tarjetas no cuenta tarjetas: cuenta lo que vence esta semana. */
+.globo.mal { background: var(--mal); }
+
+/* Con siete pestañas, «Presupuesto» ya no cabe sin partirse en un teléfono de 360 px. */
+.nav button { font-size: 10px; padding-left: 2px; padding-right: 2px; }
+@media (max-width: 359px) { .nav button { font-size: 9px; } }
+
+.tarjeta.vencida { border-left: 3px solid var(--mal); }
+.encabezado-tarjeta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.encabezado-tarjeta .nombre.grande { font-size: 16px; font-weight: 600; }
+.cifra.bien { color: var(--bien); }
+
+/* Los tres números de contexto. Tres y no dos: saldo, lo que aún no se cobra y utilización
+   son la misma pregunta vista por tres lados, y separarlos los volvía ilegibles. */
+.trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+.trio .dato { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+/* Tu mes en una línea: los cortes y las fechas límite de todas las tarjetas, en orden. */
+.linea-mes { list-style: none; margin: 0; padding: 0; }
+.linea-mes li {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 7px 0 7px 14px; position: relative; font-size: 13px;
+}
+.linea-mes li::before {
+  content: ""; position: absolute; left: 0; top: 13px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--tinta-3);
+}
+.linea-mes li.limite::before { background: var(--acento); }
+.linea-mes li + li::after {
+  content: ""; position: absolute; left: 3px; top: -7px; height: 20px; width: 1px; background: var(--borde);
+}
+.linea-mes b { font-variant-numeric: tabular-nums; min-width: 52px; }
+.linea-mes span { color: var(--tinta-2); }
+
+/* Los últimos cortes: un punto por cada uno. Verde el que se pagó completo, rojo el que no.
+   Seis puntos dicen en un vistazo lo que un párrafo no: si esto lleva meses pasando. */
+.cortes-racha { display: flex; align-items: center; gap: 5px; margin-top: 14px; flex-wrap: wrap; }
+.cortes-racha .punto { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.cortes-racha .punto.bien { background: var(--bien); }
+.cortes-racha .punto.mal { background: var(--mal); }
+.cortes-racha .punto.curso { background: var(--superficie-2); border: 1px solid var(--borde); }
+.cortes-racha .rotulo { margin-left: 5px; }
+
+/* Lo comprometido a meses, mes por mes. La barra BAJA conforme se acaban los plazos, y esa
+   bajada es la respuesta visual a «¿hasta cuándo estoy amarrado?». */
+.calendario-msi { display: flex; align-items: flex-end; gap: 3px; height: 74px; margin: 14px 0 6px; }
+.calendario-msi .mes-msi { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+.calendario-msi .mes-msi i { display: block; background: var(--acento); border-radius: 3px 3px 0 0; min-height: 2px; }
+.calendario-msi .mes-msi span {
+  font-size: 9px; color: var(--tinta-3); text-align: center; margin-top: 4px;
+  overflow: hidden; white-space: nowrap;
+}
+
+/* El bloque de lo que cuesta no pagar el total. Se marca, pero no grita: es información cara,
+   no una alarma, y una alarma permanente se deja de ver a los tres días. */
+.tarjeta.peligro-suave { background: var(--mal-suave); border: 1px solid var(--mal); margin-top: 14px; }
+.tarjeta.peligro-suave .sub { font-size: 12.5px; color: var(--tinta-2); margin-top: 4px; line-height: 1.45; }
+
+details.cargos { margin-top: 14px; }
+details.cargos summary { font-size: 13px; color: var(--acento); cursor: pointer; padding: 4px 0; }
+
+.lista-ayuda { margin: 12px 0 0; padding-left: 18px; font-size: 13px; color: var(--tinta-2); line-height: 1.5; }
+.lista-ayuda li { margin-bottom: 8px; }
+.lista-ayuda b { color: var(--tinta); }
