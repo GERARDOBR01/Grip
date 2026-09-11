@@ -44,6 +44,26 @@ const paso = (nombre, ok, detalle = "") => console.log(`${ok ? "  ✓" : "  ✗"
 let fallos = 0;
 const revisar = (nombre, ok, detalle) => { paso(nombre, ok, detalle); if (!ok) fallos++; };
 
+/**
+ * Espera a que algo SEA CIERTO, en vez de dormir un rato y cruzar los dedos.
+ *
+ * Las esperas fijas son de donde salen las pruebas que fallan un día sí y otro no, y una
+ * prueba que parpadea es peor que no tenerla: enseña a volver a correrla en vez de a mirar el
+ * fallo. Justo lo contrario de lo que esta app promete del resto del código.
+ *
+ * Devuelve el último valor mirado, sea cierto o no, para que quien falle pueda decir qué vio.
+ */
+async function esperarA(pagina, mirar, limite = 10000) {
+  const hasta = Date.now() + limite;
+  let visto;
+  do {
+    visto = await pagina.evaluate(mirar);
+    if (visto) return visto;
+    await pagina.waitForTimeout(150);
+  } while (Date.now() < hasta);
+  return visto;
+}
+
 // 1. Abre y declara su modo de guardado
 const estado = (await pagina.textContent(".estado")).trim();
 revisar("abre desde el disco y declara dónde guarda", estado.includes("Solo este dispositivo"), estado);
@@ -51,8 +71,14 @@ revisar("abre desde el disco y declara dónde guarda", estado.includes("Solo est
 // 2. Estado vacío: no inventa números
 const cifraInicial = await pagina.textContent(".cifra");
 revisar("sin ingreso capturado NO muestra un cero disfrazado", cifraInicial.trim() === "—", cifraInicial.trim());
-const veredictoInicial = await pagina.textContent(".marca");
-revisar("declara SIN_DATOS_SUFICIENTES", veredictoInicial.includes("SIN_DATOS"), veredictoInicial);
+// El estado del motor viaja en `data-estado` y la persona lee español. Se comprueban los DOS:
+// el enum es lo que las pruebas y el motor comparten, y la palabra es lo que decide si admitir
+// que no se sabe algo parece honestidad o parece que la app se rompió.
+const estadoInicial = await pagina.getAttribute(".veredicto", "data-estado");
+const veredictoInicial = (await pagina.textContent(".marca")).trim();
+revisar("declara SIN_DATOS_SUFICIENTES", estadoInicial === "SIN_DATOS_SUFICIENTES", estadoInicial);
+revisar("y lo dice en español, no con el nombre de una constante",
+  veredictoInicial === "Todavía no sé" && !/[A-Z]{4}_/.test(veredictoInicial), veredictoInicial);
 
 // 3. Capturar el ingreso quincenal
 await pagina.click('[data-accion="editar-ingreso"]');
@@ -77,12 +103,15 @@ revisar("el movimiento aparece en la lista", (await pagina.textContent("main")).
 // 5. Presupuesto y semáforo
 await pagina.click('[data-vista="presupuesto"]');
 await pagina.waitForSelector(".barra-progreso");
-revisar("una categoría sin tope se declara SIN_TOPE", (await pagina.textContent("main")).includes("SIN_TOPE"));
+revisar("una categoría sin tope se declara SIN_TOPE",
+  (await pagina.locator('[data-estado="SIN_TOPE"]').count()) > 0);
+
 await pagina.click('[data-accion="editar-tope"]');
 await pagina.fill('[data-clave="tope"]', "400");
 await pagina.click('button[type="submit"]');
 await pagina.waitForSelector(".velo", { state: "detached" });
-revisar("con tope puesto, el semáforo marca el exceso", (await pagina.textContent("main")).includes("NO_ALCANZA"));
+revisar("con tope puesto, el semáforo marca el exceso",
+  (await pagina.locator('[data-estado="NO_ALCANZA"]').count()) > 0);
 
 // 6. Meta imposible → NO_ALCANZA con su alternativa
 await pagina.click('[data-vista="metas"]');
@@ -93,7 +122,8 @@ await pagina.fill('[data-clave="fechaLimite"]', "2026-12-31");
 await pagina.click('button[type="submit"]');
 await pagina.waitForSelector(".velo", { state: "detached" });
 const metas = await pagina.textContent("main");
-revisar("una meta imposible se declara NO_ALCANZA", metas.includes("NO_ALCANZA"));
+revisar("una meta imposible se declara NO_ALCANZA",
+  (await pagina.locator('[data-estado="NO_ALCANZA"]').count()) > 0);
 revisar("y ofrece la fecha realista calculada", /fecha realista/.test(metas), metas.match(/Con .* la fecha realista es el [^.]*/)?.[0] || "");
 
 // 7. Persistencia real: recargar
@@ -373,6 +403,17 @@ const reparto = await instalada.evaluate(async () => {
   // Se pide un trozo del motor. La caché del motor no se llena al instalar a propósito —nadie
   // debe bajar 4 MB por si acaso— así que nace aquí, la primera vez que se usa.
   await fetch("./ocr/lib.js");
+
+  // Y se ESPERA a que aterrice. La respuesta vuelve antes de que la escritura en caché termine
+  // —el service worker la mantiene viva con waitUntil, pero eso no la hace instantánea— así
+  // que leer las cachés justo después es una carrera. Sin esta espera la prueba pasaba unas
+  // veces y otras no, que es peor que no tenerla: enseña a desconfiar de los fallos.
+  const destino = new URL("./ocr/lib.js", location.href).href;
+  for (let i = 0; i < 50; i++) {
+    if (await caches.match(destino)) break;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
   const llaves = await caches.keys();
   const deVersion = llaves.find((n) => /^grip-[0-9a-f]{8}$/.test(n));
   const deMotor = llaves.find((n) => n.startsWith("grip-motor-"));
@@ -384,7 +425,7 @@ const reparto = await instalada.evaluate(async () => {
   };
 
   return {
-    llaves,
+    llaves, deMotor, deVersion,
     motorEnLoSuyo: await estaEn(deMotor, "./ocr/lib.js"),
     motorEnLaDeVersion: await estaEn(deVersion, "./ocr/lib.js"),
     appEnLaDeVersion: await estaEn(deVersion, "./index.html"),
@@ -393,7 +434,7 @@ const reparto = await instalada.evaluate(async () => {
 
 revisar("el motor de OCR se guarda en su propia caché y no en la de la versión",
   reparto.motorEnLoSuyo && !reparto.motorEnLaDeVersion,
-  reparto.llaves.join(", "));
+  JSON.stringify(reparto));
 revisar("y la app sigue en la suya, que es la que se tira al actualizar", reparto.appEnLaDeVersion);
 
 // ── La bandeja no crece para siempre ────────────────────────────────────────────
@@ -905,21 +946,26 @@ await tocarEnLaSombra("aceptar", idCerrada);
 const reabierta = await contextoSombra.newPage();
 await reabierta.goto(`http://127.0.0.1:${puerto}/index.html`);
 await reabierta.waitForSelector(".barra", { timeout: 8000 });
-await reabierta.waitForTimeout(1200);
-const trasReabrir = await reabierta.evaluate(() => ({
-  entradas: document.querySelectorAll(".tarjeta.entrada").length,
-  cuerpo: document.body.innerText,
-}));
+
+// Drenar la cola pasa por IndexedDB y por un guardado: cuánto tarde depende de lo cargada que
+// esté la máquina, así que se espera a que el movimiento ESTÉ, no a que pasen 1200 ms.
+const llego = await esperarA(reabierta, () => document.body.innerText.includes("FARMACIA SAN JORGE"));
+const pendientesTrasReabrir = await reabierta.evaluate(() => document.querySelectorAll(".tarjeta.entrada").length);
 revisar(
   "y con la app CERRADA se encola y se aplica al abrir",
-  trasReabrir.cuerpo.includes("FARMACIA SAN JORGE") && trasReabrir.entradas === 0,
-  `${trasReabrir.entradas} entradas siguen esperando`,
+  llego === true && pendientesTrasReabrir === 0,
+  llego ? `${pendientesTrasReabrir} entradas siguen esperando` : "el movimiento no llegó a aparecer",
 );
 
 // La cola se vacía al drenarla: una intención aplicada dos veces sería un gasto duplicado, y
 // un gasto duplicado es peor que uno perdido porque el perdido lo notas.
 await reabierta.reload();
 await reabierta.waitForSelector(".barra", { timeout: 8000 });
+
+// Aquí se espera a que aparezca UNA vez y luego se da margen: lo que se vigila es que no salga
+// una SEGUNDA, y para eso no vale con mirar pronto — hay que dejar que la cola termine de no
+// hacer nada.
+await esperarA(reabierta, () => document.body.innerText.includes("FARMACIA SAN JORGE"));
 await reabierta.waitForTimeout(800);
 const dobles = await reabierta.evaluate(() =>
   (document.body.innerText.match(/FARMACIA SAN JORGE/g) || []).length);
@@ -1248,6 +1294,22 @@ servidor.close();
     (await largo.locator('[data-accion="ver-mas-historial"]').count()) === 1);
 
   await largo.close();
+}
+
+// Y la comprobación que cierra la pasada: en ninguna pantalla puede quedar el nombre de una
+// constante del motor a la vista. Se leen como errores de sistema, y el peor caso era el más
+// importante: el día que la app no sabe algo, decirlo con «SIN_DATOS_SUFICIENTES» convierte su
+// mejor cualidad —admitir que no sabe— en algo que parece que se rompió.
+{
+  const enums = /\b(VA_BIEN|AJUSTADO|NO_ALCANZA|SIN_TOPE|SIN_DATOS_SUFICIENTES|CODIGO)\b/;
+  const sucias = [];
+  for (const vista of ["hoy", "bandeja", "presupuesto", "metas", "fijos", "ajustes"]) {
+    await pagina.click(`[data-vista="${vista}"]`);
+    await pagina.waitForTimeout(120);
+    if (enums.test(await pagina.textContent("main"))) sucias.push(vista);
+  }
+  revisar("ninguna pantalla enseña el nombre de una constante del motor", sucias.length === 0, sucias.join(", "));
+  await pagina.click('[data-vista="hoy"]');
 }
 
 // La promesa que no se toca, comprobada al final: el archivo suelto no depende de nada.

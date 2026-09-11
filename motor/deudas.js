@@ -11,7 +11,7 @@
 // El supuesto va escrito en el propio veredicto: interés mensual sobre saldo insoluto,
 // pagos puntuales, sin comisiones ni IVA. Es una proyección, y se dice que lo es.
 
-import { formatear } from "./dinero.js";
+import { formatear, plural } from "./dinero.js";
 import { saldoDeuda } from "./fijos.js";
 import { ESTADOS, SEVERIDADES, veredicto, sinDatos } from "./veredicto.js";
 
@@ -90,7 +90,9 @@ export function planDeDeuda(datos, deuda) {
 
   const anios = Math.floor(meses / 12);
   const sobran = meses % 12;
-  const cuando = anios ? `${anios} año(s)${sobran ? ` y ${sobran} mes(es)` : ""}` : `${meses} mes(es)`;
+  const cuando = anios
+    ? `${plural(anios, "año", "años")}${sobran ? ` y ${plural(sobran, "mes", "meses")}` : ""}`
+    : plural(meses, "mes", "meses");
 
   return {
     ...salida,

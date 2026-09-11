@@ -110,7 +110,7 @@ test("capacidadPorCiclo baja los montos mensuales a la quincena", () => {
   assert.equal(cap.fijosCiclo, 280000, "560,000 al mes entre 2 quincenas");
   assert.equal(cap.variableCiclo, 240000, "480,000 de topes entre 2 quincenas");
   assert.equal(cap.monto, 280000, "800,000 − 280,000 − 240,000");
-  assert.match(cap.veredicto.motivo, /sin tope no entran/, "avisa que ocio no está contado");
+  assert.match(cap.veredicto.motivo, /sin tope no entra/, "avisa que ocio no está contado");
 });
 
 test("sin ingreso quincenal no hay capacidad que planear", () => {

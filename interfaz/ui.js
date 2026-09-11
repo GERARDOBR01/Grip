@@ -7,7 +7,7 @@
 // SIN_DATOS_SUFICIENTES, aquí se ve el hueco declarado con lo que falta capturar — nunca
 // un cero disfrazado de dato.
 
-import { formatear, aCentavos } from "../motor/dinero.js";
+import { formatear, aCentavos, plural } from "../motor/dinero.js";
 import { horaAhora, hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo, datosVacios,
@@ -176,13 +176,45 @@ function fechaLarga(iso) {
   return `${d} de ${MESES[m - 1]} de ${a}`;
 }
 
-/** El veredicto tal como lo devolvió el motor: estado, motivo y fuente. */
+/**
+ * Cómo se llama cada veredicto cuando lo lee una persona.
+ *
+ * El motor los maneja como constantes —VA_BIEN, SIN_DATOS_SUFICIENTES— porque un enum es lo
+ * correcto en el código y las pruebas comprueban contra él. Lo que no era correcto es pintarlo
+ * tal cual en la pantalla: SCREAMING_SNAKE_CASE sobre un número de dinero se lee como un error
+ * de sistema, no como una respuesta. Y el peor de todos era el más importante: el día que la
+ * app no sabe algo, decirlo con «SIN_DATOS_SUFICIENTES» convierte su mejor cualidad —admitir
+ * que no sabe— en algo que parece que se rompió.
+ *
+ * El enum no se va: viaja en `data-estado`, donde las pruebas lo siguen leyendo y donde no se
+ * lo tiene que comer nadie.
+ */
+const NOMBRE_VEREDICTO = {
+  VA_BIEN: "Va bien",
+  AJUSTADO: "Ajustado",
+  NO_ALCANZA: "No alcanza",
+  SIN_TOPE: "Sin tope",
+  SIN_DATOS_SUFICIENTES: "Todavía no sé",
+};
+
 function veredictoHTML(v) {
   if (!v) return "";
-  const falta = v.datos && v.datos.falta ? `<div class="rotulo" style="width:100%">→ ${esc(v.datos.falta)}</div>` : "";
-  return `<div class="veredicto"><span class="marca ${esc(v.estado)}">${esc(v.estado)}</span>
-    <span>${esc(v.motivo)}</span><span class="fuente">fuente: ${esc(v.fuente)}</span>${falta}</div>`;
+
+  // `datos.falta` quiere decir dos cosas distintas según quién arme el veredicto: en
+  // `sinDatos()` es la instrucción de qué capturar, y en `estadoColchon()` son los CENTAVOS que
+  // faltan para el fondo. Pintarlas igual hacía salir «→ 3000000» debajo del fondo de
+  // emergencia: centavos crudos presentados como si fueran pesos, que en esta app —donde el
+  // punto decimal solo existe al escribirlo en pantalla— es exactamente la mentira que la regla
+  // de centavos enteros existe para no cometer. Solo se pinta cuando es la instrucción.
+  const pista = v.datos && typeof v.datos.falta === "string"
+    ? `<div class="pista">${esc(v.datos.falta)}</div>`
+    : "";
+
+  return `<div class="veredicto" data-estado="${esc(v.estado)}">
+    <span class="marca">${esc(NOMBRE_VEREDICTO[v.estado] || v.estado)}</span>
+    <span class="motivo">${esc(v.motivo)}</span>${pista}</div>`;
 }
+
 
 function tarjetaCifra({ rotulo, valor, clase = "", extra = "", veredicto }) {
   return `<div class="tarjeta">
@@ -464,12 +496,22 @@ function vistaHoy() {
   const listaVencimientos = vencimientos.length
     ? `<div class="titulo-seccion">Por pagar</div><div class="tarjeta">${vencimientos
         .map(
-          (v) => `<div class="fila apilada">
-            <div class="linea"><div class="nombre">${esc(v.fijo.nombre)}</div><div class="monto">${monto(v.monto)}</div></div>
-            <div class="sub">${v.vencido ? `venció hace ${Math.abs(v.dias)} día(s)` : v.dias === 0 ? "vence hoy" : `en ${v.dias} día(s)`} · ${fechaCorta(v.fecha)}</div>
-            <div class="acciones-fila">
-              <button class="boton chico" data-accion="pagar-fijo" data-id="${esc(v.fijo.id)}" data-fecha="${esc(v.fecha)}">Pagué</button>
+          (v) => `<div class="fila">
+            <div class="crece">
+              <div class="nombre">${esc(v.fijo.nombre)}</div>
+              <div class="sub ${v.vencido ? "urgente" : ""}">${
+                // A lo vencido no se le pone la fecha: «venció hace 9 días» ya lo dice entero, y
+                // en un renglón que además lleva monto y botón, el «· 1 sep» solo servía para
+                // partirlo en dos líneas. A lo que está por venir sí, que ahí la fecha es el dato.
+                v.vencido
+                  ? (Math.abs(v.dias) === 1 ? "venció ayer" : `venció hace ${plural(Math.abs(v.dias), "día", "días")}`)
+                  : v.dias === 0 ? `vence hoy · ${fechaCorta(v.fecha)}`
+                  : v.dias === 1 ? `vence mañana · ${fechaCorta(v.fecha)}`
+                  : `en ${plural(v.dias, "día", "días")} · ${fechaCorta(v.fecha)}`
+              }</div>
             </div>
+            <div class="monto">${monto(v.monto)}</div>
+            <button class="boton chico" data-accion="pagar-fijo" data-id="${esc(v.fijo.id)}" data-fecha="${esc(v.fecha)}">Pagué</button>
           </div>`,
         )
         .join("")}</div>`
@@ -541,8 +583,8 @@ function vistaHoy() {
       ? "" // sin objetivo y sin nada apartado, no hay nada que enseñar todavía
       : `<div class="titulo-seccion">Fondo de emergencia</div>
          <div class="tarjeta">
-           <div class="cifra" style="font-size:28px">${monto(colchon.acumulado)}${
-             colchon.objetivo !== null ? `<span class="rotulo"> de ${monto(colchon.objetivo)}</span>` : ""
+           <div class="cifra" style="font-size:30px">${monto(colchon.acumulado)}${
+             colchon.objetivo !== null ? `<span class="de">de ${monto(colchon.objetivo)}</span>` : ""
            }</div>
            ${colchon.objetivo !== null
              ? `<div class="barra-progreso"><i class="${esc(colchon.veredicto.estado)}" style="width:${Math.min(
@@ -751,6 +793,10 @@ function filaMovimiento(m) {
   const icono =
     m.tipo === TIPOS.INGRESO ? "↓" : m.tipo === TIPOS.AHORRO ? "◎" : m.tipo === TIPOS.RETIRO ? "↑" : categoria ? categoria.emoji : "•";
 
+  // La fila entera abre el movimiento, y ahí dentro está Borrar. Aquí ya no hay ✕:
+  // era la única acción destructiva de la app que no preguntaba nada, y estaba a un dedo del
+  // monto, repetida en cada renglón de la lista. Un pulgar torpe en el camión borraba un gasto
+  // sin dejar rastro ni forma de deshacerlo. Borrar dinero tiene que costar más que rozarlo.
   return `<div class="fila">
     <div class="emoji">${esc(icono)}</div>
     <button class="crece toque" data-accion="editar-movimiento" data-id="${esc(m.id)}">
@@ -758,7 +804,6 @@ function filaMovimiento(m) {
       <div class="sub">${fechaCorta(m.fecha)}${m.nota ? ` · ${esc(nombre)}` : ""}</div>
     </button>
     <div class="monto">${signo}${formatear(m.monto)}</div>
-    <button class="boton chico tenue" data-accion="borrar-movimiento" data-id="${esc(m.id)}" aria-label="Borrar">✕</button>
   </div>`;
 }
 
@@ -856,7 +901,7 @@ function vistaHistorial() {
       return `<div class="titulo-seccion">${MESES[numero - 1]} ${anio}</div>
         <div class="tarjeta">
           <div class="fila" style="border-bottom:1px solid var(--borde)">
-            <div class="crece"><div class="sub">${lista.length} movimiento(s)</div></div>
+            <div class="crece"><div class="sub">${plural(lista.length, "movimiento", "movimientos")}</div></div>
             <div class="monto" style="font-size:13px">
               ${ingresos ? `<span style="color:var(--bien)">+${monto(ingresos)}</span> ` : ""}−${monto(gastos)}${ahorros ? ` · →${monto(ahorros)}` : ""}
             </div>
@@ -897,7 +942,7 @@ function vistaHistorial() {
           .join("")}
       </div>
       ${filtro.texto || filtro.tipo
-        ? `<div class="rotulo" style="margin-top:10px">${encontrados} movimiento(s)${
+        ? `<div class="rotulo" style="margin-top:10px">${plural(encontrados, "movimiento", "movimientos")}${
             sumaFiltrada ? ` · ${monto(sumaFiltrada)} en gastos` : ""
           }</div>`
         : ""}
@@ -925,7 +970,7 @@ function vistaPresupuesto() {
     .map((f) => {
       const pct = f.veredicto.datos.pct;
       const ancho = Math.min(pct === null || pct === undefined ? 0 : pct, 100);
-      return `<div class="fila" style="border-bottom:0;padding-bottom:4px">
+      return `<div class="fila" data-estado="${esc(f.veredicto.estado)}" style="border-bottom:0;padding-bottom:4px">
           <div class="emoji">${esc(f.categoria.emoji)}</div>
           <div class="crece">
             <div class="nombre">${esc(f.categoria.nombre)}</div>
@@ -933,12 +978,12 @@ function vistaPresupuesto() {
             <div class="barra-progreso"><i class="${esc(f.veredicto.estado)}" style="width:${ancho}%"></i></div>
           </div>
           <button class="boton chico tenue" data-accion="editar-tope" data-id="${esc(f.categoria.id)}">
-            ${f.tope === null ? "Poner tope" : monto(f.tope)}
+            ${f.tope === null ? "Poner tope" : "Cambiar"}
           </button>
         </div>
-        <div class="veredicto" style="margin:0 0 14px 42px;border-top:0;padding-top:2px">
-          <span class="marca ${esc(f.veredicto.estado)}">${esc(f.veredicto.estado)}</span>
-          <span>${esc(f.veredicto.motivo)}</span></div>`;
+        ${f.tope === null ? "" : `<div class="veredicto suelto" data-estado="${esc(f.veredicto.estado)}">
+          <span class="marca">${esc(NOMBRE_VEREDICTO[f.veredicto.estado] || f.veredicto.estado)}</span>
+          <span class="motivo">${esc(f.veredicto.motivo)}</span></div>`}`;
     })
     .join("");
 
@@ -1095,7 +1140,7 @@ function vistaFijos() {
           return `<div class="tarjeta">
             <div class="fila" style="border-bottom:0;padding:0">
               <div class="crece"><div class="nombre">${esc(d.nombre)}</div>
-                <div class="sub">${plan.pagos} pago(s) · abonado ${monto(plan.pagado)}${
+                <div class="sub">${plural(plan.pagos, "pago", "pagos")} · abonado ${monto(plan.pagado)}${
                   plan.pago.origen === "fijo" ? ` · ${monto(plan.pago.monto)} al mes` : ""
                 }</div></div>
               <div class="monto">${monto(plan.saldo)}</div>
@@ -1268,7 +1313,7 @@ function vistaAjustes() {
 
     <div class="titulo-seccion">Tus datos</div>
     <div class="tarjeta">
-      <div class="fila"><div class="crece"><div class="nombre">${movimientos} movimiento(s) guardado(s)</div>
+      <div class="fila"><div class="crece"><div class="nombre">${plural(movimientos, "movimiento guardado", "movimientos guardados")}</div>
         <div class="sub">${esc(estado.modo === MODOS.SINCRONIZADO ? "en este dispositivo y sincronizados" : `en este dispositivo (${estado.tipoLocal || "—"})`)}</div></div></div>
       <div class="acciones">
         <button class="boton tenue" data-accion="exportar">Descargar respaldo</button>
@@ -1724,7 +1769,7 @@ async function aplicarNomina(archivo) {
       <b>${monto(nomina.neto)}</b><br>
       Percepciones ${monto(nomina.percepciones)} · deducciones ${monto(nomina.deducciones)}<br>
       ${!nomina.ordinaria
-        ? `<span class="marca AJUSTADO">OJO</span> Es una nómina extraordinaria (aguinaldo, PTU o
+        ? `<span class="marca aviso-marca">Ojo</span> Es una nómina extraordinaria (aguinaldo, PTU o
            finiquito). Es dinero de verdad, pero no es lo que entra cada quincena: si la usas
            como ingreso, el disponible de todo el ciclo se infla.`
         : corte === null
@@ -2461,8 +2506,17 @@ const acciones = {
     });
   },
 
-  async "borrar-movimiento"(el) {
-    await guardar(eliminarMovimiento(app.datos, el.dataset.id));
+  "borrar-movimiento"(el) {
+    const movimiento = buscarMovimiento(el.dataset.id);
+    const nombre = movimiento ? `${movimiento.nota || "Este movimiento"} · ${formatear(movimiento.monto)}` : "este movimiento";
+    confirmar({
+      titulo: "¿Borrar este movimiento?",
+      mensaje: `${nombre}. Deja de contar en todos tus números y no se puede deshacer.`,
+      textoBoton: "Sí, bórralo",
+      alConfirmar: async () => {
+        await guardar(eliminarMovimiento(app.datos, el.dataset.id));
+      },
+    });
   },
 
   "rescate-respaldo"() {

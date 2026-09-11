@@ -396,7 +396,7 @@ self.addEventListener("fetch", (evento) => {
 
   // El motor de OCR a su caché, el resto a la de la versión.
   const cajon = direccion.pathname.includes("/ocr/") ? MOTOR : CACHE;
-  evento.respondWith(servir(evento.request, cajon));
+  evento.respondWith(servir(evento, cajon));
 });
 
 /**
@@ -413,7 +413,8 @@ self.addEventListener("fetch", (evento) => {
  * tiene, es el contenido de esta versión. Por eso tampoco se revalida por detrás: sería gastar
  * datos ajenos en confirmar algo que ya se sabe.
  */
-async function servir(peticion, cajon) {
+async function servir(evento, cajon) {
+  const peticion = evento.request;
   const guardado = await caches.match(peticion, { cacheName: cajon });
   if (guardado) return guardado;
 
@@ -422,7 +423,13 @@ async function servir(peticion, cajon) {
     // Solo se guarda lo que salió bien. Cachear un 404 o un 500 es servirlo para siempre.
     if (respuesta && respuesta.ok && respuesta.type === "basic") {
       const copia = respuesta.clone();
-      caches.open(cajon).then((cache) => cache.put(peticion, copia)).catch(() => {});
+      // Atado a la vida del evento, no suelto y ya. El navegador apaga un service worker en
+      // cuanto cree que terminó, y una escritura de caché lanzada por libre se puede quedar a
+      // medias — sin error y sin rastro. En lo grande eso se nota: los 4 MB del motor de OCR se
+      // volverían a bajar cada vez, en el aparato lento, que es justo donde el navegador apaga
+      // antes. Y aun así la respuesta no espera: esto mantiene vivo al worker, no retrasa lo
+      // que ya se devolvió.
+      evento.waitUntil(caches.open(cajon).then((cache) => cache.put(peticion, copia)).catch(() => {}));
     }
     return respuesta;
   } catch (e) {

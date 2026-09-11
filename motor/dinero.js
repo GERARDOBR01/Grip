@@ -107,3 +107,14 @@ export function porcentaje(parte, total) {
   if (!total || total <= 0) return null;
   return Math.round((parte * 100) / total);
 }
+
+/**
+ * Plural de verdad, no «día(s)».
+ *
+ * Vive aquí, en el motor, porque los motivos de los veredictos se escriben en el motor: son
+ * frases que va a leer una persona, no códigos. Y «5 categoría(s) sin tope» es de esas cosas
+ * pequeñas que delatan que lo escribió un programa y no alguien que quería que se entendiera.
+ */
+export function plural(cuantos, singular, muchos) {
+  return `${cuantos} ${cuantos === 1 ? singular : muchos}`;
+}
