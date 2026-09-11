@@ -10,6 +10,8 @@
 //
 //   · Un pago fijo que vence mañana o que ya se pasó. Llegar tarde cuesta dinero de verdad, y
 //     es lo único aquí que un recordatorio evita.
+//   · La fecha límite de una tarjeta, por la misma razón y más caro: no es un recargo, es que
+//     pierdes el periodo sin intereses sobre TODO el saldo. Un día tarde puede costar cientos.
 //   · Avisos que llevan días esperando confirmación, cuando ya son varios. Uno de ayer no es
 //     una urgencia; seis de la semana pasada son cuentas que ya no reflejan tu quincena.
 //
@@ -19,6 +21,7 @@
 // Cada recordatorio trae una `clave` estable: es lo que permite no repetir el mismo dos veces.
 
 import { proximosVencimientos } from "./fijos.js";
+import { proximosLimites } from "./tarjetas.js";
 import { pendientes, sinNadaQueRevisar } from "./bandeja.js";
 import { TIPOS, ESTADOS_BANDEJA, categoriaPorId } from "./modelo.js";
 import { hoyISO, diasEntre } from "./ciclo.js";
@@ -50,6 +53,20 @@ export function recordatoriosDeHoy(datos, iso = hoyISO()) {
           ? `Hoy vence ${v.fijo.nombre}`
           : `Mañana vence ${v.fijo.nombre}`,
       cuerpo: `${formatear(v.monto)}${v.vencido ? ` · venció el ${v.fecha}` : ""}`,
+    });
+  }
+
+  // La tarjeta, con el mismo listón que los fijos: mañana, hoy o ya pasada. Y solo si de
+  // verdad queda algo por pagar — una tarjeta al corriente no es un pendiente.
+  for (const v of proximosLimites(datos, iso, 1)) {
+    salida.push({
+      clave: `tarjeta:${v.tarjeta.id}:${v.fecha}`,
+      titulo: v.vencido
+        ? `Se pasó la fecha de tu ${v.tarjeta.nombre}`
+        : v.dias === 0
+          ? `Hoy vence tu ${v.tarjeta.nombre}`
+          : `Mañana vence tu ${v.tarjeta.nombre}`,
+      cuerpo: `${formatear(v.monto)} para no generar intereses${v.vencido ? ` · venció el ${v.fecha}` : ""}`,
     });
   }
 

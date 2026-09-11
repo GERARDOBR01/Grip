@@ -34,6 +34,8 @@ const MODULOS = [
   "motor/metas.js",
   "motor/fijos.js",
   "motor/deudas.js",
+  "motor/plazos.js",
+  "motor/tarjetas.js", // después de deudas y plazos: proyecta con el uno y carga con el otro
   "motor/reglas-banco.js",
   "motor/campos.js",
   "motor/rapido.js",

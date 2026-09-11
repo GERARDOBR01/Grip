@@ -125,8 +125,14 @@ body {
 .dato { font-variant-numeric: tabular-nums; }
 
 .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.duo .tarjeta { margin: 0; }
-.duo .cifra { font-size: 25px; letter-spacing: -.02em; color: var(--tinta-2); }
+/* `min-width: 0` porque una celda de rejilla no baja de lo que mide su contenido por defecto:
+   con «Cierre proyectado $10,540.00» dentro, las dos columnas crecían más allá de la mitad y
+   la pantalla de Hoy se iba 10 px a la derecha en un teléfono de 390. Y la cifra se encoge
+   con la pantalla en vez de recortarse: un número de dinero a medias no sirve de nada. */
+.duo .tarjeta { margin: 0; min-width: 0; }
+.duo .cifra {
+  font-size: clamp(19px, 6.2vw, 25px); letter-spacing: -.02em; color: var(--tinta-2);
+}
 /* Las dos tarjetas de abajo son APOYO del número grande, no competencia. Cuando todo pesa
    igual, no hay nada grande: solo una pantalla con muchos números. */
 
@@ -185,7 +191,9 @@ button { font: inherit; cursor: pointer; }
 .boton.chico { width: auto; padding: 7px 12px; font-size: 13px; border-radius: 9px; white-space: nowrap; flex: none; }
 .boton.peligro { background: transparent; color: var(--mal); border: 1px solid var(--borde); }
 .boton:active { transform: scale(.985); }
-.acciones { display: flex; gap: 8px; margin-top: 12px; }
+/* Con envoltura: tres botones cortos («Registrar pago · Compra a meses · Editar») no caben en
+   una fila de 390 px, y sin esto se salían de la pantalla en vez de bajar al siguiente renglón. */
+.acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 
 /* --- Navegación inferior --- */
 .nav {
@@ -262,6 +270,10 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 /* Filas de dos líneas: en un teléfono, nombre + monto + botones en la misma línea
    deja el nombre partido a la mitad. */
 .fila.apilada { display: block; }
+/* Y en una fila apilada el subtítulo SÍ puede ocupar dos renglones. El recorte con puntos
+   suspensivos es lo correcto en una lista de un renglón, pero aquí se comía justo la mitad
+   informativa: «van 9 de 12 · faltan $4,000.00 · termina en …». */
+.fila.apilada .sub { white-space: normal; overflow: visible; }
 .fila.apilada .linea { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .fila.apilada .nombre { flex: 1; min-width: 0; }
 .fila.apilada .acciones-fila { display: flex; gap: 8px; justify-content: flex-end; margin-top: 9px; }
@@ -363,10 +375,12 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 
 /* «$0.00 de $30,000.00» — la segunda mitad es contexto, no cifra. Iba dentro de la .cifra con
    un espacio suelto por delante, y el espacio se lo comía el ajuste de línea: salía pegado. */
-.cifra .de {
+.cifra .de, .monto .de {
   font-size: 14px; font-weight: 500; color: var(--tinta-2);
   letter-spacing: 0; margin-left: 8px; white-space: nowrap;
 }
+/* En una fila, el rótulo va más chico que en una cifra grande: compite con el monto. */
+.monto .de { font-size: 11.5px; margin-left: 5px; }
 
 /* El veredicto de cada renglón del presupuesto: va debajo de su fila, alineado con el nombre y
    sin la raya de arriba, que ahí separaría cosas que van juntas. */
@@ -376,3 +390,70 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 /* Lo vencido se ve vencido. Iba del mismo gris que todo lo demás, así que «venció hace 9 días»
    pesaba lo mismo que «vence mañana» — y son cosas muy distintas para quien tiene que pagarlo. */
 .fila .sub.urgente { color: var(--mal); font-weight: 500; }
+
+/* --- Tarjetas de crédito --- */
+
+/* El globo rojo de Tarjetas no cuenta tarjetas: cuenta lo que vence esta semana. */
+.globo.mal { background: var(--mal); }
+
+/* Con siete pestañas, «Presupuesto» ya no cabe sin partirse en un teléfono de 360 px. */
+.nav button { font-size: 10px; padding-left: 2px; padding-right: 2px; }
+@media (max-width: 359px) { .nav button { font-size: 9px; } }
+
+.tarjeta.vencida { border-left: 3px solid var(--mal); }
+.encabezado-tarjeta { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.encabezado-tarjeta .nombre.grande { font-size: 16px; font-weight: 600; }
+.cifra.bien { color: var(--bien); }
+
+/* Los tres números de contexto. Tres y no dos: saldo, lo que aún no se cobra y utilización
+   son la misma pregunta vista por tres lados, y separarlos los volvía ilegibles. */
+.trio { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+.trio .dato { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+/* Tu mes en una línea: los cortes y las fechas límite de todas las tarjetas, en orden. */
+.linea-mes { list-style: none; margin: 0; padding: 0; }
+.linea-mes li {
+  display: flex; align-items: baseline; gap: 9px;
+  padding: 7px 0 7px 14px; position: relative; font-size: 13px;
+}
+.linea-mes li::before {
+  content: ""; position: absolute; left: 0; top: 13px;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--tinta-3);
+}
+.linea-mes li.limite::before { background: var(--acento); }
+.linea-mes li + li::after {
+  content: ""; position: absolute; left: 3px; top: -7px; height: 20px; width: 1px; background: var(--borde);
+}
+.linea-mes b { font-variant-numeric: tabular-nums; min-width: 52px; }
+.linea-mes span { color: var(--tinta-2); }
+
+/* Los últimos cortes: un punto por cada uno. Verde el que se pagó completo, rojo el que no.
+   Seis puntos dicen en un vistazo lo que un párrafo no: si esto lleva meses pasando. */
+.cortes-racha { display: flex; align-items: center; gap: 5px; margin-top: 14px; flex-wrap: wrap; }
+.cortes-racha .punto { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.cortes-racha .punto.bien { background: var(--bien); }
+.cortes-racha .punto.mal { background: var(--mal); }
+.cortes-racha .punto.curso { background: var(--superficie-2); border: 1px solid var(--borde); }
+.cortes-racha .rotulo { margin-left: 5px; }
+
+/* Lo comprometido a meses, mes por mes. La barra BAJA conforme se acaban los plazos, y esa
+   bajada es la respuesta visual a «¿hasta cuándo estoy amarrado?». */
+.calendario-msi { display: flex; align-items: flex-end; gap: 3px; height: 74px; margin: 14px 0 6px; }
+.calendario-msi .mes-msi { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+.calendario-msi .mes-msi i { display: block; background: var(--acento); border-radius: 3px 3px 0 0; min-height: 2px; }
+.calendario-msi .mes-msi span {
+  font-size: 9px; color: var(--tinta-3); text-align: center; margin-top: 4px;
+  overflow: hidden; white-space: nowrap;
+}
+
+/* El bloque de lo que cuesta no pagar el total. Se marca, pero no grita: es información cara,
+   no una alarma, y una alarma permanente se deja de ver a los tres días. */
+.tarjeta.peligro-suave { background: var(--mal-suave); border: 1px solid var(--mal); margin-top: 14px; }
+.tarjeta.peligro-suave .sub { font-size: 12.5px; color: var(--tinta-2); margin-top: 4px; line-height: 1.45; }
+
+details.cargos { margin-top: 14px; }
+details.cargos summary { font-size: 13px; color: var(--acento); cursor: pointer; padding: 4px 0; }
+
+.lista-ayuda { margin: 12px 0 0; padding-left: 18px; font-size: 13px; color: var(--tinta-2); line-height: 1.5; }
+.lista-ayuda li { margin-bottom: 8px; }
+.lista-ayuda b { color: var(--tinta); }

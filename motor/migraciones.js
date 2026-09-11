@@ -36,6 +36,16 @@ export const MIGRACIONES = {
   // y una copia v3 de la app la descartaría al normalizar, en silencio. Con el número arriba,
   // esa copia se NIEGA a abrir el documento en vez de comerse lo que no entiende.
   3: (datos) => ({ ...datos }),
+
+  // v4 → v5: aparecen las tarjetas de crédito y las compras a meses. Un documento de v4 no
+  // tenía ninguna de las dos y no tenerlas es un estado válido: nacen vacías. Ni un movimiento
+  // suyo se toca — los cargos viejos simplemente no están ligados a ninguna tarjeta todavía,
+  // que es la verdad, y ligarlos por adivinanza sería peor que dejarlos sueltos.
+  4: (datos) => ({
+    ...datos,
+    tarjetas: Array.isArray(datos.tarjetas) ? datos.tarjetas : [],
+    plazos: Array.isArray(datos.plazos) ? datos.plazos : [],
+  }),
 };
 
 export function migrar(entrada) {

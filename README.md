@@ -39,10 +39,12 @@ motor/          el cálculo, en JavaScript puro y sin DOM
 | **Presupuesto** | Cuánto va gastado por categoría contra su tope, con semáforo |
 | **Metas** | Cuánto hay que apartar por quincena — y si eso cabe en la capacidad real de ahorro |
 | **Fijos** | Qué vence, qué ya se pagó y cuánto se debe, más las suscripciones que encontró sola en el historial |
+| **Tarjetas** | Cuánto pagar para **no generar intereses** y para cuándo, qué llevas gastado desde el corte —que se cobra hasta el siguiente—, cuánto de tu línea vas usando, cuánto tienes comprometido a meses y hasta cuándo, y cuántos de los últimos seis cortes pagaste completos |
 | **Ajustes** | Ingreso (o **sube tu recibo de nómina** y sale exacto), ciclo, fondo de emergencia, lo que aprendió de ti, avisos, el puente de correo y respaldo en JSON |
 
-Cuatro cosas mueven dinero y todas salen del botón `+`: **gasto**, **ingreso**, **apartar** y
-**retirar**. El `+` abre directo el teclado de efectivo —nueve de cada diez capturas son un
+Cinco cosas mueven dinero: **gasto**, **ingreso**, **apartar**, **retirar** y **pagar una
+tarjeta** —que no es un gasto, sino dinero que cambia de lugar—. Las cuatro primeras salen del
+botón `+`; el pago sale de la tarjeta que se paga. El `+` abre directo el teclado de efectivo —nueve de cada diez capturas son un
 gasto— y los otros tres están a un toque de ahí. Un retiro no borra el apartado original — los dos
 quedan en el historial, porque eso fue lo que pasó.
 
@@ -74,6 +76,18 @@ NO_ALCANZA — requiere $3,750.00 por quincena, capacidad estimada $530.00 — f
 - **Un pago anual no es un gasto mensual.** Cada fijo tiene su frecuencia, y el total sale
   en dos números: el promedio mensualizado (lo que hay que ir apartando) y lo que de verdad
   se paga este mes.
+- **El corte y la fecha límite no son lo mismo, y ahí se pierde el control.** El corte cierra
+  el periodo; la fecha límite es cuándo se paga, semanas después. Lo que compras después del
+  corte no va en ese estado de cuenta. Por eso la cifra grande de Tarjetas no es el saldo —el
+  número que enseñan los bancos, y el equivocado para decidir— sino lo que hay que cubrir para
+  no generar intereses. Y **una tarjeta sin saldo inicial capturado no vale $0.00**: se declara,
+  porque una tarjeta que nace en cero miente desde el primer día.
+- **Un pago a tu tarjeta no es un gasto.** El gasto fue cuando compraste y ya se descontó de
+  aquella quincena; el pago solo baja el saldo. Contarlo dos veces dejaba en rojo la quincena
+  en que se paga la tarjeta sin haber gastado un peso de más.
+- **Una compra a 12 meses no es un gasto de este mes.** Son doce mensualidades, repartidas al
+  centavo para que cuadren con el estado de cuenta, y por fin restadas de tu capacidad de
+  ahorro: "sin intereses" no quiere decir sin costo, quiere decir que ya comprometiste el año.
 - **Un aviso leído a medias no entra a las cuentas.** Todo lo que llega solo espera
   confirmación, y viene con qué tan seguro está el lector y qué tuvo que suponer.
 - **Una preautorización y su cargo final no son dos gastos.** La gasolinera retiene $100 y
@@ -148,8 +162,10 @@ Cuatro formas de llenar la bandeja, todas contra el mismo lector:
 
 ## Que avise sin que la abras
 
-Un aviso cuando venga un pago fijo, y cuando lleves varios correos sin confirmar. Nada más: una
-app que avisa de todo se apaga a los tres días y no se vuelve a encender. Se enciende en
+Un aviso cuando venga un pago fijo, cuando esté por vencer la fecha límite de una tarjeta, y
+cuando lleves varios correos sin confirmar. Nada más: una app que avisa de todo se apaga a los
+tres días y no se vuelve a encender. La tarjeta entra en esa lista corta porque llegar tarde ahí
+no es un recargo: es perder el periodo sin intereses sobre **todo** el saldo. Se enciende en
 Ajustes —nunca se pide el permiso al abrir— y en Android los atajos del ícono llevan directo a
 pegar un aviso o a capturar un gasto.
 
@@ -199,8 +215,8 @@ alguien afloje uno.
 
 ```
 motor/       cálculo puro, sin DOM: dinero, ciclos, presupuesto, ahorro, metas, fijos, deudas,
-             lectura de avisos, recibo de nómina, bandeja, aprendizaje, recurrentes, tendencia,
-             fusión y qué merece un recordatorio
+             tarjetas de crédito y compras a meses, lectura de avisos, recibo de nómina,
+             bandeja, aprendizaje, recurrentes, tendencia, fusión y qué merece un recordatorio
 almacen/     persistencia detrás de 4 métodos, con adaptadores intercambiables
 interfaz/    plantilla, estilos, render, teclado de efectivo, lector de capturas y el logo
 ocr/         el motor que convierte una captura en texto (lo único que no escribimos nosotros)

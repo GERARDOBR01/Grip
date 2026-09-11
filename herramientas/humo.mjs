@@ -940,6 +940,26 @@ await sombra.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
 const idCerrada = await sombra.evaluate(() =>
   document.querySelector('.tarjeta.entrada [data-accion="aceptar-entrada"]').dataset.id);
 
+// Antes de cerrar hay que esperar a que la entrada esté GUARDADA, no solo pintada. La app
+// dibuja de forma optimista —pinta primero y escribe después—, así que el `.tarjeta.entrada`
+// de arriba aparece mientras el guardado sigue en vuelo. Cerrar ahí mataba la escritura, y el
+// resultado era esta prueba fallando por un motivo que no tiene nada que ver con lo que mide:
+// la intención se encolaba bien, pero al reabrir la entrada ya no estaba en la bandeja.
+await esperarA(sombra, () => new Promise((listo) => {
+  const q = indexedDB.open("finanzas", 1);
+  q.onsuccess = () => {
+    const base = q.result;
+    const p = base.transaction("documento", "readonly").objectStore("documento").get("raiz");
+    p.onsuccess = () => {
+      listo(Boolean(p.result && (p.result.bandeja || []).some((e) => e.movimiento
+        && String(e.movimiento.nota || "").includes("FARMACIA"))));
+      base.close();
+    };
+    p.onerror = () => { listo(false); base.close(); };
+  };
+  q.onerror = () => listo(false);
+}));
+
 await sombra.close(); // sin ninguna ventana abierta: la intención tiene que encolarse
 await tocarEnLaSombra("aceptar", idCerrada);
 
@@ -1002,9 +1022,16 @@ await atras.click('[data-accion="leer-aviso"]');
 await atras.waitForSelector(".tarjeta.entrada", { timeout: 8000 });
 // Las categorías son fichas, no un desplegable: aceptar tiene que ser un toque. Se elige la
 // primera que NO sea la que ya viene puesta.
-const otraFicha = await atras.$('.tarjeta.entrada .chip[aria-pressed="false"]');
+//
+// Va con `locator` y no con un manejador de `$()`: la app pinta de forma optimista y vuelve a
+// pintar cuando el guardado aterriza, así que un manejador tomado justo después de que aparece
+// la ficha se queda apuntando a un nodo que ya no está en el documento. Un `locator` se vuelve
+// a resolver en cada intento, que es exactamente lo que hace falta contra una pantalla que se
+// repinta sola.
+const fichasDeCategoria = atras.locator('.tarjeta.entrada .chip[aria-pressed="false"]');
+const otraFicha = (await fichasDeCategoria.count()) > 0;
 if (otraFicha) {
-  await otraFicha.click();
+  await fichasDeCategoria.first().click();
   await atras.waitForTimeout(250);
   await atras.click('.tarjeta.entrada [data-accion="aceptar-entrada"]');
   await atras.waitForTimeout(600);

@@ -18,6 +18,52 @@ import { ESTADOS, SEVERIDADES, veredicto, sinDatos } from "./veredicto.js";
 /** Tope de meses que se proyectan. Más allá de 50 años, el número deja de significar algo. */
 const MESES_MAXIMOS = 600;
 
+/**
+ * Cuánto tardas y cuánto pagas de intereses si sigues abonando lo mismo cada mes.
+ *
+ * Vive aquí suelta —y no dentro de `planDeDeuda`— porque una tarjeta de crédito hace
+ * exactamente la misma pregunta, con los mismos supuestos y el mismo caso terrible al final.
+ * Tenerla dos veces era garantizar que un día se arreglaran distinto.
+ *
+ * Va mes a mes y no con la fórmula cerrada: así es exacto en centavos y se lee igual que se
+ * calcula. `nuncaBaja` es el caso que hunde a la gente — si el abono no cubre ni el interés
+ * del mes, el saldo sube para siempre por mucho que pagues.
+ */
+export function proyectarSaldo({ saldo, tasaAnual, pago }) {
+  if (saldo === null || tasaAnual === null || pago === null) return null;
+
+  const tasaMensual = tasaAnual / 100 / 12;
+  const interesDelMes = Math.round(saldo * tasaMensual);
+  if (pago <= interesDelMes) return { meses: null, intereses: null, interesDelMes, nuncaBaja: true };
+
+  let restante = saldo;
+  let intereses = 0;
+  let meses = 0;
+  let ultimoPago = pago;
+  while (restante > 0 && meses < MESES_MAXIMOS) {
+    const interes = Math.round(restante * tasaMensual);
+    intereses += interes;
+    const debido = restante + interes;
+    // El último pago es solo lo que falta, no el abono completo: nadie paga de más para
+    // liquidar. Restarle el sobrante a los intereses —como se hacía antes— los dejaba por
+    // debajo de lo que de verdad se cobró, y con un saldo chico hasta en NEGATIVO.
+    ultimoPago = Math.min(pago, debido);
+    restante = debido - ultimoPago;
+    meses += 1;
+  }
+
+  return { meses, intereses, interesDelMes, ultimoPago, nuncaBaja: false };
+}
+
+/** "3 años y 2 meses" · "7 meses". Cómo se dice un plazo para que se entienda. */
+export function comoPlazo(meses) {
+  const anios = Math.floor(meses / 12);
+  const sobran = meses % 12;
+  return anios
+    ? `${plural(anios, "año", "años")}${sobran ? ` y ${plural(sobran, "mes", "meses")}` : ""}`
+    : plural(meses, "mes", "meses");
+}
+
 /** El pago mensual de una deuda: el del fijo que la paga, si hay uno ligado. */
 export function pagoMensualDe(datos, deuda) {
   const fijo = datos.fijos.find((f) => f.activo && f.deudaId === deuda.id && f.monto !== null);
@@ -59,11 +105,11 @@ export function planDeDeuda(datos, deuda) {
     };
   }
 
-  const tasaMensual = deuda.tasaAnual / 100 / 12;
-  const interesDelMes = Math.round(base.saldo * tasaMensual);
+  const proyeccion = proyectarSaldo({ saldo: base.saldo, tasaAnual: deuda.tasaAnual, pago: pago.monto });
+  const { meses, intereses, interesDelMes } = proyeccion;
 
   // El caso que hunde a la gente: si el pago no cubre ni el interés, el saldo sube cada mes.
-  if (pago.monto <= interesDelMes) {
+  if (proyeccion.nuncaBaja) {
     return {
       ...salida,
       interesDelMes,
@@ -76,23 +122,7 @@ export function planDeDeuda(datos, deuda) {
     };
   }
 
-  // Mes a mes, sin fórmulas cerradas: es exacto en centavos y se lee igual que se calcula.
-  let saldo = base.saldo;
-  let intereses = 0;
-  let meses = 0;
-  while (saldo > 0 && meses < MESES_MAXIMOS) {
-    const interes = Math.round(saldo * tasaMensual);
-    intereses += interes;
-    saldo = saldo + interes - pago.monto;
-    meses += 1;
-  }
-  if (saldo < 0) intereses += saldo; // el último pago fue de más: no se cobra lo que no se debía
-
-  const anios = Math.floor(meses / 12);
-  const sobran = meses % 12;
-  const cuando = anios
-    ? `${plural(anios, "año", "años")}${sobran ? ` y ${plural(sobran, "mes", "meses")}` : ""}`
-    : plural(meses, "mes", "meses");
+  const cuando = comoPlazo(meses);
 
   return {
     ...salida,
