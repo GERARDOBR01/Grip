@@ -320,3 +320,58 @@ test("un reloj adelantado se detecta y se dice, sin bloquear nada", async () => 
   assert.match(aviso, /adelantado/i);
   assert.ok(datos, "y aun así abre: avisar no es bloquear");
 });
+
+// --- La fila de escritura y la segunda oportunidad ---
+//
+// Escribir es dos `await` seguidos: primero lo local, luego el espejo. Estas pruebas cubren lo
+// que pasa cuando dos guardados se encabalgan, que es lo normal en cuanto entra una
+// notificación mientras alguien captura.
+
+/** Un espejo que tarda distinto según lo que se le manda: es lo que desordena la red de verdad. */
+function espejoLento(demoras) {
+  const llegadas = [];
+  return {
+    llegadas,
+    async cargar() { return null; },
+    async guardar(datos) {
+      const espera = demoras[datos.perfil.ingresoQuincenal] || 0;
+      await new Promise((r) => setTimeout(r, espera));
+      llegadas.push(datos.perfil.ingresoQuincenal);
+    },
+  };
+}
+
+test("dos guardados encabalgados llegan al espejo en el orden en que se pidieron", async () => {
+  // El primero tarda 40 ms y el segundo 0. Sin fila, el segundo adelanta al primero y en el
+  // espejo queda el documento VIEJO al final: gana por sello y se traga el nuevo.
+  const espejo = espejoLento({ 100: 40, 200: 0 });
+  const almacen = await abrirAlmacen({ local: localFalso({}), proveedorSincronizacion: async () => espejo });
+
+  const base = datosVacios("2026-09-09");
+  const uno = almacen.guardar({ ...base, perfil: { ...base.perfil, ingresoQuincenal: 100 } });
+  const dos = almacen.guardar({ ...base, perfil: { ...base.perfil, ingresoQuincenal: 200 } });
+  await Promise.all([uno, dos]);
+
+  assert.deepEqual(espejo.llegadas, [100, 200], "el orden de llegada tiene que ser el de salida");
+});
+
+test("si el disco de este aparato falla pero la cuenta acepta, lo capturado NO se pierde", async () => {
+  const espejo = espejoLento({});
+  const almacen = await abrirAlmacen({
+    local: localFalso({ alGuardar: () => { const e = new Error("lleno"); e.name = "QuotaExceededError"; throw e; } }),
+    proveedorSincronizacion: async () => espejo,
+  });
+
+  // No lanza: el gasto quedó en algún lado. Y el estado lo dice, en vez de fingir normalidad.
+  await almacen.guardar(datosVacios("2026-09-09"));
+  assert.equal(espejo.llegadas.length, 1, "el espejo tenía que intentarse aunque lo local fallara");
+  assert.match(almacen.estado().motivo, /no se pudo guardar en este dispositivo/i);
+  assert.match(almacen.estado().motivo, /a salvo/i);
+});
+
+test("una cuota llena se explica con lo que hay que hacer, no con el nombre de la excepción", async () => {
+  const almacen = await abrirAlmacen({
+    local: localFalso({ alGuardar: () => { const e = new Error("QuotaExceededError"); e.name = "QuotaExceededError"; throw e; } }),
+  });
+  await assert.rejects(() => almacen.guardar(datosVacios("2026-09-09")), /descarga un respaldo/i);
+});

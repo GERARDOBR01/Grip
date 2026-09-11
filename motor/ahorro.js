@@ -7,7 +7,7 @@
 //     catastrófico), así que se declara SIN_DATOS_SUFICIENTES en vez de asustar con un
 //     número inventado. El "disponible" se sigue mostrando: no se pierde nada.
 
-import { prorratear, formatear } from "./dinero.js";
+import { prorratear, formatear, plural } from "./dinero.js";
 import { cicloDe, mesDe, vencimientoEnMes, entre } from "./ciclo.js";
 import { TIPOS, movimientosEntre, suma } from "./modelo.js";
 import { venceEnMes, montoMensualizado } from "./fijos.js";
@@ -114,7 +114,7 @@ export function panelHoy(datos, iso) {
     capacidad = {
       monto: null,
       veredicto: sinDatos(
-        `solo ${ciclo.diasTranscurridos} día(s) de ritmo — muy poco para proyectar el ciclo`,
+        `solo ${plural(ciclo.diasTranscurridos, "día", "días")} de ritmo — muy poco para proyectar el ciclo`,
         `espera al día ${DIAS_MINIMOS_RITMO} del ciclo`,
       ),
     };
@@ -181,7 +181,7 @@ export function capacidadPorCiclo(datos, iso, topesDelMes) {
     : veredicto(
         ESTADOS.AJUSTADO,
         SEVERIDADES.INFO,
-        `${topesDelMes.sinTope.length} categoría(s) sin tope no entran en esta cuenta`,
+        `${plural(topesDelMes.sinTope.length, "categoría", "categorías")} sin tope no ${topesDelMes.sinTope.length === 1 ? "entra" : "entran"} en esta cuenta`,
         { ingreso, fijosCiclo, variableCiclo, sinTope: topesDelMes.sinTope },
       );
 

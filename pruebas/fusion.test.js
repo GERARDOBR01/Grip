@@ -7,8 +7,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fusionar, unirPorId, unirBandeja, unirReglas, difieren } from "../motor/fusion.js";
-import { agregarMovimiento, eliminarMovimiento, marcarBorrado, purgarBorrados, ESTADOS_BANDEJA, TIPOS } from "../motor/modelo.js";
+import { fusionar, unirPorId, unirBandeja, unirReglas, difieren, claveDeTope } from "../motor/fusion.js";
+import { agregarMovimiento, eliminarMovimiento, marcarBorrado, purgarBorrados, normalizar, datosVacios, ESTADOS_BANDEJA, TIPOS } from "../motor/modelo.js";
 import { datosDePrueba } from "./ayuda.js";
 
 function enDispositivo(base, nota, monto, sello) {
@@ -113,4 +113,57 @@ test("difieren reconoce cuándo NO hay que reescribir nada", () => {
   const d = datosDePrueba();
   assert.equal(difieren(d, JSON.parse(JSON.stringify(d))), false);
   assert.equal(difieren(d, { ...d, actualizado: "otro" }), true);
+});
+
+// --- El catálogo y los topes, que se quedaron fuera de la unión más tiempo del que debieron ---
+//
+// Estas cuatro pruebas nacen de una sonda, no de una sospecha: crear una categoría en un
+// aparato y guardar en el otro un minuto después la borraba, y con ella se llevaba el sentido
+// de todos los movimientos que la usaban.
+
+test("una categoría creada en un dispositivo sobrevive a que el otro guarde después", () => {
+  const base = normalizar(datosVacios("2026-09-01"));
+
+  const celular = normalizar({
+    ...base,
+    categorias: [...base.categorias, { id: "gym", nombre: "Gimnasio", emoji: "🏋️", clase: "fija", tope: 50000 }],
+    actualizado: "2026-09-09T10:00:00Z",
+  });
+  const pc = normalizar({ ...base, actualizado: "2026-09-09T10:01:00Z" });
+
+  const unido = fusionar(celular, pc);
+  assert.ok(unido.categorias.some((c) => c.id === "gym"), "la categoría del celular tiene que seguir ahí");
+  assert.equal(unido.categorias.length, base.categorias.length + 1);
+});
+
+test("dos topes puestos el mismo mes en categorías distintas caben los dos", () => {
+  const base = normalizar(datosVacios("2026-09-01"));
+  const celular = normalizar({ ...base, presupuestos: { "2026-09": { super: 300000 } }, actualizado: "2026-09-09T10:00:00Z" });
+  const pc = normalizar({ ...base, presupuestos: { "2026-09": { transporte: 80000 } }, actualizado: "2026-09-09T10:01:00Z" });
+
+  const unido = fusionar(celular, pc);
+  assert.deepEqual(unido.presupuestos["2026-09"], { super: 300000, transporte: 80000 });
+});
+
+test("ante el mismo tope en las dos copias gana el del documento más reciente", () => {
+  const base = normalizar(datosVacios("2026-09-01"));
+  const celular = normalizar({ ...base, presupuestos: { "2026-09": { super: 300000 } }, actualizado: "2026-09-09T10:00:00Z" });
+  const pc = normalizar({ ...base, presupuestos: { "2026-09": { super: 450000 } }, actualizado: "2026-09-09T10:01:00Z" });
+
+  assert.equal(fusionar(celular, pc).presupuestos["2026-09"].super, 450000);
+});
+
+test("un tope quitado a propósito no vuelve desde el otro dispositivo", () => {
+  const base = normalizar(datosVacios("2026-09-01"));
+  const conTope = normalizar({ ...base, presupuestos: { "2026-09": { super: 300000 } }, actualizado: "2026-09-09T10:00:00Z" });
+
+  // En el celular se quita: desaparece la casilla Y queda su lápida. Sin la lápida, la copia
+  // de la PC —que todavía lo tiene— lo devolvería a la vida al unir.
+  const celular = {
+    ...marcarBorrado({ ...conTope, presupuestos: { "2026-09": {} } }, claveDeTope("2026-09", "super"), "2026-09-09T11:00:00Z"),
+    actualizado: "2026-09-09T11:00:00Z",
+  };
+
+  const unido = fusionar(conTope, celular);
+  assert.equal((unido.presupuestos["2026-09"] || {}).super, undefined, "el tope quitado no debe volver");
 });

@@ -5,7 +5,7 @@
 // sin intereses. Inventar una tasa "típica" daría un número creíble y falso, que es
 // exactamente el peor tipo de número en una app de finanzas.
 
-import { prorratear } from "./dinero.js";
+import { prorratear, plural } from "./dinero.js";
 import { mesDe, vencimientoEnMes, diasEntre, sumarMeses, mesesEntre } from "./ciclo.js";
 import { TIPOS, movimientosEntre } from "./modelo.js";
 import { ESTADOS, SEVERIDADES, veredicto, sinDatos } from "./veredicto.js";
@@ -96,7 +96,7 @@ export function totalFijosMensual(datos, iso = null) {
     desconocidos,
     veredicto: desconocidos.length
       ? sinDatos(
-          `${desconocidos.length} fijo(s) sin monto no entran en el total`,
+          `${plural(desconocidos.length, "fijo", "fijos")} sin monto no ${desconocidos.length === 1 ? "entra" : "entran"} en el total`,
           `captura el monto de: ${desconocidos.join(", ")}`,
         )
       : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "todos tus fijos tienen monto", { mensualizado }),

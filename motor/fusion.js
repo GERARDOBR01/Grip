@@ -6,9 +6,11 @@
 // captura sin avisar es el peor fallo que puede tener esta app.
 //
 // La respuesta no necesita CRDTs ni dependencias, porque estos datos tienen la forma correcta:
-// los movimientos y las entradas de bandeja son registros con `id` propio. Unirlos por id no
-// pierde nada. Lo escalar —el perfil, los topes— sí se resuelve por el más reciente, que es lo
-// razonable cuando no hay forma de saber más.
+// casi todo lo que se edita son registros con `id` propio —movimientos, entradas de bandeja,
+// fijos, deudas, metas, categorías— y unirlos por id no pierde nada. Los topes de mes no tienen
+// id, pero sí una casilla estable (mes + categoría), que sirve igual. Solo lo verdaderamente
+// escalar —el perfil— se resuelve por el más reciente, que es lo razonable cuando no hay forma
+// de saber más.
 //
 // Borrar necesita LÁPIDAS. Sin ellas, borrar un movimiento en el celular lo resucitaría al
 // unirse con la copia vieja de la PC, que todavía lo tiene. Una lápida dice "esto se borró a
@@ -99,11 +101,48 @@ export function fusionar(a, b) {
     fijos: unirPorId(viejo.fijos, nuevo.fijos).filter(vivo),
     deudas: unirPorId(viejo.deudas, nuevo.deudas).filter(vivo),
     metas: unirPorId(viejo.metas, nuevo.metas).filter(vivo),
+    // El catálogo también es una lista con id, y se quedó fuera de esta unión más tiempo del
+    // que debió: una categoría creada en el celular desaparecía en cuanto la PC guardaba
+    // después. Y no desaparecía sola — los movimientos que la usaban quedaban apuntando a una
+    // categoría que ya no existe.
+    categorias: unirPorId(viejo.categorias, nuevo.categorias).filter(vivo),
+    presupuestos: unirPresupuestos(viejo.presupuestos, nuevo.presupuestos, enterrados),
     // Las reglas aprendidas se llevan por clave, no por id: gana la más reciente de cada una.
     reglas: unirReglas(viejo.reglas, nuevo.reglas),
     borrados,
     actualizado: selloDe(nuevo),
   };
+}
+
+/**
+ * La lápida de un tope de mes. Los topes no son registros con `id` propio —son una casilla en
+ * un mapa— así que para poder BORRAR uno sin que el otro aparato lo reviva hay que darles un
+ * nombre estable. Éste es.
+ */
+export function claveDeTope(mes, categoriaId) {
+  return `tope:${mes}:${categoriaId}`;
+}
+
+/**
+ * Une los topes por mes y por categoría, no por mes entero.
+ *
+ * La granularidad importa: los topes se editan de uno en uno, así que tomar el mapa del mes
+ * completo del documento más nuevo tiraba el tope que la otra pantalla acababa de poner en
+ * OTRA categoría del mismo mes. Ante la misma casilla en las dos copias gana la más reciente,
+ * que es lo único que se puede saber; y una casilla con lápida no vuelve.
+ */
+export function unirPresupuestos(viejos, nuevos, enterrados = new Set()) {
+  const salida = {};
+  for (const fuente of [viejos || {}, nuevos || {}]) {
+    for (const [mes, topes] of Object.entries(fuente)) {
+      if (!topes || typeof topes !== "object") continue;
+      for (const [categoriaId, tope] of Object.entries(topes)) {
+        if (enterrados.has(claveDeTope(mes, categoriaId))) continue;
+        (salida[mes] = salida[mes] || {})[categoriaId] = tope;
+      }
+    }
+  }
+  return salida;
 }
 
 /** Las reglas se identifican por su comercio. Ante la misma clave, gana la que se usó al último. */
@@ -129,12 +168,12 @@ export const TOLERANCIA_RELOJ_MIN = 5;
 /**
  * ¿Alguna de las dos copias viene sellada en el futuro?
  *
- * Al unir, lo escalar —el perfil, los topes— se toma de la copia con el sello más reciente.
- * Eso da por hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la
- * suposición que rompe cualquier sistema repartido: un celular diez minutos adelantado gana
- * SIEMPRE, aunque haya escrito antes.
+ * Al unir, lo escalar —el perfil— se toma de la copia con el sello más reciente. Eso da por
+ * hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la suposición que
+ * rompe cualquier sistema repartido: un celular diez minutos adelantado gana SIEMPRE, aunque
+ * haya escrito antes.
  *
- * Los movimientos ya no corren peligro —se unen por id y borrar exige lápida—, así que esto
+ * Lo que se une por id o por casilla ya no corre peligro —y borrar exige lápida—, así que esto
  * no bloquea nada: avisa, que es lo que se puede hacer con honestidad. Devuelve los minutos
  * de desfase, o `null` si los relojes van bien.
  */

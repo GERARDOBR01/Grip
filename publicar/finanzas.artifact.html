@@ -16,6 +16,7 @@
   --acento: #1f8a55;
   --acento-suave: #e8f4ed;
   --mal-suave: #fdecea;
+  --ajustado-suave: #fdf1dd;
   --bien: #1f8a55;
   --ajustado: #b26a00;
   --mal: #c0392f;
@@ -37,6 +38,7 @@
     --acento: #30a46c;
     --acento-suave: #16281f;
     --mal-suave: #2a1a1b;
+    --ajustado-suave: #2a2114;
     --bien: #30a46c;
     --ajustado: #f5a524;
     --mal: #e5484d;
@@ -56,6 +58,7 @@
   --acento: #30a46c;
   --acento-suave: #16281f;
   --mal-suave: #2a1a1b;
+  --ajustado-suave: #2a2114;
   --bien: #30a46c;
   --ajustado: #f5a524;
   --mal: #e5484d;
@@ -71,7 +74,9 @@ body {
   color: var(--tinta);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
-  padding-bottom: 132px;
+  /* Sitio para la nav fija Y para el botón flotante, que antes se sentaba encima del último
+     número de la pantalla. Con esto lo de abajo siempre se puede leer y tocar. */
+  padding-bottom: calc(150px + env(safe-area-inset-bottom, 0));
 }
 
 .envoltura { max-width: var(--ancho); margin: 0 auto; padding: 0 16px; }
@@ -101,16 +106,21 @@ body {
   background: var(--superficie); border: 1px solid var(--borde);
   border-radius: var(--radio); padding: 18px; margin-bottom: 12px; box-shadow: var(--sombra);
 }
+.tarjeta.centro { text-align: center; }
 .tarjeta.plana { box-shadow: none; }
+/* Los títulos de sección ordenan, no gritan: eran mayúsculas muy espaciadas y en gris claro,
+   que a la vez se lee peor y llama más la atención que lo que está titulando. */
 .titulo-seccion {
-  font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em;
-  color: var(--tinta-3); font-weight: 600; margin: 22px 4px 10px;
+  font-size: 12.5px; letter-spacing: -.005em;
+  color: var(--tinta-2); font-weight: 600; margin: 26px 4px 10px;
 }
 
 /* --- El número grande --- */
+/* El número que importa en cada pantalla. `tabular-nums` no es un capricho: sin él, cambiar
+   de $9,999 a $10,001 mueve las cifras de sitio y el número parece temblar al actualizarse. */
 .cifra {
-  font-size: 44px; font-weight: 650; letter-spacing: -.03em; line-height: 1.1;
-  font-variant-numeric: tabular-nums; margin: 2px 0 4px; white-space: nowrap;
+  font-size: 46px; font-weight: 660; letter-spacing: -.035em; line-height: 1.05;
+  font-variant-numeric: tabular-nums; margin: 4px 0 6px; white-space: nowrap;
 }
 .cifra.mal { color: var(--mal); }
 .cifra.vacia { color: var(--tinta-3); }
@@ -119,20 +129,32 @@ body {
 
 .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .duo .tarjeta { margin: 0; }
-.duo .cifra { font-size: 26px; }
+.duo .cifra { font-size: 25px; letter-spacing: -.02em; color: var(--tinta-2); }
+/* Las dos tarjetas de abajo son APOYO del número grande, no competencia. Cuando todo pesa
+   igual, no hay nada grande: solo una pantalla con muchos números. */
 
-/* --- Veredictos: el motivo y su fuente, siempre a la vista --- */
+/* --- Veredictos: el motivo, siempre a la vista ---
+   La marca es una pastilla con color, no una palabra en mayúsculas: el color se lee de un
+   vistazo y la palabra se lee en español. El estado del motor viaja en `data-estado`, que es
+   de donde lo leen las pruebas. */
 .veredicto {
-  display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap;
-  font-size: 12.5px; color: var(--tinta-2); margin-top: 10px;
-  padding-top: 10px; border-top: 1px dashed var(--borde);
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  font-size: 12.5px; color: var(--tinta-2); margin-top: 12px;
+  padding-top: 11px; border-top: 1px solid var(--borde);
 }
-.marca { font-weight: 650; font-size: 11px; letter-spacing: .04em; }
-.marca.VA_BIEN { color: var(--bien); }
-.marca.AJUSTADO { color: var(--ajustado); }
-.marca.NO_ALCANZA { color: var(--mal); }
-.marca.SIN_DATOS_SUFICIENTES, .marca.SIN_TOPE { color: var(--tinta-3); }
-.fuente { color: var(--tinta-3); font-size: 10.5px; letter-spacing: .04em; }
+.marca {
+  font-weight: 600; font-size: 11.5px; letter-spacing: .01em;
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  background: var(--superficie-2); color: var(--tinta-2);
+}
+.veredicto .motivo { flex: 1; min-width: 0; }
+.veredicto .pista {
+  width: 100%; color: var(--tinta-2); font-size: 12.5px;
+  padding-left: 11px; border-left: 2px solid var(--borde);
+}
+[data-estado="VA_BIEN"] .marca { background: var(--acento-suave); color: var(--bien); }
+[data-estado="AJUSTADO"] .marca { background: var(--ajustado-suave); color: var(--ajustado); }
+[data-estado="NO_ALCANZA"] .marca { background: var(--mal-suave); color: var(--mal); }
 
 /* --- Filas --- */
 .fila {
@@ -142,12 +164,15 @@ body {
 .fila:last-child { border-bottom: 0; }
 .fila .crece { flex: 1; min-width: 0; }
 .fila .nombre { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fila .sub { font-size: 12px; color: var(--tinta-2); }
+.fila .sub { font-size: 12px; color: var(--tinta-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fila .monto { font-variant-numeric: tabular-nums; font-weight: 550; white-space: nowrap; }
 .emoji { width: 30px; text-align: center; font-size: 17px; flex: none; }
 
-.barra-progreso { height: 5px; border-radius: 3px; background: var(--superficie-2); overflow: hidden; margin-top: 7px; }
-.barra-progreso i { display: block; height: 100%; border-radius: 3px; background: var(--acento); }
+.barra-progreso { height: 6px; border-radius: 999px; background: var(--superficie-2); overflow: hidden; margin-top: 8px; }
+.barra-progreso i {
+  display: block; height: 100%; border-radius: 999px; background: var(--acento);
+  transition: width .35s cubic-bezier(.4, 0, .2, 1);
+}
 .barra-progreso i.AJUSTADO { background: var(--ajustado); }
 .barra-progreso i.NO_ALCANZA { background: var(--mal); }
 .barra-progreso i.SIN_TOPE { background: var(--tinta-3); }
@@ -160,7 +185,7 @@ button { font: inherit; cursor: pointer; }
   padding: 12px 16px; font-weight: 550; font-size: 14.5px; width: 100%;
 }
 .boton.tenue { background: var(--superficie-2); color: var(--tinta); border: 1px solid var(--borde); }
-.boton.chico { width: auto; padding: 7px 12px; font-size: 13px; border-radius: 9px; }
+.boton.chico { width: auto; padding: 7px 12px; font-size: 13px; border-radius: 9px; white-space: nowrap; flex: none; }
 .boton.peligro { background: transparent; color: var(--mal); border: 1px solid var(--borde); }
 .boton:active { transform: scale(.985); }
 .acciones { display: flex; gap: 8px; margin-top: 12px; }
@@ -181,11 +206,14 @@ button { font: inherit; cursor: pointer; }
 .nav button[aria-current="true"] { color: var(--acento); }
 
 .flotante {
-  position: fixed; right: max(16px, calc(50vw - var(--ancho) / 2 + 16px)); bottom: 78px; z-index: 21;
-  width: 54px; height: 54px; border-radius: 50%; border: 0;
-  background: var(--acento); color: #fff; font-size: 27px; line-height: 1;
-  box-shadow: 0 6px 20px rgba(31, 138, 85, .35);
+  position: fixed; right: max(16px, calc(50vw - var(--ancho) / 2 + 16px));
+  bottom: calc(80px + env(safe-area-inset-bottom, 0)); z-index: 21;
+  width: 56px; height: 56px; border-radius: 50%; border: 0;
+  background: var(--acento); color: #fff; font-size: 28px; line-height: 1;
+  box-shadow: 0 8px 24px rgba(31, 138, 85, .32), 0 2px 6px rgba(16, 24, 40, .12);
+  transition: transform .12s ease;
 }
+.flotante:active { transform: scale(.93); }
 
 /* --- Hoja (formularios) --- */
 .velo {
@@ -205,6 +233,13 @@ input, select {
   border: 1px solid var(--borde); border-radius: 10px; padding: 11px 12px;
 }
 input:focus, select:focus { outline: 2px solid var(--acento); outline-offset: -1px; }
+
+/* Foco visible en TODO lo que se puede tocar, no solo en los campos. Sin esto, quien navega
+   con teclado —o con un control de accesibilidad— no tiene forma de saber dónde está. Va con
+   :focus-visible y no con :focus para no dibujarle un aro a quien tocó con el dedo. */
+button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--acento); outline-offset: 2px; border-radius: 8px;
+}
 input.monto { font-size: 30px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; padding: 14px 12px; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
@@ -303,7 +338,47 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
   font-variant-numeric: tabular-nums; transition: transform .06s ease, background .12s ease;
 }
 .tecla:active { transform: scale(.96); background: var(--borde); }
-@media (prefers-reduced-motion: reduce) { .tecla { transition: none; } }
+/* Quien pide menos movimiento lo pide en serio: nada de transiciones, ni siquiera las
+   agradables. Se apagan todas de una vez y no una por una según se vayan añadiendo. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- La pantalla de rescate ---
+   Se pinta cuando dibujar tronó, así que no puede depender de nada de arriba que pudiera ser
+   justo lo que falló. Poca cosa a propósito: un título, una explicación y el botón que se
+   lleva los datos. */
+.rescate { padding-top: 40px; max-width: 520px; }
+.rescate h1 { font-size: 20px; letter-spacing: -.02em; margin: 0 0 10px; }
+.rescate p { color: var(--tinta-2); line-height: 1.6; margin: 0 0 18px; }
+.rescate .acciones { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+.rescate details { color: var(--tinta-3); font-size: 12px; }
+.rescate summary { cursor: pointer; padding: 6px 0; }
+.rescate pre {
+  white-space: pre-wrap; word-break: break-word;
+  background: var(--superficie-2); border: 1px solid var(--borde); border-radius: 10px;
+  padding: 12px; font-size: 11px; line-height: 1.5; max-height: 240px; overflow: auto;
+}
+
+/* «$0.00 de $30,000.00» — la segunda mitad es contexto, no cifra. Iba dentro de la .cifra con
+   un espacio suelto por delante, y el espacio se lo comía el ajuste de línea: salía pegado. */
+.cifra .de {
+  font-size: 14px; font-weight: 500; color: var(--tinta-2);
+  letter-spacing: 0; margin-left: 8px; white-space: nowrap;
+}
+
+/* El veredicto de cada renglón del presupuesto: va debajo de su fila, alineado con el nombre y
+   sin la raya de arriba, que ahí separaría cosas que van juntas. */
+.veredicto.suelto { margin: 0 0 14px 42px; border-top: 0; padding-top: 2px; }
+.marca.aviso-marca { background: var(--ajustado-suave); color: var(--ajustado); }
+
+/* Lo vencido se ve vencido. Iba del mismo gris que todo lo demás, así que «venció hace 9 días»
+   pesaba lo mismo que «vence mañana» — y son cosas muy distintas para quien tiene que pagarlo. */
+.fila .sub.urgente { color: var(--mal); font-weight: 500; }
 </style>
 <div id="raiz"></div>
 <div id="hojas"></div>
@@ -331,6 +406,27 @@ input.monto { font-size: 30px; font-weight: 600; text-align: center; font-varian
 const CENTAVOS = 100;
 
 /**
+ * El techo de un monto: cien mil millones de pesos, en centavos.
+ *
+ * No es un límite de producto, es la frontera de la aritmética. Arriba de 2^53 centavos los
+ * enteros de JavaScript dejan de ser exactos y empiezan a redondearse solos — o sea, justo el
+ * error de coma flotante que la regla de centavos enteros existe para no tener. Un número así
+ * no llega de nadie llevando su gasto: llega de un JSON editado a mano, de un respaldo de otra
+ * app o de un OCR que leyó de más. Se rechaza con `null`, que en este motor quiere decir "no
+ * hay dato", y no es lo mismo que cero.
+ *
+ * El tope está muy por debajo del límite exacto a propósito: deja margen para SUMAR miles de
+ * montos sin acercarse siquiera. Lo que se guarda tiene que aguantar la aritmética de después,
+ * no solo la de entrar.
+ */
+const MONTO_MAXIMO = 100_000_000_000 * CENTAVOS;
+
+/** ¿Este entero de centavos es un monto con el que se puede hacer cuentas exactas? */
+function montoUtilizable(centavos) {
+  return Number.isFinite(centavos) && Math.abs(centavos) <= MONTO_MAXIMO;
+}
+
+/**
  * Convierte lo que escribió una persona a centavos enteros.
  * Acepta "1,234.50", "$1234.5", "1234", 1234.5. Devuelve null si no es un monto —
  * null significa "no hay dato", que no es lo mismo que cero.
@@ -338,7 +434,8 @@ const CENTAVOS = 100;
 function aCentavos(entrada) {
   if (typeof entrada === "number") {
     if (!Number.isFinite(entrada)) return null;
-    return Math.round(entrada * CENTAVOS);
+    const centavos = Math.round(entrada * CENTAVOS);
+    return montoUtilizable(centavos) ? centavos : null;
   }
   if (typeof entrada !== "string") return null;
 
@@ -352,6 +449,7 @@ function aCentavos(entrada) {
 
   let centavos = Number(enteros || "0") * CENTAVOS + Number(tres.slice(0, 2));
   if (Number(tres[2]) >= 5) centavos += 1;
+  if (!montoUtilizable(centavos)) return null;
 
   return negativo ? -centavos : centavos;
 }
@@ -405,6 +503,17 @@ function prorratear(centavos, numerador, denominador) {
 function porcentaje(parte, total) {
   if (!total || total <= 0) return null;
   return Math.round((parte * 100) / total);
+}
+
+/**
+ * Plural de verdad, no «día(s)».
+ *
+ * Vive aquí, en el motor, porque los motivos de los veredictos se escriben en el motor: son
+ * frases que va a leer una persona, no códigos. Y «5 categoría(s) sin tope» es de esas cosas
+ * pequeñas que delatan que lo escribió un programa y no alguien que quería que se entendiera.
+ */
+function plural(cuantos, singular, muchos) {
+  return `${cuantos} ${cuantos === 1 ? singular : muchos}`;
 }
 
 // ═══ motor/veredicto.js ═══
@@ -476,8 +585,22 @@ function horaAhora(fecha = new Date()) {
   return `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * ¿Es una fecha de verdad, en formato "AAAA-MM-DD"?
+ *
+ * Comprueba el CALENDARIO, no solo la forma. Antes solo miraba la forma, y por ahí entraban
+ * `2026-02-31` y `9999-99-99` — de un JSON editado a mano, de un respaldo de otra app, de una
+ * fecha mal leída en una captura. No se quedaban quietos: `cicloDe("2026-02-31")` devolvía
+ * `diasRestantes: -2` sobre un ciclo de 13 días, y con eso "te queda por día" salía negativo;
+ * y un movimiento fechado en el 9999 se sentaba para siempre en lo alto de todas las listas.
+ *
+ * Un dato que no se puede creer se rechaza en la puerta, no se cuela y se administra después.
+ */
 function esISO(iso) {
-  return typeof iso === "string" && /^\d{4}-\d{2}-\d{2}$/.test(iso);
+  if (typeof iso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  const [anio, mes, dia] = iso.split("-").map(Number);
+  if (anio < 1900 || mes < 1 || mes > 12) return false;
+  return dia >= 1 && dia <= diasEnMes(anio, mes);
 }
 
 function partes(iso) {
@@ -493,7 +616,6 @@ function diasEnMes(anio, mes) {
   return new Date(anio, mes, 0).getDate();
 }
 
-/** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
 /**
  * La hora del reloj como "HH:MM", o "" si no es una hora válida.
  * Se guarda a propósito sin segundos ni zona: lo que importa es si gastas a las 2 de la tarde
@@ -517,6 +639,7 @@ function diaDeSemana(iso) {
   return new Date(Date.UTC(anio, mes - 1, dia)).getUTCDay();
 }
 
+/** "AAAA-MM" — la llave con la que se agrupan los movimientos. */
 function mesDe(iso) {
   return iso.slice(0, 7);
 }
@@ -591,14 +714,19 @@ function cicloDe(iso, cortes = [15]) {
   const inicio = armarISO(anio, mes, inicioDia);
   const fin = armarISO(anio, mes, finDia);
   const dias = finDia - inicioDia + 1;
-  const transcurridos = dia - inicioDia + 1;
+
+  // Cinturón además del tirante. `esISO` ya no deja pasar un 31 de febrero, pero `cicloDe`
+  // también se llama con fechas armadas al vuelo, y de lo que sale de aquí se dividen los
+  // números que la app enseña en grande. Un "te queda por día" negativo, o un ciclo donde van
+  // más días de los que tiene, no es un número raro: es una resta que miente en pantalla.
+  const transcurridos = Math.min(Math.max(dia - inicioDia + 1, 1), dias);
 
   return {
     inicio,
     fin,
     dias,
     diasTranscurridos: transcurridos,
-    diasRestantes: finDia - dia + 1,
+    diasRestantes: Math.min(Math.max(finDia - dia + 1, 1), dias),
     indice,
     total: limites.length + 1,
     etiqueta: limites.length === 0 ? "mes" : `quincena ${indice + 1}`,
@@ -723,7 +851,12 @@ function idNuevo(prefijo = "m") {
 
 function entero(valor, porDefecto = null) {
   const n = typeof valor === "string" ? aCentavos(valor) : valor;
-  return Number.isFinite(n) ? Math.trunc(n) : porDefecto;
+  // El techo se aplica también aquí y no solo en `aCentavos`: por este camino entran los
+  // NÚMEROS de un JSON importado, que no pasan por el lector de texto. Un monto que ya no se
+  // puede sumar sin redondearse solo no es un monto: es la ausencia de uno.
+  if (!Number.isFinite(n)) return porDefecto;
+  const truncado = Math.trunc(n);
+  return montoUtilizable(truncado) ? truncado : porDefecto;
 }
 
 /**
@@ -1106,9 +1239,11 @@ function migrar(entrada) {
 // captura sin avisar es el peor fallo que puede tener esta app.
 //
 // La respuesta no necesita CRDTs ni dependencias, porque estos datos tienen la forma correcta:
-// los movimientos y las entradas de bandeja son registros con `id` propio. Unirlos por id no
-// pierde nada. Lo escalar —el perfil, los topes— sí se resuelve por el más reciente, que es lo
-// razonable cuando no hay forma de saber más.
+// casi todo lo que se edita son registros con `id` propio —movimientos, entradas de bandeja,
+// fijos, deudas, metas, categorías— y unirlos por id no pierde nada. Los topes de mes no tienen
+// id, pero sí una casilla estable (mes + categoría), que sirve igual. Solo lo verdaderamente
+// escalar —el perfil— se resuelve por el más reciente, que es lo razonable cuando no hay forma
+// de saber más.
 //
 // Borrar necesita LÁPIDAS. Sin ellas, borrar un movimiento en el celular lo resucitaría al
 // unirse con la copia vieja de la PC, que todavía lo tiene. Una lápida dice "esto se borró a
@@ -1198,11 +1333,48 @@ function fusionar(a, b) {
     fijos: unirPorId(viejo.fijos, nuevo.fijos).filter(vivo),
     deudas: unirPorId(viejo.deudas, nuevo.deudas).filter(vivo),
     metas: unirPorId(viejo.metas, nuevo.metas).filter(vivo),
+    // El catálogo también es una lista con id, y se quedó fuera de esta unión más tiempo del
+    // que debió: una categoría creada en el celular desaparecía en cuanto la PC guardaba
+    // después. Y no desaparecía sola — los movimientos que la usaban quedaban apuntando a una
+    // categoría que ya no existe.
+    categorias: unirPorId(viejo.categorias, nuevo.categorias).filter(vivo),
+    presupuestos: unirPresupuestos(viejo.presupuestos, nuevo.presupuestos, enterrados),
     // Las reglas aprendidas se llevan por clave, no por id: gana la más reciente de cada una.
     reglas: unirReglas(viejo.reglas, nuevo.reglas),
     borrados,
     actualizado: selloDe(nuevo),
   };
+}
+
+/**
+ * La lápida de un tope de mes. Los topes no son registros con `id` propio —son una casilla en
+ * un mapa— así que para poder BORRAR uno sin que el otro aparato lo reviva hay que darles un
+ * nombre estable. Éste es.
+ */
+function claveDeTope(mes, categoriaId) {
+  return `tope:${mes}:${categoriaId}`;
+}
+
+/**
+ * Une los topes por mes y por categoría, no por mes entero.
+ *
+ * La granularidad importa: los topes se editan de uno en uno, así que tomar el mapa del mes
+ * completo del documento más nuevo tiraba el tope que la otra pantalla acababa de poner en
+ * OTRA categoría del mismo mes. Ante la misma casilla en las dos copias gana la más reciente,
+ * que es lo único que se puede saber; y una casilla con lápida no vuelve.
+ */
+function unirPresupuestos(viejos, nuevos, enterrados = new Set()) {
+  const salida = {};
+  for (const fuente of [viejos || {}, nuevos || {}]) {
+    for (const [mes, topes] of Object.entries(fuente)) {
+      if (!topes || typeof topes !== "object") continue;
+      for (const [categoriaId, tope] of Object.entries(topes)) {
+        if (enterrados.has(claveDeTope(mes, categoriaId))) continue;
+        (salida[mes] = salida[mes] || {})[categoriaId] = tope;
+      }
+    }
+  }
+  return salida;
 }
 
 /** Las reglas se identifican por su comercio. Ante la misma clave, gana la que se usó al último. */
@@ -1228,12 +1400,12 @@ const TOLERANCIA_RELOJ_MIN = 5;
 /**
  * ¿Alguna de las dos copias viene sellada en el futuro?
  *
- * Al unir, lo escalar —el perfil, los topes— se toma de la copia con el sello más reciente.
- * Eso da por hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la
- * suposición que rompe cualquier sistema repartido: un celular diez minutos adelantado gana
- * SIEMPRE, aunque haya escrito antes.
+ * Al unir, lo escalar —el perfil— se toma de la copia con el sello más reciente. Eso da por
+ * hecho que los relojes de los dos aparatos dicen más o menos lo mismo, y es la suposición que
+ * rompe cualquier sistema repartido: un celular diez minutos adelantado gana SIEMPRE, aunque
+ * haya escrito antes.
  *
- * Los movimientos ya no corren peligro —se unen por id y borrar exige lápida—, así que esto
+ * Lo que se une por id o por casilla ya no corre peligro —y borrar exige lápida—, así que esto
  * no bloquea nada: avisa, que es lo que se puede hacer con honestidad. Devuelve los minutos
  * de desfase, o `null` si los relojes van bien.
  */
@@ -1464,7 +1636,7 @@ function panelHoy(datos, iso) {
     capacidad = {
       monto: null,
       veredicto: sinDatos(
-        `solo ${ciclo.diasTranscurridos} día(s) de ritmo — muy poco para proyectar el ciclo`,
+        `solo ${plural(ciclo.diasTranscurridos, "día", "días")} de ritmo — muy poco para proyectar el ciclo`,
         `espera al día ${DIAS_MINIMOS_RITMO} del ciclo`,
       ),
     };
@@ -1531,7 +1703,7 @@ function capacidadPorCiclo(datos, iso, topesDelMes) {
     : veredicto(
         ESTADOS.AJUSTADO,
         SEVERIDADES.INFO,
-        `${topesDelMes.sinTope.length} categoría(s) sin tope no entran en esta cuenta`,
+        `${plural(topesDelMes.sinTope.length, "categoría", "categorías")} sin tope no ${topesDelMes.sinTope.length === 1 ? "entra" : "entran"} en esta cuenta`,
         { ingreso, fijosCiclo, variableCiclo, sinTope: topesDelMes.sinTope },
       );
 
@@ -1878,7 +2050,7 @@ function totalFijosMensual(datos, iso = null) {
     desconocidos,
     veredicto: desconocidos.length
       ? sinDatos(
-          `${desconocidos.length} fijo(s) sin monto no entran en el total`,
+          `${plural(desconocidos.length, "fijo", "fijos")} sin monto no ${desconocidos.length === 1 ? "entra" : "entran"} en el total`,
           `captura el monto de: ${desconocidos.join(", ")}`,
         )
       : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK, "todos tus fijos tienen monto", { mensualizado }),
@@ -2055,7 +2227,9 @@ function planDeDeuda(datos, deuda) {
 
   const anios = Math.floor(meses / 12);
   const sobran = meses % 12;
-  const cuando = anios ? `${anios} año(s)${sobran ? ` y ${sobran} mes(es)` : ""}` : `${meses} mes(es)`;
+  const cuando = anios
+    ? `${plural(anios, "año", "años")}${sobran ? ` y ${plural(sobran, "mes", "meses")}` : ""}`
+    : plural(meses, "mes", "meses");
 
   return {
     ...salida,
@@ -4387,6 +4561,23 @@ function operar(bd, modo, accion) {
   });
 }
 
+/**
+ * Se entera de que una conexión dejó de servir.
+ *
+ * `versionchange` lo dispara otra pestaña que abre la base con una versión más nueva: hay que
+ * soltarla ahí mismo, porque si no, la otra pestaña se queda bloqueada esperando a ésta.
+ * `close` lo dispara el navegador cuando la cierra por su cuenta.
+ */
+function vigilar(bd, alCaer) {
+  try {
+    bd.onversionchange = () => {
+      try { bd.close(); } catch (e) {}
+      alCaer();
+    };
+    bd.onclose = alCaer;
+  } catch (e) {}
+}
+
 /** localStorage no basta con que exista: tiene que dejar escribir (modo privado, cuotas). */
 function localStorageUtilizable() {
   const ls = leerGlobal("localStorage");
@@ -4431,6 +4622,37 @@ async function abrirLocal() {
 
   if (bd) {
     const persistente = await pedirPersistencia();
+
+    // La conexión se guarda en una caja, no en una constante, porque se puede caer: otra
+    // pestaña sube la versión de la base, el navegador desaloja el origen, el sistema cierra
+    // la conexión por inactividad. Antes se tomaba UNA vez al abrir la app, y a partir de esa
+    // caída todo guardado tronaba para siempre — con la app aparentemente viva, capturando
+    // gastos que ya no llegaban a ningún lado.
+    let conexion = bd;
+    vigilar(conexion, () => { conexion = null; });
+
+    /** Opera contra la base, y si la conexión se cayó, la vuelve a abrir y lo intenta otra vez. */
+    async function conConexion(modo, accion) {
+      if (!conexion) {
+        conexion = await abrirIndexedDB();
+        if (conexion) vigilar(conexion, () => { conexion = null; });
+      }
+      if (!conexion) throw new Error("Se perdió la conexión con el almacenamiento de este navegador.");
+
+      try {
+        return await operar(conexion, modo, accion);
+      } catch (e) {
+        // Un solo reintento, y solo tras soltar la conexión: si el segundo también falla, el
+        // problema no es la conexión —es espacio, permisos o disco— y eso hay que decirlo, no
+        // reintentarlo en un bucle.
+        try { conexion.close(); } catch (cerrar) {}
+        conexion = await abrirIndexedDB();
+        if (!conexion) throw e;
+        vigilar(conexion, () => { conexion = null; });
+        return await operar(conexion, modo, accion);
+      }
+    }
+
     return {
       tipo: "indexeddb",
       duradero: true,
@@ -4440,16 +4662,16 @@ async function abrirLocal() {
       motivo: null,
       async cargar() {
         try {
-          return (await operar(bd, "readonly", (s) => s.get(LLAVE))) || null;
+          return (await conConexion("readonly", (s) => s.get(LLAVE))) || null;
         } catch (e) {
           return null;
         }
       },
       async guardar(datos) {
-        await operar(bd, "readwrite", (s) => s.put(datos, LLAVE));
+        await conConexion("readwrite", (s) => s.put(datos, LLAVE));
       },
       async borrar() {
-        await operar(bd, "readwrite", (s) => s.delete(LLAVE));
+        await conConexion("readwrite", (s) => s.delete(LLAVE));
       },
     };
   }
@@ -4546,6 +4768,41 @@ async function abrirAlmacen(opciones = {}) {
     estado.motivo = motivo;
   }
 
+  /**
+   * Una sola fila para escribir, y en orden de llegada.
+   *
+   * Escribir es `await` dos veces: primero lo local, luego el espejo. Sin fila, dos guardados
+   * que se encabalgan —aceptar un cargo desde la sombra mientras se está guardando un gasto,
+   * que es exactamente lo que pasa cuando llega una notificación— pueden llegar al espejo al
+   * revés, porque el espejo va por la red y la red no respeta el orden en que se le habló. El
+   * documento viejo aterriza al último, gana por sello, y en la siguiente sincronización se
+   * traga el nuevo. No es teórico: es la forma en que un sistema con dos copias pierde datos.
+   *
+   * La fila no se rompe cuando un trabajo falla: el siguiente entra igual.
+   */
+  let fila = Promise.resolve();
+  function enFila(trabajo) {
+    const turno = fila.then(trabajo, trabajo);
+    fila = turno.then(() => {}, () => {});
+    return turno;
+  }
+
+  /**
+   * Traduce el fallo de un disco a algo con lo que alguien pueda hacer algo.
+   *
+   * Se mira el NOMBRE de la excepción, no su texto. Adivinar por el mensaje ("cuota", "space")
+   * traduce mal cualquier error que solo mencione la palabra, y un diagnóstico equivocado es
+   * peor que uno crudo: manda a borrar meses a quien tenía otro problema. Firefox usa su
+   * propio nombre para lo mismo, y por eso están los dos.
+   */
+  function explicar(error) {
+    const nombre = (error && error.name) || "";
+    if (nombre === "QuotaExceededError" || nombre === "NS_ERROR_DOM_QUOTA_REACHED") {
+      return "Ya no cabe más en este navegador. Descarga un respaldo y borra los meses que ya no consultes.";
+    }
+    return (error && error.message) || "el almacenamiento rechazó la escritura";
+  }
+
   return {
     estado: () => ({ ...estado }),
 
@@ -4587,14 +4844,25 @@ async function abrirAlmacen(opciones = {}) {
       const unido = normalizar(fusionar(datosLocal, datosEspejo));
 
       // El que iba atrás se pone al día. `difieren` evita reescribir cuando ya decían lo mismo.
-      if (difieren(unido, datosLocal)) await local.guardar(unido);
-      if (espejo && difieren(unido, datosEspejo)) {
-        try {
-          await espejo.guardar(unido);
-        } catch (e) {
-          degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+      await enFila(async () => {
+        // Por la fila también, y no por prolijidad: abrir y guardar pueden encabalgarse —el
+        // espejo avisa de un cambio justo mientras se está capturando— y esta reescritura es
+        // un documento ENTERO. Fuera de orden, pisa lo que se acaba de guardar.
+        if (difieren(unido, datosLocal)) {
+          try {
+            await local.guardar(unido);
+          } catch (e) {
+            degradar(`No se pudo dejar la copia unida en este dispositivo: ${explicar(e)}`);
+          }
         }
-      }
+        if (espejo && difieren(unido, datosEspejo)) {
+          try {
+            await espejo.guardar(unido);
+          } catch (e) {
+            degradar("Se abrió la copia unida, pero no se pudo escribir de vuelta en la sincronizada.");
+          }
+        }
+      });
 
       // Un reloj adelantado hace que gane el aparato equivocado en todo lo escalar. No se
       // bloquea nada por eso —los movimientos ya se unen por id—, pero sí se dice.
@@ -4620,18 +4888,50 @@ async function abrirAlmacen(opciones = {}) {
       }
 
       const sello = { ...normalizar(datos), actualizado: new Date().toISOString() };
-      await local.guardar(sello); // primero lo seguro
 
-      if (espejo) {
+      return enFila(async () => {
+        // Lo local primero, que es lo seguro. Pero que falle ya NO cancela el intento en el
+        // espejo: si el disco de este aparato está lleno y la cuenta sí acepta la escritura,
+        // el gasto está a salvo — y quedarse sin intentarlo habría sido perderlo por orgullo
+        // del orden. Se guarda donde se pueda, y se dice exactamente dónde quedó.
+        let falloLocal = null;
         try {
-          await espejo.guardar(sello);
-          estado.motivo = null;
-          estado.modo = MODOS.SINCRONIZADO;
+          await local.guardar(sello);
         } catch (e) {
-          degradar("Se guardó en este dispositivo, pero no se pudo sincronizar.");
+          falloLocal = e;
         }
-      }
-      return sello;
+
+        let enEspejo = false;
+        if (espejo) {
+          try {
+            await espejo.guardar(sello);
+            enEspejo = true;
+          } catch (e) {
+            enEspejo = false;
+          }
+        }
+
+        if (!falloLocal) {
+          if (espejo && enEspejo) {
+            estado.motivo = null;
+            estado.modo = MODOS.SINCRONIZADO;
+          } else if (espejo) {
+            degradar("Se guardó en este dispositivo, pero no se pudo sincronizar.");
+          }
+          return sello;
+        }
+
+        if (enEspejo) {
+          estado.modo = MODOS.SINCRONIZADO;
+          estado.motivo =
+            `No se pudo guardar en este dispositivo (${explicar(falloLocal)}), pero sí en tu cuenta: ` +
+            "lo capturado está a salvo y vuelve al abrir en cualquier lado.";
+          return sello;
+        }
+
+        // Ni aquí ni allá. Esto sí se lanza: la pantalla revierte y lo dice.
+        throw new Error(explicar(falloLocal));
+      });
     },
 
     suscribir(alCambiar) {
@@ -4640,7 +4940,7 @@ async function abrirAlmacen(opciones = {}) {
     },
 
     async borrarTodo() {
-      await local.borrar();
+      await enFila(() => local.borrar());
       estado.bloqueado = false; // borrar es una decisión explícita: destraba la escritura
       estado.motivo = local.motivo || null;
     },
@@ -5269,6 +5569,32 @@ const ANCHO_MINIMO = 1000;
 /** Y arriba de esto no se gana precisión, solo segundos de espera. */
 const ANCHO_MAXIMO = 2200;
 
+/**
+ * El techo de PÍXELES, que es el que de verdad protege.
+ *
+ * Un lienzo se reserva entero en memoria —cuatro bytes por píxel— y los navegadores tienen su
+ * propio tope: Safari en móvil no da lienzos de más de 16.7 millones de píxeles y falla sin
+ * decir por qué. El ancho solo no basta para quedarse por debajo: una captura larga de Android
+ * —de esas que se hacen deslizando, 1080 de ancho por 12000 de alto— es angosta y aun así pide
+ * casi 13 millones. O sea que el caso que más se rompía era justo el más común.
+ */
+const AREA_MAXIMA = 8_000_000;
+
+/**
+ * Por debajo de esta reducción, el texto de la captura ya no se lee — ni el OCR ni nadie.
+ * Llegado ese punto no se entrega una lectura mala haciéndola pasar por buena: se dice que la
+ * imagen es demasiado grande y qué hacer al respecto.
+ */
+const ESCALA_MINIMA_UTIL = 0.45;
+
+/**
+ * Lo que se espera antes de dar por colgado el motor.
+ *
+ * Sin plazo, un worker que se traba deja «leyendo…» para siempre y la única salida es cerrar
+ * la app. Es de sobra para la primera vez, que es la lenta: son 4 MB de motor que arrancar.
+ */
+const PLAZO_MS = 60000;
+
 // El motor pesa 4 MB y tarda en arrancar: se carga UNA vez y se queda para las siguientes.
 let motorEnCurso = null;
 
@@ -5334,6 +5660,37 @@ function umbralDeOtsu(histograma, total) {
 }
 
 /**
+ * Cuánto hay que escalar esta imagen antes de leerla, o `null` si no hay escala que sirva.
+ *
+ * Va aparte porque es aritmética y punto: así se prueba exacta y al instante, sin arrancar
+ * cuatro megas de motor para comprobar una división. Dos reglas, y la segunda manda:
+ *
+ *   1. Por ANCHO: se amplía lo angosto —una captura recortada sale borrosa si no— y se reduce
+ *      lo enorme. La versión anterior de esta cuenta solo sabía ampliar: `ANCHO_MAXIMO` estaba
+ *      escrito pero no se aplicaba nunca, así que una foto de 4000 px se procesaba entera,
+ *      lenta y sin ganar una letra.
+ *   2. Por ÁREA, que es la que de verdad protege. Una captura de las que se hacen deslizando
+ *      —1080 de ancho, 12000 de alto— pasa el filtro de ancho sin despeinarse y aun así pide
+ *      casi 13 millones de píxeles, por encima de lo que da un lienzo en Safari móvil.
+ *
+ * Y si para caber hubiera que encoger tanto que las letras dejen de leerse, devuelve `null`
+ * en vez de una escala inservible: más vale pedir que recorte la captura que entregarle una
+ * lectura inventada. Es la regla 2 del proyecto aplicada a los píxeles.
+ */
+function escalaPara(ancho, alto) {
+  if (!(ancho > 0) || !(alto > 0)) return null;
+
+  let escala = 1;
+  if (ancho < ANCHO_MINIMO) escala = ANCHO_MINIMO / ancho;
+  else if (ancho > ANCHO_MAXIMO) escala = ANCHO_MAXIMO / ancho;
+
+  const area = ancho * alto * escala * escala;
+  if (area > AREA_MAXIMA) escala *= Math.sqrt(AREA_MAXIMA / area);
+
+  return escala < ESCALA_MINIMA_UTIL ? null : escala;
+}
+
+/**
  * Deja la imagen como al OCR le gusta: gris, del tamaño adecuado y en blanco y negro.
  *
  * Y siempre con la tinta oscura sobre fondo claro. Media México trae el teléfono en modo
@@ -5343,10 +5700,15 @@ function umbralDeOtsu(histograma, total) {
 async function prepararImagen(archivo) {
   const mapa = await createImageBitmap(archivo);
 
-  const escala = Math.min(
-    Math.max(ANCHO_MINIMO / mapa.width, 1),
-    Math.max(ANCHO_MAXIMO / mapa.width, 1),
-  );
+  const escala = escalaPara(mapa.width, mapa.height);
+  if (escala === null) {
+    mapa.close();
+    throw new Error(
+      "esa captura es demasiado grande para leerla entera. Recórtala a la parte del aviso " +
+      "—el monto y el comercio— y vuelve a intentarlo.",
+    );
+  }
+
   const ancho = Math.round(mapa.width * escala);
   const alto = Math.round(mapa.height * escala);
 
@@ -5405,16 +5767,31 @@ async function leerImagen(archivo, alAvanzar = () => {}) {
   }
 
   let cliente = null;
+  let seColgo = false;
+
   try {
-    alAvanzar("preparando");
-    const imagen = await prepararImagen(archivo);
+    const trabajo = (async () => {
+      alAvanzar("preparando");
+      const imagen = await prepararImagen(archivo);
 
-    alAvanzar("arrancando");
-    cliente = await arrancarMotor();
+      alAvanzar("arrancando");
+      cliente = await arrancarMotor();
 
-    alAvanzar("leyendo");
-    await cliente.loadImage(imagen);
-    const texto = await cliente.getText();
+      alAvanzar("leyendo");
+      await cliente.loadImage(imagen);
+      return await cliente.getText();
+    })();
+
+    // El plazo corre contra TODO el trabajo, no contra un paso. Un worker de wasm que se traba
+    // no lanza ni contesta: se queda callado, y sin esto la pantalla se queda en «leyendo…»
+    // hasta que alguien cierra la app. Un botón que no vuelve nunca es peor que uno que falla.
+    const texto = await Promise.race([
+      trabajo,
+      new Promise((_, romper) => setTimeout(() => {
+        seColgo = true;
+        romper(new Error("el lector tardó demasiado y se canceló"));
+      }, PLAZO_MS)),
+    ]);
 
     // Se suelta la imagen del motor en cuanto se leyó: el wasm no devuelve memoria al sistema
     // y una captura de 2200px no es poca cosa.
@@ -5422,8 +5799,28 @@ async function leerImagen(archivo, alAvanzar = () => {}) {
 
     return { texto: String(texto || "").trim(), error: null };
   } catch (e) {
+    await soltarMotor(cliente, seColgo);
     return { texto: "", error: `No pude leer la imagen: ${e.message}` };
   }
+}
+
+/**
+ * Deja el motor en un estado del que se pueda volver a intentar.
+ *
+ * Si solo falló la lectura, basta con soltar la imagen: el motor sigue bueno y arrancarlo otra
+ * vez cuesta 4 MB y varios segundos. Si se COLGÓ, no: ese worker ya no contesta y guardarlo
+ * significa que el siguiente intento también se cuelgue. Se tira y el próximo arranca limpio.
+ */
+async function soltarMotor(cliente, seColgo) {
+  if (!cliente) return;
+  try {
+    if (seColgo) {
+      motorEnCurso = null;
+      if (typeof cliente.destroy === "function") await cliente.destroy();
+    } else {
+      await cliente.clearImage();
+    }
+  } catch (e) {}
 }
 
 // ═══ interfaz/ui.js ═══
@@ -5435,6 +5832,7 @@ async function leerImagen(archivo, alAvanzar = () => {}) {
 // Regla de la pantalla: ningún número aparece sin su contexto. Si el motor devolvió
 // SIN_DATOS_SUFICIENTES, aquí se ve el hueco declarado con lo que falta capturar — nunca
 // un cero disfrazado de dato.
+
 
 
 
@@ -5469,6 +5867,9 @@ const app = {
   hora: horaAhora(),
   aviso: null,
   bloqueado: false,
+  // Se enciende cuando dibujar tronó y quedó puesta la pantalla de rescate. Mientras esté
+  // encendida no se repinta nada: repintar borraría el único botón que te saca los datos.
+  rescatada: false,
   filtro: { texto: "", tipo: "" },
   // Un ofrecimiento pendiente de contestar: `{ clave, categoriaId, comercio, cuantos }`.
   // Vive solo en la pantalla. Ignorarlo y cerrar la app no cambia nada, que es la idea.
@@ -5478,6 +5879,10 @@ const app = {
   eleccion: {},
   // Cuántas entradas de la bandeja se pintan. Sube cuando la persona pide ver más.
   verBandeja: 25,
+  // Y cuántas FILAS del historial. A tres años de uso son más de cuatro mil movimientos, y
+  // pintarlos todos costaba casi un segundo por tecla en el buscador de un Android de gama
+  // media. Nadie mira cuatro mil filas: se miran las de arriba y se busca el resto.
+  verHistorial: 0,
   // Lo que lleva escrito en la caja de pegar. Vive en el estado y no solo en el DOM porque
   // cualquier re-dibujo —un guardado, o que otro dispositivo escriba— lo borraría a media
   // captura. Perder lo que alguien acaba de pegar es la clase de detalle que hace que una
@@ -5493,6 +5898,9 @@ const VISTAS = [
   { id: "fijos", icono: "⏱", nombre: "Fijos" },
   { id: "ajustes", icono: "⚙", nombre: "Ajustes" },
 ];
+
+/** Cuántas filas del historial se pintan de una vez, y de cuántas en cuántas crece. */
+const FILAS_HISTORIAL = 80;
 
 const MESES_CORTOS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -5583,13 +5991,45 @@ function fechaLarga(iso) {
   return `${d} de ${MESES[m - 1]} de ${a}`;
 }
 
-/** El veredicto tal como lo devolvió el motor: estado, motivo y fuente. */
+/**
+ * Cómo se llama cada veredicto cuando lo lee una persona.
+ *
+ * El motor los maneja como constantes —VA_BIEN, SIN_DATOS_SUFICIENTES— porque un enum es lo
+ * correcto en el código y las pruebas comprueban contra él. Lo que no era correcto es pintarlo
+ * tal cual en la pantalla: SCREAMING_SNAKE_CASE sobre un número de dinero se lee como un error
+ * de sistema, no como una respuesta. Y el peor de todos era el más importante: el día que la
+ * app no sabe algo, decirlo con «SIN_DATOS_SUFICIENTES» convierte su mejor cualidad —admitir
+ * que no sabe— en algo que parece que se rompió.
+ *
+ * El enum no se va: viaja en `data-estado`, donde las pruebas lo siguen leyendo y donde no se
+ * lo tiene que comer nadie.
+ */
+const NOMBRE_VEREDICTO = {
+  VA_BIEN: "Va bien",
+  AJUSTADO: "Ajustado",
+  NO_ALCANZA: "No alcanza",
+  SIN_TOPE: "Sin tope",
+  SIN_DATOS_SUFICIENTES: "Todavía no sé",
+};
+
 function veredictoHTML(v) {
   if (!v) return "";
-  const falta = v.datos && v.datos.falta ? `<div class="rotulo" style="width:100%">→ ${esc(v.datos.falta)}</div>` : "";
-  return `<div class="veredicto"><span class="marca ${esc(v.estado)}">${esc(v.estado)}</span>
-    <span>${esc(v.motivo)}</span><span class="fuente">fuente: ${esc(v.fuente)}</span>${falta}</div>`;
+
+  // `datos.falta` quiere decir dos cosas distintas según quién arme el veredicto: en
+  // `sinDatos()` es la instrucción de qué capturar, y en `estadoColchon()` son los CENTAVOS que
+  // faltan para el fondo. Pintarlas igual hacía salir «→ 3000000» debajo del fondo de
+  // emergencia: centavos crudos presentados como si fueran pesos, que en esta app —donde el
+  // punto decimal solo existe al escribirlo en pantalla— es exactamente la mentira que la regla
+  // de centavos enteros existe para no cometer. Solo se pinta cuando es la instrucción.
+  const pista = v.datos && typeof v.datos.falta === "string"
+    ? `<div class="pista">${esc(v.datos.falta)}</div>`
+    : "";
+
+  return `<div class="veredicto" data-estado="${esc(v.estado)}">
+    <span class="marca">${esc(NOMBRE_VEREDICTO[v.estado] || v.estado)}</span>
+    <span class="motivo">${esc(v.motivo)}</span>${pista}</div>`;
 }
+
 
 function tarjetaCifra({ rotulo, valor, clase = "", extra = "", veredicto }) {
   return `<div class="tarjeta">
@@ -5606,7 +6046,124 @@ function vacio(texto) {
 
 // --- Render ---
 
+/**
+ * Dibuja, y si dibujar truena, rescata.
+ *
+ * Toda la pantalla se pinta de una sola pasada, así que una excepción a mitad de camino deja
+ * una app en blanco, muda, con los datos dentro y sin forma de sacarlos. Eso es lo que esto
+ * evita: pase lo que pase, siempre hay una pantalla que explica qué se rompió y un botón que
+ * baja el respaldo. Perder una tarde de captura porque una plantilla tenía un fallo sería el
+ * peor final posible para una app que se define por no perder datos.
+ */
 function render() {
+  if (app.rescatada) return; // la pantalla de rescate se queda: repintar la borraría
+
+  const atencion = recordarAtencion();
+  try {
+    dibujar();
+  } catch (e) {
+    return rescatar(e, "dibujando la pantalla");
+  }
+  devolverAtencion(atencion);
+}
+
+/**
+ * Dónde estaba la atención antes de repintar: qué campo tenía el foco, por dónde iba el cursor
+ * dentro de él, y a qué altura estaba la página.
+ *
+ * Toda la pantalla se pinta de una pasada, así que cada repintado destruye el campo en el que
+ * estabas escribiendo y crea otro igual pero vacío de foco. En un celular eso no es un detalle:
+ * es el teclado del sistema cerrándose a media palabra. El buscador del historial ya tenía un
+ * parche a mano para su caso; esto lo hace general, que es lo que debía haber sido desde el
+ * principio — cualquier campo, en cualquier vista.
+ */
+function recordarAtencion() {
+  const activo = document.activeElement;
+  if (!activo || activo === document.body) return null;
+
+  const datos = activo.dataset || {};
+  const marcas = activo.id
+    ? `#${activo.id}`
+    : datos.accionInput
+      ? `[data-accion-input="${datos.accionInput}"]`
+      : null;
+  if (!marcas) return null;
+
+  let inicio = null;
+  let fin = null;
+  try {
+    inicio = activo.selectionStart;
+    fin = activo.selectionEnd;
+  } catch (e) {} // los campos de tipo number y date no dejan preguntar, y no pasa nada
+
+  return { marcas, inicio, fin, altura: window.scrollY };
+}
+
+/**
+ * Devuelve el foco, el cursor y la altura.
+ *
+ * La altura se devuelve SOLO cuando había un campo enfocado, y a propósito: eso quiere decir
+ * que alguien estaba escribiendo ahí mismo. Cambiar de vista también repinta, y ahí devolver
+ * la altura sería dejar a alguien a media pantalla de una vista que acaba de abrir.
+ */
+function devolverAtencion(atencion) {
+  if (!atencion) return;
+
+  const campo = document.querySelector(atencion.marcas);
+  if (!campo) return;
+
+  campo.focus({ preventScroll: true });
+  try {
+    if (atencion.inicio !== null) campo.setSelectionRange(atencion.inicio, atencion.fin);
+  } catch (e) {}
+
+  if (window.scrollY !== atencion.altura) window.scrollTo(0, atencion.altura);
+}
+
+/**
+ * La pantalla de rescate. Sin plantillas, sin motor y sin tocar nada de lo que pudo romperse:
+ * lo único que tiene que funcionar aquí es el botón que se lleva tus datos.
+ */
+function rescatar(error, donde) {
+  if (app.rescatada) return;
+  app.rescatada = true;
+
+  const raiz = document.getElementById("raiz");
+  if (!raiz) return;
+
+  raiz.innerHTML = `<main class="envoltura rescate">
+      <h1>Se rompió algo al ${esc(donde)}</h1>
+      <p>Tus datos siguen guardados en este dispositivo — lo que falló es la pantalla, no el
+         almacenamiento. Aun así, bájate el respaldo antes de nada: es tuyo y abre en cualquier lado.</p>
+      <div class="acciones">
+        <button class="boton" data-accion="rescate-respaldo">Descargar respaldo</button>
+        <button class="boton tenue" data-accion="rescate-reintentar">Intentar de nuevo</button>
+      </div>
+      <details><summary>Qué pasó exactamente</summary>
+        <pre>${esc((error && error.stack) || (error && error.message) || String(error))}</pre></details>
+    </main>`;
+}
+
+/**
+ * Baja el respaldo sin pasar por nada que pudiera estar roto: ni `guardar`, ni el anfitrión, ni
+ * el exportador si es él quien falló. Un enlace y un Blob, que es lo que siempre funciona.
+ */
+function respaldoDeEmergencia() {
+  let texto;
+  try {
+    texto = exportar(app.datos);
+  } catch (e) {
+    texto = JSON.stringify(app.datos ?? null, null, 2);
+  }
+  const enlace = document.createElement("a");
+  enlace.href = URL.createObjectURL(new Blob([texto], { type: "application/json" }));
+  enlace.download = nombreDeRespaldo(app.hoy);
+  document.body.appendChild(enlace);
+  enlace.click();
+  enlace.remove();
+}
+
+function dibujar() {
   const raiz = document.getElementById("raiz");
   const ciclo = cicloDe(app.hoy, app.datos.perfil.cortes);
   const estado = app.almacen ? app.almacen.estado() : { modo: MODOS.LOCAL, tipoLocal: "—" };
@@ -5754,12 +6311,22 @@ function vistaHoy() {
   const listaVencimientos = vencimientos.length
     ? `<div class="titulo-seccion">Por pagar</div><div class="tarjeta">${vencimientos
         .map(
-          (v) => `<div class="fila apilada">
-            <div class="linea"><div class="nombre">${esc(v.fijo.nombre)}</div><div class="monto">${monto(v.monto)}</div></div>
-            <div class="sub">${v.vencido ? `venció hace ${Math.abs(v.dias)} día(s)` : v.dias === 0 ? "vence hoy" : `en ${v.dias} día(s)`} · ${fechaCorta(v.fecha)}</div>
-            <div class="acciones-fila">
-              <button class="boton chico" data-accion="pagar-fijo" data-id="${esc(v.fijo.id)}" data-fecha="${esc(v.fecha)}">Pagué</button>
+          (v) => `<div class="fila">
+            <div class="crece">
+              <div class="nombre">${esc(v.fijo.nombre)}</div>
+              <div class="sub ${v.vencido ? "urgente" : ""}">${
+                // A lo vencido no se le pone la fecha: «venció hace 9 días» ya lo dice entero, y
+                // en un renglón que además lleva monto y botón, el «· 1 sep» solo servía para
+                // partirlo en dos líneas. A lo que está por venir sí, que ahí la fecha es el dato.
+                v.vencido
+                  ? (Math.abs(v.dias) === 1 ? "venció ayer" : `venció hace ${plural(Math.abs(v.dias), "día", "días")}`)
+                  : v.dias === 0 ? `vence hoy · ${fechaCorta(v.fecha)}`
+                  : v.dias === 1 ? `vence mañana · ${fechaCorta(v.fecha)}`
+                  : `en ${plural(v.dias, "día", "días")} · ${fechaCorta(v.fecha)}`
+              }</div>
             </div>
+            <div class="monto">${monto(v.monto)}</div>
+            <button class="boton chico" data-accion="pagar-fijo" data-id="${esc(v.fijo.id)}" data-fecha="${esc(v.fecha)}">Pagué</button>
           </div>`,
         )
         .join("")}</div>`
@@ -5831,8 +6398,8 @@ function vistaHoy() {
       ? "" // sin objetivo y sin nada apartado, no hay nada que enseñar todavía
       : `<div class="titulo-seccion">Fondo de emergencia</div>
          <div class="tarjeta">
-           <div class="cifra" style="font-size:28px">${monto(colchon.acumulado)}${
-             colchon.objetivo !== null ? `<span class="rotulo"> de ${monto(colchon.objetivo)}</span>` : ""
+           <div class="cifra" style="font-size:30px">${monto(colchon.acumulado)}${
+             colchon.objetivo !== null ? `<span class="de">de ${monto(colchon.objetivo)}</span>` : ""
            }</div>
            ${colchon.objetivo !== null
              ? `<div class="barra-progreso"><i class="${esc(colchon.veredicto.estado)}" style="width:${Math.min(
@@ -6041,6 +6608,10 @@ function filaMovimiento(m) {
   const icono =
     m.tipo === TIPOS.INGRESO ? "↓" : m.tipo === TIPOS.AHORRO ? "◎" : m.tipo === TIPOS.RETIRO ? "↑" : categoria ? categoria.emoji : "•";
 
+  // La fila entera abre el movimiento, y ahí dentro está Borrar. Aquí ya no hay ✕:
+  // era la única acción destructiva de la app que no preguntaba nada, y estaba a un dedo del
+  // monto, repetida en cada renglón de la lista. Un pulgar torpe en el camión borraba un gasto
+  // sin dejar rastro ni forma de deshacerlo. Borrar dinero tiene que costar más que rozarlo.
   return `<div class="fila">
     <div class="emoji">${esc(icono)}</div>
     <button class="crece toque" data-accion="editar-movimiento" data-id="${esc(m.id)}">
@@ -6048,7 +6619,6 @@ function filaMovimiento(m) {
       <div class="sub">${fechaCorta(m.fecha)}${m.nota ? ` · ${esc(nombre)}` : ""}</div>
     </button>
     <div class="monto">${signo}${formatear(m.monto)}</div>
-    <button class="boton chico tenue" data-accion="borrar-movimiento" data-id="${esc(m.id)}" aria-label="Borrar">✕</button>
   </div>`;
 }
 
@@ -6115,12 +6685,28 @@ function vistaHistorial() {
   let encontrados = 0;
   let sumaFiltrada = 0;
 
-  const bloques = meses
+  // Dos pasadas, y hacen falta las dos. La primera cuenta y suma TODO lo que empata, porque el
+  // resumen de arriba y los totales de cada mes tienen que hablar del historial entero: un
+  // total que solo sumara lo que cabe en pantalla sería un número que miente. La segunda pinta
+  // nada más un tramo. Contar es barato; construir cuatro mil filas de HTML no lo es.
+  const porMes = meses
     .map((mes) => {
       const lista = app.datos.movimientos[mes].filter(pasa);
-      if (!lista.length) return "";
       encontrados += lista.length;
       sumaFiltrada += lista.reduce((t, m) => t + (m.tipo === TIPOS.GASTO ? m.monto : 0), 0);
+      return { mes, lista };
+    })
+    .filter((bloque) => bloque.lista.length);
+
+  const tope = app.verHistorial || FILAS_HISTORIAL;
+  let pintadas = 0;
+
+  const bloques = porMes
+    .map(({ mes, lista }) => {
+      if (pintadas >= tope) return "";
+      const visibles = lista.slice(0, tope - pintadas);
+      pintadas += visibles.length;
+
       const suman = (filtro) => lista.reduce((t, m) => (filtro(m) ? t + m.monto : t), 0);
       const gastos = suman((m) => m.tipo === TIPOS.GASTO);
       const ingresos = suman((m) => m.tipo === TIPOS.INGRESO);
@@ -6130,15 +6716,26 @@ function vistaHistorial() {
       return `<div class="titulo-seccion">${MESES[numero - 1]} ${anio}</div>
         <div class="tarjeta">
           <div class="fila" style="border-bottom:1px solid var(--borde)">
-            <div class="crece"><div class="sub">${lista.length} movimiento(s)</div></div>
+            <div class="crece"><div class="sub">${plural(lista.length, "movimiento", "movimientos")}</div></div>
             <div class="monto" style="font-size:13px">
               ${ingresos ? `<span style="color:var(--bien)">+${monto(ingresos)}</span> ` : ""}−${monto(gastos)}${ahorros ? ` · →${monto(ahorros)}` : ""}
             </div>
           </div>
-          ${lista.map(filaMovimiento).join("")}
+          ${visibles.map(filaMovimiento).join("")}
+          ${visibles.length < lista.length
+            ? `<div class="fila"><div class="sub">y ${lista.length - visibles.length} más de este mes</div></div>`
+            : ""}
         </div>`;
     })
     .join("");
+
+  const faltan = encontrados - pintadas;
+  const masBoton = faltan > 0
+    ? `<div class="tarjeta plana centro">
+         <button class="boton tenue" data-accion="ver-mas-historial">Ver ${Math.min(faltan, FILAS_HISTORIAL)} más</button>
+         <div class="rotulo">Quedan ${faltan}. Para llegar a uno en concreto, búscalo arriba.</div>
+       </div>`
+    : "";
 
   const chipsTipo = [
     { valor: "", etiqueta: "Todo" },
@@ -6160,7 +6757,7 @@ function vistaHistorial() {
           .join("")}
       </div>
       ${filtro.texto || filtro.tipo
-        ? `<div class="rotulo" style="margin-top:10px">${encontrados} movimiento(s)${
+        ? `<div class="rotulo" style="margin-top:10px">${plural(encontrados, "movimiento", "movimientos")}${
             sumaFiltrada ? ` · ${monto(sumaFiltrada)} en gastos` : ""
           }</div>`
         : ""}
@@ -6169,7 +6766,8 @@ function vistaHistorial() {
   return `<div class="acciones" style="margin:0 0 10px"><button class="boton tenue" data-accion="ir" data-vista="hoy">← Volver a Hoy</button></div>
     ${tarjetaTendencia()}
     ${buscador}
-    ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}`;
+    ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}
+    ${masBoton}`;
 }
 
 // --- Vista: Presupuesto ---
@@ -6187,7 +6785,7 @@ function vistaPresupuesto() {
     .map((f) => {
       const pct = f.veredicto.datos.pct;
       const ancho = Math.min(pct === null || pct === undefined ? 0 : pct, 100);
-      return `<div class="fila" style="border-bottom:0;padding-bottom:4px">
+      return `<div class="fila" data-estado="${esc(f.veredicto.estado)}" style="border-bottom:0;padding-bottom:4px">
           <div class="emoji">${esc(f.categoria.emoji)}</div>
           <div class="crece">
             <div class="nombre">${esc(f.categoria.nombre)}</div>
@@ -6195,12 +6793,12 @@ function vistaPresupuesto() {
             <div class="barra-progreso"><i class="${esc(f.veredicto.estado)}" style="width:${ancho}%"></i></div>
           </div>
           <button class="boton chico tenue" data-accion="editar-tope" data-id="${esc(f.categoria.id)}">
-            ${f.tope === null ? "Poner tope" : monto(f.tope)}
+            ${f.tope === null ? "Poner tope" : "Cambiar"}
           </button>
         </div>
-        <div class="veredicto" style="margin:0 0 14px 42px;border-top:0;padding-top:2px">
-          <span class="marca ${esc(f.veredicto.estado)}">${esc(f.veredicto.estado)}</span>
-          <span>${esc(f.veredicto.motivo)}</span></div>`;
+        ${f.tope === null ? "" : `<div class="veredicto suelto" data-estado="${esc(f.veredicto.estado)}">
+          <span class="marca">${esc(NOMBRE_VEREDICTO[f.veredicto.estado] || f.veredicto.estado)}</span>
+          <span class="motivo">${esc(f.veredicto.motivo)}</span></div>`}`;
     })
     .join("");
 
@@ -6357,7 +6955,7 @@ function vistaFijos() {
           return `<div class="tarjeta">
             <div class="fila" style="border-bottom:0;padding:0">
               <div class="crece"><div class="nombre">${esc(d.nombre)}</div>
-                <div class="sub">${plan.pagos} pago(s) · abonado ${monto(plan.pagado)}${
+                <div class="sub">${plural(plan.pagos, "pago", "pagos")} · abonado ${monto(plan.pagado)}${
                   plan.pago.origen === "fijo" ? ` · ${monto(plan.pago.monto)} al mes` : ""
                 }</div></div>
               <div class="monto">${monto(plan.saldo)}</div>
@@ -6530,7 +7128,7 @@ function vistaAjustes() {
 
     <div class="titulo-seccion">Tus datos</div>
     <div class="tarjeta">
-      <div class="fila"><div class="crece"><div class="nombre">${movimientos} movimiento(s) guardado(s)</div>
+      <div class="fila"><div class="crece"><div class="nombre">${plural(movimientos, "movimiento guardado", "movimientos guardados")}</div>
         <div class="sub">${esc(estado.modo === MODOS.SINCRONIZADO ? "en este dispositivo y sincronizados" : `en este dispositivo (${estado.tipoLocal || "—"})`)}</div></div></div>
       <div class="acciones">
         <button class="boton tenue" data-accion="exportar">Descargar respaldo</button>
@@ -6986,7 +7584,7 @@ async function aplicarNomina(archivo) {
       <b>${monto(nomina.neto)}</b><br>
       Percepciones ${monto(nomina.percepciones)} · deducciones ${monto(nomina.deducciones)}<br>
       ${!nomina.ordinaria
-        ? `<span class="marca AJUSTADO">OJO</span> Es una nómina extraordinaria (aguinaldo, PTU o
+        ? `<span class="marca aviso-marca">Ojo</span> Es una nómina extraordinaria (aguinaldo, PTU o
            finiquito). Es dinero de verdad, pero no es lo que entra cada quincena: si la usas
            como ingreso, el disponible de todo el ciclo se infla.`
         : corte === null
@@ -7233,6 +7831,11 @@ const acciones = {
     render();
   },
 
+  "ver-mas-historial"() {
+    app.verHistorial = (app.verHistorial || FILAS_HISTORIAL) + FILAS_HISTORIAL;
+    render();
+  },
+
   "elegir-categoria"(el) {
     app.eleccion = { ...app.eleccion, [el.dataset.id]: el.dataset.categoria };
     render();
@@ -7450,10 +8053,12 @@ const acciones = {
   "ver-historial"() {
     app.vista = "historial";
     app.filtro = { texto: "", tipo: "" };
+    app.verHistorial = FILAS_HISTORIAL; // se entra por arriba, no por donde se quedó la vez pasada
     render();
   },
 
   "filtrar-tipo"(el) {
+    app.verHistorial = FILAS_HISTORIAL;
     app.filtro = { ...(app.filtro || { texto: "" }), tipo: el.dataset.tipo };
     render();
     const caja = document.getElementById("buscador");
@@ -7553,14 +8158,23 @@ const acciones = {
         // Un tope "solo este mes" no toca el catálogo: el histórico de los otros meses
         // queda exactamente como estaba.
         const presupuestos = { ...app.datos.presupuestos };
+        let datos = { ...app.datos, categorias, presupuestos };
         if (v.alcance === "mes") {
           const delMes = { ...(presupuestos[mes] || {}) };
-          if (v.tope === null) delete delMes[categoria.id];
-          else delMes[categoria.id] = v.tope;
+          if (v.tope === null) {
+            delete delMes[categoria.id];
+            // Quitar un tope necesita lápida, igual que borrar un movimiento: sin ella, el
+            // otro dispositivo —que todavía lo tiene— lo devuelve al unir, y el tope que
+            // quitaste reaparece solo.
+            datos = marcarBorrado(datos, claveDeTope(mes, categoria.id));
+          } else {
+            delMes[categoria.id] = v.tope;
+          }
           presupuestos[mes] = delMes;
+          datos = { ...datos, presupuestos };
         }
 
-        await guardar({ ...app.datos, categorias, presupuestos });
+        await guardar(datos);
       },
     });
   },
@@ -7707,8 +8321,26 @@ const acciones = {
     });
   },
 
-  async "borrar-movimiento"(el) {
-    await guardar(eliminarMovimiento(app.datos, el.dataset.id));
+  "borrar-movimiento"(el) {
+    const movimiento = buscarMovimiento(el.dataset.id);
+    const nombre = movimiento ? `${movimiento.nota || "Este movimiento"} · ${formatear(movimiento.monto)}` : "este movimiento";
+    confirmar({
+      titulo: "¿Borrar este movimiento?",
+      mensaje: `${nombre}. Deja de contar en todos tus números y no se puede deshacer.`,
+      textoBoton: "Sí, bórralo",
+      alConfirmar: async () => {
+        await guardar(eliminarMovimiento(app.datos, el.dataset.id));
+      },
+    });
+  },
+
+  "rescate-respaldo"() {
+    respaldoDeEmergencia();
+  },
+
+  "rescate-reintentar"() {
+    app.rescatada = false;
+    render();
   },
 
   async exportar() {
@@ -8131,7 +8763,35 @@ function hojaDeuda(deuda) {
 
 // --- Arranque ---
 
+/**
+ * Lo que no se cazó en ningún try: se dice, una vez, y sin tumbar la pantalla.
+ *
+ * Aquí caen los fallos de fondo —una promesa que nadie esperó, un manejador de evento que
+ * lanzó—. Un fallo así casi nunca justifica la pantalla de rescate (la app sigue usable), pero
+ * tragárselo tampoco: la regla de esta app es que nada falla en silencio. Se avisa UNA vez por
+ * sesión y no se vuelve a mencionar; un banner que reaparece en cada intento fallido del puente
+ * enseña a ignorar los avisos, que es peor que no darlos.
+ */
+function ponerRedDeSeguridad() {
+  let yaAvisado = false;
+  const contar = (motivo) => {
+    if (yaAvisado || app.rescatada) return;
+    yaAvisado = true;
+    app.aviso = `Algo falló en segundo plano: ${motivo}. Lo capturado no se pierde, pero si se repite, baja un respaldo.`;
+    render();
+  };
+
+  addEventListener("error", (e) => contar((e.error && e.error.message) || e.message || "error sin mensaje"));
+  addEventListener("unhandledrejection", (e) => {
+    const razon = e.reason;
+    contar((razon && razon.message) || String(razon || "una promesa rechazada"));
+  });
+}
+
+
 async function arrancar() {
+  ponerRedDeSeguridad();
+
   try {
     const tema = localStorage.getItem("finanzas:tema");
     if (tema && tema !== "sistema") document.documentElement.dataset.tema = tema;
@@ -8143,16 +8803,12 @@ async function arrancar() {
       return;
     }
     if (e.target.dataset.accionInput !== "filtrar-texto") return;
-    // Se guarda el texto y se re-dibuja solo la lista: volver a pintar todo en cada tecla
-    // le quitaría el foco al buscador.
+    // El foco y el cursor los devuelve `render()` para cualquier campo, así que aquí ya no hay
+    // nada que remendar a mano. Buscar empieza siempre desde arriba de los resultados: filtrar
+    // y quedarse en la página 4 de lo anterior no tiene sentido.
     app.filtro = { ...(app.filtro || { tipo: "" }), texto: e.target.value };
-    const posicion = e.target.selectionStart;
+    app.verHistorial = FILAS_HISTORIAL;
     render();
-    const caja = document.getElementById("buscador");
-    if (caja) {
-      caja.focus();
-      caja.setSelectionRange(posicion, posicion);
-    }
   });
 
   // Elegir una captura desde el botón. Va por `change` y no por `input`: un campo de archivo
@@ -8238,11 +8894,24 @@ async function arrancar() {
   });
 
   // Si otro dispositivo escribe, esta pantalla se entera.
-  app.almacen.suscribir(async () => {
-    const fresco = await app.almacen.cargar();
-    app.datos = fresco.datos;
-    render();
-  });
+  //
+  // Con guarda, y no por prolijidad: veinte líneas más arriba este mismo arranque ya admite
+  // que `app.almacen` puede quedar en null, y aquí se usaba directo. Cuando abrir el almacén
+  // fallaba, esta línea lanzaba y se llevaba por delante lo que viene DESPUÉS — el temporizador
+  // que cambia de día y el que revisa los recordatorios— sin que nada lo dijera. Justo el
+  // aparato donde el almacenamiento va mal es donde más falta hace que lo demás siga vivo.
+  if (app.almacen && typeof app.almacen.suscribir === "function") {
+    app.almacen.suscribir(async () => {
+      try {
+        const fresco = await app.almacen.cargar();
+        app.datos = fresco.datos;
+        render();
+      } catch (e) {
+        app.aviso = `Otro dispositivo escribió, pero no se pudo leer lo nuevo: ${e.message}`;
+        render();
+      }
+    });
+  }
 
   // Si la app queda abierta y cambia el día, el ciclo se recalcula solo. Y de paso se refresca
   // la hora, que es lo que hace que a las 2 de la tarde te ofrezca los tacos: sin esto, una app
