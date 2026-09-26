@@ -26,6 +26,7 @@ guardan en el navegador de quien la usa: aquí no hay backend al que mandarlos.
 ```
 index.html      la app publicada (esto es lo que sirve GitHub Pages)
 finanzas.html   la misma app en un archivo suelto: ábrelo desde el disco, sin servidor
+dibujo.html     aparte de las finanzas: una hoja blanca para dibujar y colorear
 motor/          el cálculo, en JavaScript puro y sin DOM
 ```
 

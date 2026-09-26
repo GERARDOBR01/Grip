@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="es-MX">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Dibujar y colorear</title>
+<style>
+  :root {
+    --tinta: #1a1d21;
+    --suave: #5b636d;
+    --borde: #d9dde2;
+    --fondo-barra: #f6f7f9;
+    --activo: #1a1d21;
+    --toque: 48px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; overflow: hidden; height: 100%; background: #fff; color: var(--tinta); }
+  body {
+    font: 16px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+    overflow: hidden; overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button { font: inherit; color: inherit; cursor: pointer; }
+
+  /* ── Barra de arriba: acciones ─────────────────────────────── */
+  .arriba {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+    border-bottom: 1px solid var(--borde); background: #fff;
+  }
+  .arriba h1 { font-size: 18px; margin: 0 auto 0 4px; font-weight: 700; min-width: 0; line-height: 1.15; }
+  .accion {
+    min-width: var(--toque); height: var(--toque); padding: 0 12px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: 1px solid var(--borde); border-radius: 12px; background: #fff;
+    font-weight: 600; font-size: 15px;
+  }
+  .accion:hover { background: var(--fondo-barra); }
+  .accion:active { transform: scale(.96); }
+  .accion:disabled { opacity: .35; cursor: default; transform: none; }
+  .accion svg { width: 22px; height: 22px; flex: none; }
+  .accion.principal { background: var(--tinta); color: #fff; border-color: var(--tinta); }
+  .accion.principal:hover { background: #333a42; }
+
+  /* ── Lienzo ───────────────────────────────────────────────── */
+  .zona { position: relative; flex: 1; min-height: 0; background: #fff; }
+  .zona canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #lineas, #vista { pointer-events: none; }
+  #pintura { touch-action: none; cursor: crosshair; }
+
+  /* ── Barra de abajo: herramientas y colores ───────────────── */
+  .abajo {
+    border-top: 1px solid var(--borde); background: var(--fondo-barra);
+    padding: 10px max(12px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .fila { display: flex; align-items: center; gap: 8px; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+  .fila::-webkit-scrollbar { display: none; }
+  .separador { width: 1px; align-self: stretch; background: var(--borde); flex: none; margin: 0 4px; }
+
+  .herramienta, .grosor {
+    flex: none; width: var(--toque); height: var(--toque);
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 2px solid transparent; border-radius: 12px; background: #fff;
+    box-shadow: 0 0 0 1px var(--borde);
+  }
+  .herramienta svg { width: 26px; height: 26px; }
+  .herramienta[aria-pressed="true"], .grosor[aria-pressed="true"] {
+    border-color: var(--activo); box-shadow: none; background: #fff;
+  }
+  .grosor span { display: block; border-radius: 50%; background: var(--tinta); }
+
+  .color {
+    flex: none; width: 44px; height: 44px; border-radius: 50%;
+    border: 3px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.25);
+    padding: 0;
+  }
+  .color[aria-pressed="true"] { box-shadow: 0 0 0 3px var(--activo); transform: scale(1.08); }
+  .color.blanco { box-shadow: 0 0 0 1px #9aa1a9; }
+  .color.blanco[aria-pressed="true"] { box-shadow: 0 0 0 3px var(--activo); }
+  .propio { position: relative; overflow: hidden;
+    background: conic-gradient(red, yellow, lime, cyan, blue, magenta, red); }
+  .propio input { position: absolute; inset: -8px; width: 70px; height: 70px; opacity: 0; cursor: pointer; }
+
+  .actual { flex: none; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--suave); padding-right: 4px; }
+  .actual i { width: 28px; height: 28px; border-radius: 8px; border: 1px solid rgba(0,0,0,.2); }
+
+  /* ── Panel de dibujos para colorear ───────────────────────── */
+  .panel {
+    position: fixed; inset: 0; background: rgba(20,23,26,.4);
+    display: none; align-items: flex-end; justify-content: center; z-index: 10;
+  }
+  .panel.abierto { display: flex; }
+  .hoja {
+    background: #fff; width: 100%; max-width: 720px; max-height: 85vh; overflow-y: auto;
+    border-radius: 20px 20px 0 0; padding: 18px 16px max(18px, env(safe-area-inset-bottom));
+  }
+  @media (min-width: 760px) { .panel { align-items: center; } .hoja { border-radius: 20px; } }
+  .hoja header { display: flex; align-items: center; margin-bottom: 4px; }
+  .hoja h2 { margin: 0 auto 0 0; font-size: 20px; }
+  .hoja p { margin: 0 0 14px; color: var(--suave); font-size: 15px; }
+  .rejilla { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+  .plantilla {
+    border: 1px solid var(--borde); border-radius: 14px; background: #fff;
+    padding: 8px 6px 10px; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-weight: 600; font-size: 14px;
+  }
+  .plantilla:hover { border-color: var(--tinta); }
+  .plantilla canvas { width: 80px; height: 80px; }
+
+  .aviso {
+    position: fixed; left: 50%; top: 72px; transform: translateX(-50%);
+    background: var(--tinta); color: #fff; padding: 10px 16px; border-radius: 999px;
+    font-size: 15px; font-weight: 600; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 20;
+  }
+  .aviso.visible { opacity: 1; }
+
+  @media (max-width: 520px) {
+    .accion .texto { display: none; }
+    .accion { padding: 0; }
+    .arriba { gap: 6px; }
+    .arriba h1 { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="arriba">
+  <h1>Dibujar y colorear</h1>
+  <button class="accion" id="deshacer" title="Deshacer (Ctrl+Z)" aria-label="Deshacer" disabled>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+  </button>
+  <button class="accion" id="rehacer" title="Rehacer (Ctrl+Y)" aria-label="Rehacer" disabled>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+  </button>
+  <button class="accion" id="limpiar" title="Borrar todo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
+    <span class="texto">Limpiar</span>
+  </button>
+  <button class="accion" id="dibujos" title="Elegir un dibujo para colorear">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>
+    <span class="texto">Dibujos</span>
+  </button>
+  <button class="accion principal" id="guardar" title="Guardar como imagen PNG">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+    <span class="texto">Guardar</span>
+  </button>
+</div>
+
+<div class="zona" id="zona">
+  <canvas id="pintura"></canvas>
+  <canvas id="lineas"></canvas>
+  <canvas id="vista"></canvas>
+</div>
+
+<div class="abajo">
+  <div class="fila" id="herramientas" role="toolbar" aria-label="Herramientas"></div>
+  <div class="fila" id="colores" role="toolbar" aria-label="Colores"></div>
+</div>
+
+<div class="panel" id="panel" role="dialog" aria-modal="true" aria-labelledby="titulo-panel">
+  <div class="hoja">
+    <header>
+      <h2 id="titulo-panel">Dibujos para colorear</h2>
+      <button class="accion" id="cerrar" aria-label="Cerrar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </header>
+    <p>Elige uno y rellénalo con la cubeta, o píntalo a mano. Las líneas siempre quedan encima.</p>
+    <div class="rejilla" id="rejilla"></div>
+  </div>
+</div>
+
+<div class="aviso" id="aviso"></div>
+
+<script>
+(() => {
+  "use strict";
+
+  // ── Colores: vivos, bien separados entre sí, y fáciles de distinguir sobre blanco ──
+  const COLORES = [
+    ["Negro", "#1a1d21"], ["Gris", "#8a929c"], ["Blanco", "#ffffff"],
+    ["Rojo", "#e53935"], ["Naranja", "#fb8c00"], ["Amarillo", "#fdd835"],
+    ["Verde claro", "#7cb342"], ["Verde", "#2e7d32"], ["Azul cielo", "#29b6f6"],
+    ["Azul", "#1e56c7"], ["Morado", "#8e24aa"], ["Rosa", "#f06292"],
+    ["Café", "#795548"], ["Piel", "#f5c6a5"],
+  ];
+
+  const GROSORES = [4, 10, 22, 40];
+
+  const ICONOS = {
+    pincel: '<path d="M18.4 2.6a2 2 0 0 1 2.9 2.9L11 15.8 8.2 13Z"/><path d="M7 14.5c-2 0-3.5 1.6-3.5 3.5 0 1.3-.7 2-1.5 2.5 3 .8 7 .2 7.5-3.5"/>',
+    borrador: '<path d="m7 21-4.3-4.3a1.5 1.5 0 0 1 0-2.1l10-10a1.5 1.5 0 0 1 2.1 0l5.6 5.6a1.5 1.5 0 0 1 0 2.1L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>',
+    cubeta: '<path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2a2 2 0 0 0 2.8 0L19 11Z"/><path d="m5 2 5 5"/><path d="M2 13h15"/><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"/>',
+    linea: '<path d="M5 19 19 5"/><circle cx="5" cy="19" r="1.5"/><circle cx="19" cy="5" r="1.5"/>',
+    rectangulo: '<rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/>',
+    circulo: '<circle cx="12" cy="12" r="8.5"/>',
+  };
+  const HERRAMIENTAS = [
+    ["pincel", "Pincel"], ["borrador", "Borrador"], ["cubeta", "Rellenar"],
+    ["linea", "Línea"], ["rectangulo", "Rectángulo"], ["circulo", "Círculo"],
+  ];
+
+  // ── Dibujos para colorear, en una caja de 100×100 ──────────────────────
+  const DIBUJOS = {
+    Casa(c) {
+      c.rect(22, 45, 56, 43);
+      poligono(c, [[14, 47], [50, 14], [86, 47]]);
+      poligono(c, [[64, 27.3], [64, 16], [73, 16], [73, 35.6]]);
+      c.rect(43, 62, 14, 26);
+      c.rect(27, 53, 12, 12);
+      c.rect(61, 53, 12, 12);
+    },
+    Sol(c) {
+      circulo(c, 50, 50, 20);
+      for (let i = 0; i < 8; i++) {
+        const a = i * Math.PI / 4, b = a + 0.2, d = a - 0.2;
+        poligono(c, [[50 + 25 * Math.cos(d), 50 + 25 * Math.sin(d)],
+                     [50 + 42 * Math.cos(a), 50 + 42 * Math.sin(a)],
+                     [50 + 25 * Math.cos(b), 50 + 25 * Math.sin(b)]]);
+      }
+    },
+    Flor(c) {
+      c.moveTo(50, 46); c.lineTo(50, 94);
+      elipse(c, 60, 74, 10, 5, -0.5);
+      elipse(c, 40, 82, 10, 5, 0.5);
+      circulo(c, 50, 34, 8);
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3 - Math.PI / 2;
+        circulo(c, 50 + 16 * Math.cos(a), 34 + 16 * Math.sin(a), 8);
+      }
+    },
+    Estrella(c) {
+      const puntos = [];
+      for (let i = 0; i < 10; i++) {
+        const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 18 : 42;
+        puntos.push([50 + r * Math.cos(a), 54 + r * Math.sin(a)]);
+      }
+      poligono(c, puntos);
+      circulo(c, 50, 54, 8);
+    },
+    Corazón(c) {
+      c.moveTo(50, 88);
+      c.bezierCurveTo(14, 62, 8, 40, 20, 26);
+      c.bezierCurveTo(32, 13, 46, 20, 50, 32);
+      c.bezierCurveTo(54, 20, 68, 13, 80, 26);
+      c.bezierCurveTo(92, 40, 86, 62, 50, 88);
+      c.closePath();
+    },
+    Pez(c) {
+      poligono(c, [[70, 50], [92, 32], [88, 50], [92, 68]]);
+      elipse(c, 44, 50, 30, 18, 0);
+      circulo(c, 28, 45, 4);
+      c.moveTo(22, 58); c.quadraticCurveTo(27, 61, 32, 58);
+      poligono(c, [[40, 32.8], [52, 20], [58, 34.2]]);
+      c.moveTo(46, 36); c.quadraticCurveTo(54, 50, 46, 64);
+    },
+    Gato(c) {
+      poligono(c, [[29, 42], [28, 14], [48, 30]]);
+      poligono(c, [[71, 42], [72, 14], [52, 30]]);
+      circulo(c, 50, 56, 28);
+      elipse(c, 39, 51, 4, 6, 0);
+      elipse(c, 61, 51, 4, 6, 0);
+      poligono(c, [[46, 61], [54, 61], [50, 66]]);
+      c.moveTo(50, 66); c.quadraticCurveTo(46, 72, 42, 69);
+      c.moveTo(50, 66); c.quadraticCurveTo(54, 72, 58, 69);
+      for (const [x1, y1, x2, y2] of [[36, 63, 16, 59], [36, 67, 16, 70], [64, 63, 84, 59], [64, 67, 84, 70]]) {
+        c.moveTo(x1, y1); c.lineTo(x2, y2);
+      }
+    },
+    Árbol(c) {
+      c.rect(43, 62, 14, 30);
+      c.moveTo(50, 20);
+      c.bezierCurveTo(66, 16, 76, 28, 72, 38);
+      c.bezierCurveTo(86, 42, 86, 62, 70, 64);
+      c.bezierCurveTo(62, 72, 38, 72, 30, 64);
+      c.bezierCurveTo(14, 62, 14, 42, 28, 38);
+      c.bezierCurveTo(24, 28, 34, 16, 50, 20);
+      c.closePath();
+      circulo(c, 40, 42, 4); circulo(c, 60, 36, 4); circulo(c, 56, 56, 4); circulo(c, 34, 57, 3.5);
+    },
+    Mariposa(c) {
+      elipse(c, 31, 36, 19, 15, -0.35);
+      elipse(c, 69, 36, 19, 15, 0.35);
+      elipse(c, 35, 65, 14, 11, 0.4);
+      elipse(c, 65, 65, 14, 11, -0.4);
+      elipse(c, 50, 50, 4.5, 26, 0);
+      c.moveTo(48, 25); c.quadraticCurveTo(42, 12, 34, 10);
+      c.moveTo(52, 25); c.quadraticCurveTo(58, 12, 66, 10);
+      circulo(c, 30, 36, 5); circulo(c, 70, 36, 5);
+    },
+    Carro(c) {
+      c.moveTo(8, 72); c.lineTo(8, 56); c.lineTo(22, 52); c.lineTo(32, 34); c.lineTo(66, 34);
+      c.lineTo(78, 52); c.lineTo(92, 56); c.lineTo(92, 72); c.closePath();
+      poligono(c, [[36, 39], [48, 39], [48, 52], [28, 52]]);
+      poligono(c, [[53, 39], [63, 39], [71, 52], [53, 52]]);
+      circulo(c, 28, 72, 10); circulo(c, 72, 72, 10);
+      circulo(c, 28, 72, 4); circulo(c, 72, 72, 4);
+    },
+    Globo(c) {
+      c.moveTo(50, 74);
+      c.bezierCurveTo(26, 62, 22, 44, 24, 34);
+      c.bezierCurveTo(26, 14, 74, 14, 76, 34);
+      c.bezierCurveTo(78, 44, 74, 62, 50, 74);
+      c.closePath();
+      poligono(c, [[46, 78], [54, 78], [50, 74]]);
+      c.moveTo(50, 78); c.bezierCurveTo(44, 84, 56, 88, 50, 96);
+    },
+    Nube(c) {
+      c.moveTo(24, 66);
+      c.bezierCurveTo(10, 66, 10, 48, 24, 48);
+      c.bezierCurveTo(24, 32, 44, 28, 50, 40);
+      c.bezierCurveTo(56, 24, 80, 28, 76, 46);
+      c.bezierCurveTo(92, 46, 92, 66, 76, 66);
+      c.closePath();
+      for (const x of [30, 44, 58, 72]) {
+        c.moveTo(x, 74); c.lineTo(x - 4, 86);
+      }
+    },
+  };
+
+  function poligono(c, p) { c.moveTo(p[0][0], p[0][1]); for (const [x, y] of p.slice(1)) c.lineTo(x, y); c.closePath(); }
+  function circulo(c, x, y, r) { c.moveTo(x + r, y); c.arc(x, y, r, 0, Math.PI * 2); c.closePath(); }
+  function elipse(c, x, y, rx, ry, rot) {
+    c.moveTo(x + rx * Math.cos(rot), y + rx * Math.sin(rot));
+    c.ellipse(x, y, rx, ry, rot, 0, Math.PI * 2); c.closePath();
+  }
+
+  // ── Estado ─────────────────────────────────────────────────────────────
+  const $ = (id) => document.getElementById(id);
+  const zona = $("zona");
+  const pintura = $("pintura"), lineas = $("lineas"), vista = $("vista");
+  const cp = pintura.getContext("2d", { willReadFrequently: true });
+  const cl = lineas.getContext("2d", { willReadFrequently: true });
+  const cv = vista.getContext("2d");
+
+  const estado = { herramienta: "pincel", color: "#e53935", grosor: 10, dibujo: null };
+  let dpr = 1, ancho = 0, alto = 0;
+  const historia = [], futuro = [];
+  const LIMITE = 30;
+
+  // ── Tamaño del lienzo: nítido en pantallas densas y sin perder lo pintado al girar ──
+  function ajustar() {
+    const caja = zona.getBoundingClientRect();
+    const nuevoDpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = Math.round(caja.width * nuevoDpr), h = Math.round(caja.height * nuevoDpr);
+    if (w === pintura.width && h === pintura.height) return;
+
+    let copia = null;
+    if (pintura.width && pintura.height) {
+      copia = document.createElement("canvas");
+      copia.width = pintura.width; copia.height = pintura.height;
+      copia.getContext("2d").drawImage(pintura, 0, 0);
+    }
+    dpr = nuevoDpr; ancho = caja.width; alto = caja.height;
+    for (const c of [pintura, lineas, vista]) { c.width = w; c.height = h; }
+    cp.fillStyle = "#fff"; cp.fillRect(0, 0, w, h);
+    if (copia) cp.drawImage(copia, 0, 0);
+    trazarDibujo();
+  }
+
+  function cajaDibujo() {
+    const lado = Math.min(ancho, alto) * 0.9;
+    return { s: lado / 100, x: (ancho - lado) / 2, y: (alto - lado) / 2 };
+  }
+
+  function trazarDibujo() {
+    cl.setTransform(1, 0, 0, 1, 0, 0);
+    cl.clearRect(0, 0, lineas.width, lineas.height);
+    if (!estado.dibujo) return;
+    const { s, x, y } = cajaDibujo();
+    cl.setTransform(s * dpr, 0, 0, s * dpr, x * dpr, y * dpr);
+    cl.beginPath();
+    DIBUJOS[estado.dibujo](cl);
+    cl.lineWidth = Math.max(3, Math.min(6, s * 1.1)) / s;
+    cl.lineJoin = "round"; cl.lineCap = "round";
+    cl.strokeStyle = "#1a1d21";
+    cl.stroke();
+    cl.setTransform(1, 0, 0, 1, 0, 0);
+  }
+
+  // ── Historia (deshacer / rehacer) ──────────────────────────────────────
+  function foto() { return { img: cp.getImageData(0, 0, pintura.width, pintura.height), dibujo: estado.dibujo }; }
+  function recordar() {
+    historia.push(foto());
+    if (historia.length > LIMITE) historia.shift();
+    futuro.length = 0;
+    botones();
+  }
+  function restaurar(f) {
+    if (f.img.width !== pintura.width || f.img.height !== pintura.height) {
+      const t = document.createElement("canvas"); t.width = f.img.width; t.height = f.img.height;
+      t.getContext("2d").putImageData(f.img, 0, 0);
+      cp.fillStyle = "#fff"; cp.fillRect(0, 0, pintura.width, pintura.height);
+      cp.drawImage(t, 0, 0);
+    } else cp.putImageData(f.img, 0, 0);
+    estado.dibujo = f.dibujo; trazarDibujo();
+  }
+  function deshacer() { if (!historia.length) return; futuro.push(foto()); restaurar(historia.pop()); botones(); }
+  function rehacer() { if (!futuro.length) return; historia.push(foto()); restaurar(futuro.pop()); botones(); }
+  function botones() { $("deshacer").disabled = !historia.length; $("rehacer").disabled = !futuro.length; }
+
+  // ── Dibujar ────────────────────────────────────────────────────────────
+  let trazo = null;
+
+  function punto(e) {
+    const r = pintura.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  function pincelEn(c) {
+    c.lineCap = "round"; c.lineJoin = "round";
+    c.lineWidth = estado.grosor * dpr;
+    c.strokeStyle = c.fillStyle = estado.herramienta === "borrador" ? "#ffffff" : estado.color;
+  }
+
+  pintura.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    if (trazo) return; // un solo dedo a la vez: un segundo dedo no debe rayar
+    const p = punto(e);
+    if (estado.herramienta === "cubeta") { recordar(); rellenar(p.x, p.y); return; }
+    pintura.setPointerCapture(e.pointerId);
+    recordar();
+    trazo = { id: e.pointerId, inicio: p, ultimo: p, medio: p };
+    if (estado.herramienta === "pincel" || estado.herramienta === "borrador") {
+      pincelEn(cp);
+      cp.beginPath(); cp.arc(p.x * dpr, p.y * dpr, estado.grosor * dpr / 2, 0, Math.PI * 2); cp.fill();
+    }
+  });
+
+  pintura.addEventListener("pointermove", (e) => {
+    if (!trazo || e.pointerId !== trazo.id) return;
+    const eventos = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of eventos.length ? eventos : [e]) {
+      const p = punto(ev);
+      if (estado.herramienta === "pincel" || estado.herramienta === "borrador") {
+        // Curva por los puntos medios: el trazo sale suave y no en picos
+        const medio = { x: (trazo.ultimo.x + p.x) / 2, y: (trazo.ultimo.y + p.y) / 2 };
+        pincelEn(cp);
+        cp.beginPath();
+        cp.moveTo(trazo.medio.x * dpr, trazo.medio.y * dpr);
+        cp.quadraticCurveTo(trazo.ultimo.x * dpr, trazo.ultimo.y * dpr, medio.x * dpr, medio.y * dpr);
+        cp.stroke();
+        trazo.medio = medio;
+      }
+      trazo.ultimo = p;
+    }
+    if (["linea", "rectangulo", "circulo"].includes(estado.herramienta)) {
+      cv.clearRect(0, 0, vista.width, vista.height);
+      figura(cv, trazo.inicio, trazo.ultimo, e.shiftKey);
+    }
+  });
+
+  function terminar(e) {
+    if (!trazo || e.pointerId !== trazo.id) return;
+    if (estado.herramienta === "pincel" || estado.herramienta === "borrador") {
+      pincelEn(cp);
+      cp.beginPath(); cp.moveTo(trazo.medio.x * dpr, trazo.medio.y * dpr);
+      cp.lineTo(trazo.ultimo.x * dpr, trazo.ultimo.y * dpr); cp.stroke();
+    } else {
+      cv.clearRect(0, 0, vista.width, vista.height);
+      figura(cp, trazo.inicio, trazo.ultimo, e.shiftKey);
+    }
+    trazo = null;
+  }
+  pintura.addEventListener("pointerup", terminar);
+  pintura.addEventListener("pointercancel", terminar);
+
+  function figura(c, a, b, cuadrado) {
+    pincelEn(c);
+    c.beginPath();
+    let dx = b.x - a.x, dy = b.y - a.y;
+    if (cuadrado && estado.herramienta !== "linea") {
+      const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * m; dy = Math.sign(dy || 1) * m;
+    }
+    if (estado.herramienta === "linea") {
+      c.moveTo(a.x * dpr, a.y * dpr); c.lineTo(b.x * dpr, b.y * dpr);
+    } else if (estado.herramienta === "rectangulo") {
+      c.rect(a.x * dpr, a.y * dpr, dx * dpr, dy * dpr);
+    } else {
+      c.ellipse((a.x + dx / 2) * dpr, (a.y + dy / 2) * dpr, Math.abs(dx / 2) * dpr, Math.abs(dy / 2) * dpr, 0, 0, Math.PI * 2);
+    }
+    c.stroke();
+  }
+
+  // ── Cubeta: rellena la zona del mismo color, sin cruzar las líneas del dibujo ──
+  function hexARgb(h) { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
+
+  function rellenar(x, y) {
+    const w = pintura.width, h = pintura.height;
+    const px = Math.floor(x * dpr), py = Math.floor(y * dpr);
+    if (px < 0 || py < 0 || px >= w || py >= h) return;
+    const img = cp.getImageData(0, 0, w, h), d = img.data;
+    const borde = cl.getImageData(0, 0, w, h).data;
+    const i0 = (py * w + px) * 4;
+    if (borde[i0 + 3] > 100) return; // tocó justo la línea
+    const [r0, g0, b0] = [d[i0], d[i0 + 1], d[i0 + 2]];
+    const [r1, g1, b1] = hexARgb(estado.color);
+    if (Math.abs(r0 - r1) + Math.abs(g0 - g1) + Math.abs(b0 - b1) < 6) return;
+
+    // Tolerancia generosa: así también se come el borde suavizado de los trazos a mano
+    const TOL = 90;
+    const lleno = new Uint8Array(w * h);
+    const igual = (i) => {
+      const k = i * 4;
+      return borde[k + 3] < 100 &&
+        Math.abs(d[k] - r0) + Math.abs(d[k + 1] - g0) + Math.abs(d[k + 2] - b0) <= TOL;
+    };
+    const pila = [py * w + px];
+    while (pila.length) {
+      let i = pila.pop();
+      const fila = Math.floor(i / w);
+      let izq = i;
+      while (izq > fila * w && !lleno[izq - 1] && igual(izq - 1)) izq--;
+      let arriba = false, abajo = false;
+      for (let j = izq; j < (fila + 1) * w && !lleno[j] && igual(j); j++) {
+        lleno[j] = 1;
+        if (fila > 0) {
+          const u = j - w, ok = !lleno[u] && igual(u);
+          if (ok && !arriba) pila.push(u);
+          arriba = ok;
+        }
+        if (fila < h - 1) {
+          const v = j + w, ok = !lleno[v] && igual(v);
+          if (ok && !abajo) pila.push(v);
+          abajo = ok;
+        }
+      }
+    }
+    // Un píxel de más hacia afuera tapa el halo que deja el antialias junto a las líneas
+    for (let i = 0; i < w * h; i++) {
+      if (lleno[i] === 1) {
+        const x0 = i % w;
+        for (const v of [i - 1, i + 1, i - w, i + w]) {
+          if (v >= 0 && v < w * h && !lleno[v] && Math.abs((v % w) - x0) <= 1) lleno[v] = 2;
+        }
+      }
+    }
+    for (let i = 0; i < w * h; i++) {
+      if (lleno[i]) { const k = i * 4; d[k] = r1; d[k + 1] = g1; d[k + 2] = b1; d[k + 3] = 255; }
+    }
+    cp.putImageData(img, 0, 0);
+  }
+
+  // ── Barra de herramientas ──────────────────────────────────────────────
+  const barraH = $("herramientas");
+  for (const [id, nombre] of HERRAMIENTAS) {
+    const b = document.createElement("button");
+    b.className = "herramienta"; b.dataset.herramienta = id; b.title = nombre; b.setAttribute("aria-label", nombre);
+    b.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONOS[id]}</svg>`;
+    b.onclick = () => { estado.herramienta = id; marcar(); };
+    barraH.append(b);
+  }
+  barraH.append(Object.assign(document.createElement("span"), { className: "separador" }));
+  for (const g of GROSORES) {
+    const b = document.createElement("button");
+    b.className = "grosor"; b.dataset.grosor = g; b.title = `Grosor ${g}`; b.setAttribute("aria-label", `Grosor ${g}`);
+    const punto = document.createElement("span");
+    const t = Math.min(34, Math.max(5, g * 0.8));
+    punto.style.width = punto.style.height = t + "px";
+    b.append(punto);
+    b.onclick = () => { estado.grosor = g; marcar(); };
+    barraH.append(b);
+  }
+
+  const barraC = $("colores");
+  const actual = document.createElement("span");
+  actual.className = "actual"; actual.innerHTML = "<i></i>";
+  barraC.append(actual);
+  for (const [nombre, hex] of COLORES) {
+    const b = document.createElement("button");
+    b.className = "color" + (hex === "#ffffff" ? " blanco" : "");
+    b.style.background = hex; b.dataset.color = hex; b.title = nombre; b.setAttribute("aria-label", nombre);
+    b.onclick = () => elegirColor(hex);
+    barraC.append(b);
+  }
+  const propio = document.createElement("label");
+  propio.className = "color propio"; propio.title = "Otro color";
+  propio.innerHTML = '<input type="color" aria-label="Elegir otro color" value="#00bfa5">';
+  propio.querySelector("input").addEventListener("input", (e) => elegirColor(e.target.value));
+  barraC.append(propio);
+
+  function elegirColor(hex) {
+    estado.color = hex;
+    if (estado.herramienta === "borrador") estado.herramienta = "pincel";
+    marcar();
+  }
+
+  function marcar() {
+    for (const b of barraH.querySelectorAll(".herramienta")) b.setAttribute("aria-pressed", b.dataset.herramienta === estado.herramienta);
+    for (const b of barraH.querySelectorAll(".grosor")) b.setAttribute("aria-pressed", +b.dataset.grosor === estado.grosor);
+    const conocido = COLORES.some(([, h]) => h === estado.color);
+    for (const b of barraC.querySelectorAll("button.color")) b.setAttribute("aria-pressed", b.dataset.color === estado.color);
+    propio.setAttribute("aria-pressed", !conocido);
+    actual.querySelector("i").style.background = estado.herramienta === "borrador" ? "#fff" : estado.color;
+    pintura.style.cursor = estado.herramienta === "cubeta" ? "cell" : "crosshair";
+  }
+
+  // ── Panel de dibujos ───────────────────────────────────────────────────
+  const panel = $("panel"), rejilla = $("rejilla");
+  function miniatura(nombre) {
+    const c = document.createElement("canvas"); c.width = c.height = 160;
+    const x = c.getContext("2d");
+    if (nombre) {
+      x.scale(1.6, 1.6); x.beginPath(); DIBUJOS[nombre](x);
+      x.lineWidth = 2.4; x.lineJoin = x.lineCap = "round"; x.strokeStyle = "#1a1d21"; x.stroke();
+    }
+    return c;
+  }
+  for (const nombre of [null, ...Object.keys(DIBUJOS)]) {
+    const b = document.createElement("button");
+    b.className = "plantilla";
+    b.append(miniatura(nombre), nombre || "Hoja en blanco");
+    b.onclick = () => {
+      recordar();
+      estado.dibujo = nombre;
+      cp.fillStyle = "#fff"; cp.fillRect(0, 0, pintura.width, pintura.height);
+      trazarDibujo();
+      if (nombre) { estado.herramienta = "cubeta"; marcar(); avisar("Toca una zona para rellenarla"); }
+      panel.classList.remove("abierto");
+    };
+    rejilla.append(b);
+  }
+  $("dibujos").onclick = () => panel.classList.add("abierto");
+  $("cerrar").onclick = () => panel.classList.remove("abierto");
+  panel.addEventListener("click", (e) => { if (e.target === panel) panel.classList.remove("abierto"); });
+
+  // ── Acciones de arriba ─────────────────────────────────────────────────
+  $("deshacer").onclick = deshacer;
+  $("rehacer").onclick = rehacer;
+  $("limpiar").onclick = () => {
+    recordar();
+    cp.fillStyle = "#fff"; cp.fillRect(0, 0, pintura.width, pintura.height);
+    avisar("Listo. Si fue sin querer, dale a deshacer");
+  };
+  $("guardar").onclick = () => {
+    const c = document.createElement("canvas"); c.width = pintura.width; c.height = pintura.height;
+    const x = c.getContext("2d");
+    x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
+    x.drawImage(pintura, 0, 0); x.drawImage(lineas, 0, 0);
+    const a = document.createElement("a");
+    const f = new Date();
+    a.download = `dibujo-${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}-${String(f.getDate()).padStart(2, "0")}.png`;
+    a.href = c.toDataURL("image/png");
+    a.click();
+    avisar("Imagen guardada");
+  };
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") panel.classList.remove("abierto");
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? rehacer() : deshacer(); }
+    else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); rehacer(); }
+  });
+
+  let temporizador;
+  function avisar(texto) {
+    const a = $("aviso"); a.textContent = texto; a.classList.add("visible");
+    clearTimeout(temporizador); temporizador = setTimeout(() => a.classList.remove("visible"), 1800);
+  }
+
+  new ResizeObserver(ajustar).observe(zona);
+  ajustar();
+  marcar();
+})();
+</script>
+</body>
+</html>
