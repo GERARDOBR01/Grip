@@ -28,8 +28,6 @@
     <g>
       <!-- la boca oscura detrás de los dientes -->
       <ellipse cx="630" cy="905" rx="150" ry="62" fill="#141414"/>
-      <path class="lengua" d="M585,915 C585,1000 610,1015 640,1015 C670,1015 695,1000 695,915 Z"
-            fill="#f07a8c" stroke="#1a1a1a" stroke-width="7" stroke-linejoin="round"/>
       <g>
         <path d="M470,850 L600,862 L640,812 L690,830 L702,796 L772,798 L762,880 Q650,935 520,925 Z"
               fill="#fbfbf5" stroke="#1a1a1a" stroke-width="7" stroke-linejoin="round"/>
@@ -49,6 +47,13 @@
       <!-- cachetes rosas -->
       <ellipse cx="412" cy="862" rx="44" ry="28" fill="#f2a08e" stroke="#1a1a1a" stroke-width="6"/>
       <ellipse cx="858" cy="738" rx="40" ry="28" fill="#f2a08e" stroke="#1a1a1a" stroke-width="6"/>
+
+      <!-- boquita de la bolsa, con la lengüita -->
+      <g transform="translate(752,712) rotate(-27) scale(1.6)">
+        <path d="M-30,-6 Q0,30 30,-6 Q0,4 -30,-6 Z" fill="#3a1414" stroke="#1a1a1a" stroke-width="6" stroke-linejoin="round"/>
+        <path class="lengua" d="M-15,2 C-17,34 17,34 15,2 Z" fill="#f07a8c" stroke="#1a1a1a" stroke-width="5" stroke-linejoin="round"/>
+        <path class="lengua" d="M0,6 L0,20" stroke="#c4505f" stroke-width="3" stroke-linecap="round"/>
+      </g>
 
       <!-- ojo grande -->
       <g class="ojo">
