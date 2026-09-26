@@ -635,7 +635,7 @@
     cp.fillStyle = "#fff"; cp.fillRect(0, 0, pintura.width, pintura.height);
     avisar("Listo. Si fue sin querer, dale a deshacer");
   };
-  $("guardar").onclick = () => {
+  $("guardar").onclick = async () => {
     const c = document.createElement("canvas"); c.width = pintura.width; c.height = pintura.height;
     const x = c.getContext("2d");
     x.fillStyle = "#fff"; x.fillRect(0, 0, c.width, c.height);
@@ -643,6 +643,19 @@
     const a = document.createElement("a");
     const f = new Date();
     a.download = `dibujo-${f.getFullYear()}-${String(f.getMonth() + 1).padStart(2, "0")}-${String(f.getDate()).padStart(2, "0")}.png`;
+    // Dentro de claude.ai la página no puede descargar sola: se lo pide al visor, que confirma.
+    // Abierta desde el disco o desde GitHub Pages, basta el enlace de siempre.
+    const descargas = window.claude && window.claude.use ? await window.claude.use("downloads") : null;
+    if (descargas) {
+      const datos = await new Promise((listo) => c.toBlob(listo, "image/png"));
+      try {
+        await descargas.save({ filename: a.download, data: datos });
+        avisar("Imagen guardada");
+      } catch (e) {
+        if (e && e.code !== "declined") avisar("No se pudo guardar aquí");
+      }
+      return;
+    }
     a.href = c.toDataURL("image/png");
     a.click();
     avisar("Imagen guardada");
