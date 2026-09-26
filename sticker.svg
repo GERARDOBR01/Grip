@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="110 135 900 900" width="360" height="360">
+  <title>Sticker animado</title>
+  <style>
+    .todo { animation: mecer 2.4s ease-in-out infinite; transform-origin: 560px 600px; }
+    .ojo { animation: parpadear 2.4s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+    .brillo { animation: brillar 1.2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+    .dientes { animation: reir 0.6s ease-in-out infinite; }
+    .cachete { animation: latir 1.2s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+    .corazon { opacity: 0; animation: subir 2.4s ease-out infinite; transform-box: fill-box; transform-origin: center; }
+    .c2 { animation-delay: .8s; } .c3 { animation-delay: 1.6s; }
+    .chispa { animation: chispear 1.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+    .ch2 { animation-delay: .8s; }
+    @keyframes mecer { 0%,100% { transform: rotate(-3deg) translateY(0); } 50% { transform: rotate(3deg) translateY(-14px); } }
+    @keyframes parpadear { 0%,40%,48%,100% { transform: scaleY(1); } 44% { transform: scaleY(.08); } }
+    @keyframes brillar { 0%,100% { transform: scale(1); } 50% { transform: scale(1.18); } }
+    @keyframes reir { 0%,100% { transform: translateY(0); } 50% { transform: translateY(7px); } }
+    @keyframes latir { 0%,100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+    @keyframes subir {
+      0% { opacity: 0; transform: translateY(40px) scale(.4); }
+      20% { opacity: 1; }
+      100% { opacity: 0; transform: translateY(-160px) scale(1.1) rotate(12deg); }
+    }
+    @keyframes chispear { 0%,100% { opacity: .2; transform: scale(.5) rotate(0); } 50% { opacity: 1; transform: scale(1.1) rotate(45deg); } }
+  </style>
+  <defs>
+    <clipPath id="marco"><rect x="136" y="162" width="848" height="846" rx="14"/></clipPath>
+  </defs>
+
+  <!-- marco blanco del sticker -->
+  <rect x="124" y="150" width="872" height="870" rx="22" fill="#fff"/>
+  <g clip-path="url(#marco)">
+    <rect x="130" y="150" width="870" height="870" fill="#3b4760"/>
+
+    <!-- boca del vecino, abajo a la derecha -->
+    <ellipse cx="1000" cy="900" rx="110" ry="170" fill="#141414"/>
+    <ellipse cx="1010" cy="960" rx="80" ry="80" fill="#f07a8c"/>
+
+    <g class="todo">
+      <!-- la boca oscura detrás de los dientes -->
+      <ellipse cx="630" cy="905" rx="150" ry="62" fill="#141414"/>
+      <g class="dientes">
+        <path d="M470,850 L600,862 L640,812 L690,830 L702,796 L772,798 L762,880 Q650,935 520,925 Z"
+              fill="#fbfbf5" stroke="#1a1a1a" stroke-width="7" stroke-linejoin="round"/>
+        <path d="M600,862 L610,925 M690,830 L700,910" stroke="#1a1a1a" stroke-width="5"/>
+        <path d="M560,900 Q600,940 640,905" fill="#fbfbf5" stroke="#1a1a1a" stroke-width="5"/>
+      </g>
+
+      <!-- cabeza -->
+      <path d="M80,100 L905,100 Q925,380 935,655 L905,668 L896,700 L830,745 L782,758 L772,800 L702,798
+               L690,832 L640,815 L600,862 L480,852 L430,836 L380,836 L330,820 L252,822 L240,800 L80,745 Z"
+            fill="#dcbc8c" stroke="#1a1a1a" stroke-width="9" stroke-linejoin="round"/>
+      <!-- pliegues -->
+      <path d="M230,530 L780,165 M215,550 L565,885" stroke="#2a1d10" stroke-width="7" stroke-linecap="round" fill="none"/>
+      <path d="M140,515 L175,522" stroke="#2a1d10" stroke-width="6" stroke-linecap="round"/>
+      <path d="M185,675 L275,740 M228,740 L262,765 M238,722 L270,748" stroke="#2a1d10" stroke-width="5" stroke-linecap="round"/>
+
+      <!-- cachetes rosas -->
+      <ellipse class="cachete" cx="412" cy="862" rx="44" ry="28" fill="#f2a08e" stroke="#1a1a1a" stroke-width="6"/>
+      <ellipse class="cachete" cx="858" cy="738" rx="40" ry="28" fill="#f2a08e" stroke="#1a1a1a" stroke-width="6"/>
+
+      <!-- ojo grande -->
+      <g class="ojo">
+        <circle cx="582" cy="642" r="124" fill="#7fc3ec" stroke="#1a1a1a" stroke-width="8"/>
+        <circle cx="574" cy="616" r="104" fill="#111"/>
+        <ellipse class="brillo" cx="552" cy="580" rx="54" ry="36" fill="#fff"/>
+        <circle cx="620" cy="660" r="10" fill="#fff" opacity=".8"/>
+      </g>
+      <!-- ojo chico -->
+      <g class="ojo">
+        <circle cx="812" cy="520" r="104" fill="#7fc3ec" stroke="#1a1a1a" stroke-width="8"/>
+        <circle cx="806" cy="498" r="87" fill="#111"/>
+        <ellipse class="brillo" cx="786" cy="466" rx="46" ry="30" fill="#fff"/>
+        <circle cx="846" cy="532" r="8" fill="#fff" opacity=".8"/>
+      </g>
+    </g>
+
+    <!-- corazones que suben -->
+    <g transform="translate(300,360) scale(2.4)"><path class="corazon" fill="#ff7aa8" stroke="#fff" stroke-width="3" d="M0,10 C-10,-4 -28,2 -20,18 L0,36 L20,18 C28,2 10,-4 0,10 Z"/></g>
+    <g transform="translate(560,300) scale(1.8)"><path class="corazon c2" fill="#ff9fc0" stroke="#fff" stroke-width="3" d="M0,10 C-10,-4 -28,2 -20,18 L0,36 L20,18 C28,2 10,-4 0,10 Z"/></g>
+    <g transform="translate(250,700) scale(2)"><path class="corazon c3" fill="#ff7aa8" stroke="#fff" stroke-width="3" d="M0,10 C-10,-4 -28,2 -20,18 L0,36 L20,18 C28,2 10,-4 0,10 Z"/></g>
+    <!-- chispas -->
+    <g transform="translate(960,230) scale(1.6)"><path class="chispa" fill="#fff6a8" d="M0,-26 L6,-6 L26,0 L6,6 L0,26 L-6,6 L-26,0 L-6,-6 Z"/></g>
+    <g transform="translate(940,960) scale(1.3)"><path class="chispa ch2" fill="#fff6a8" d="M0,-26 L6,-6 L26,0 L6,6 L0,26 L-6,6 L-26,0 L-6,-6 Z"/></g>
+  </g>
+</svg>

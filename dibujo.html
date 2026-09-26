@@ -32,6 +32,9 @@
     border-bottom: 1px solid var(--borde); background: #fff;
   }
   .arriba h1 { font-size: 18px; margin: 0 auto 0 4px; font-weight: 700; min-width: 0; line-height: 1.15; }
+  .sticker { width: 44px; height: 44px; flex: none; cursor: pointer; }
+  .sticker.salto { animation: salto .5s ease; }
+  @keyframes salto { 0%,100% { transform: scale(1) rotate(0); } 40% { transform: scale(1.3) rotate(-10deg); } 70% { transform: scale(.95) rotate(6deg); } }
   .accion {
     min-width: var(--toque); height: var(--toque); padding: 0 12px;
     display: inline-flex; align-items: center; justify-content: center; gap: 6px;
@@ -122,13 +125,15 @@
     .accion .texto { display: none; }
     .accion { padding: 0; }
     .arriba { gap: 6px; }
-    .arriba h1 { font-size: 16px; }
+    .arriba h1 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+    .arriba .sticker { margin-right: auto; }
   }
 </style>
 </head>
 <body>
 
 <div class="arriba">
+  <img class="sticker" id="sticker" src="sticker.svg" alt="" width="44" height="44">
   <h1>Dibujar y colorear</h1>
   <button class="accion" id="deshacer" title="Deshacer (Ctrl+Z)" aria-label="Deshacer" disabled>
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
@@ -673,6 +678,9 @@
     const a = $("aviso"); a.textContent = texto; a.classList.add("visible");
     clearTimeout(temporizador); temporizador = setTimeout(() => a.classList.remove("visible"), 1800);
   }
+
+  const sticker = $("sticker");
+  sticker.onclick = () => { sticker.classList.remove("salto"); void sticker.offsetWidth; sticker.classList.add("salto"); };
 
   new ResizeObserver(ajustar).observe(zona);
   ajustar();
