@@ -198,12 +198,16 @@ export function partirPalabras(texto) {
  * edita la que ya estaba (su nombre no cambia: es su identidad, y la que aprendió la app sola
  * es la marca del comercio).
  *
- * Una palabra no puede estar en dos reglas, ni ser el comercio de otra regla. Si pudiera, el
- * mismo cargo tendría dos dueños y cuál gana dependería de un desempate que nadie ve. Wallet
- * hace lo mismo, y por la misma razón.
+ * Una palabra no puede estar en dos reglas. Si pudiera, el mismo cargo tendría dos dueños y
+ * cuál gana dependería de un desempate que nadie ve. Wallet hace lo mismo, y por la misma razón.
+ *
+ * Si la palabra es el comercio de una regla APRENDIDA (sin palabras propias), esa regla se
+ * absorbe: la persona acaba de decir explícitamente qué hacer con ese comercio, y eso es más
+ * nuevo y más claro que una corrección de hace semanas. Se devuelven en `absorbidas` para
+ * poder decirlo. Si la otra también la escribió ella, no se pisa: se le pregunta.
  */
 export function guardarRegla(datos, propuesta, claveOriginal = null, iso = hoyISO()) {
-  const falla = (error) => ({ datos, regla: null, error });
+  const falla = (error) => ({ datos, regla: null, absorbidas: [], error });
   const previas = datos.reglas || [];
   const original = claveOriginal ? previas.find((r) => r.clave === claveOriginal) : null;
   if (claveOriginal && !original) return falla("Esa regla ya no existe.");
@@ -217,6 +221,7 @@ export function guardarRegla(datos, propuesta, claveOriginal = null, iso = hoyIS
 
   const escritas = partirPalabras(propuesta.palabras);
   const palabras = [];
+  const absorbidas = [];
   for (const escrita of escritas) {
     const palabra = canonizarPalabra(escrita);
     if (palabra.length < PALABRA_MINIMA) {
@@ -226,9 +231,10 @@ export function guardarRegla(datos, propuesta, claveOriginal = null, iso = hoyIS
     const duena = otras.find((r) => (r.palabras || []).includes(palabra));
     if (duena) return falla(`«${escrita}» ya está en la regla «${duena.clave}». Una palabra solo puede tener un dueño.`);
     const propia = otras.find((r) => r.clave === palabra);
-    if (propia) {
-      return falla(`«${escrita}» ya tiene su propia regla. Olvídala primero, o usa otra palabra.`);
+    if (propia && propia.palabras.length) {
+      return falla(`«${escrita}» es el nombre de tu regla «${propia.clave}». Agrégale ahí la palabra, o usa otra.`);
     }
+    if (propia) absorbidas.push(propia.clave);
     palabras.push(palabra);
   }
   if (!palabras.length && !original) return falla("Escribe al menos una palabra que aparezca en el aviso.");
@@ -250,7 +256,8 @@ export function guardarRegla(datos, propuesta, claveOriginal = null, iso = hoyIS
     veces: original ? original.veces : 1,
     ultima: iso,
   });
-  return { datos: { ...datos, reglas: [regla, ...otras] }, regla, error: null };
+  const quedan = otras.filter((r) => !absorbidas.includes(r.clave));
+  return { datos: { ...datos, reglas: [regla, ...quedan] }, regla, absorbidas, error: null };
 }
 
 /** Borrar una regla tiene que ser tan fácil como crearla. */

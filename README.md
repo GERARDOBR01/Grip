@@ -34,13 +34,13 @@ motor/          el cálculo, en JavaScript puro y sin DOM
 | Pantalla | Qué contesta |
 |---|---|
 | **Hoy** | Cuánto queda de la quincena, cuánto por día, con cuánto cierra el ciclo a este ritmo, qué se paga esta semana, cuántas quincenas aguantaría el fondo de emergencia, y qué suscripción te subió de precio |
-| **Bandeja** | Lo que llegó solo y espera confirmación. Pegar, compartir o traer del correo; aceptar es un toque |
-| **Historial** | Mes por mes, con buscador, y la tendencia de las últimas seis quincenas |
+| **Bandeja** | Lo que llegó solo y espera confirmación. Pegar, compartir, traer del correo o **subir el estado de cuenta** (CSV u OFX, eligiendo qué columna es qué); aceptar es un toque |
+| **Historial** | Mes por mes, con buscador, la tendencia de las últimas seis quincenas, y **en qué llevas gastado más que a estas alturas de la quincena pasada** |
 | **Presupuesto** | Cuánto va gastado por categoría contra su tope, con semáforo |
 | **Metas** | Cuánto hay que apartar por quincena — y si eso cabe en la capacidad real de ahorro |
 | **Fijos** | Qué vence, qué ya se pagó y cuánto se debe, más las suscripciones que encontró sola en el historial |
 | **Tarjetas** | Cuánto pagar para **no generar intereses** y para cuándo, qué llevas gastado desde el corte —que se cobra hasta el siguiente—, cuánto de tu línea vas usando, cuánto tienes comprometido a meses y hasta cuándo, y cuántos de los últimos seis cortes pagaste completos |
-| **Ajustes** | Ingreso (o **sube tu recibo de nómina** y sale exacto), ciclo, fondo de emergencia, lo que aprendió de ti, avisos, el puente de correo y respaldo en JSON |
+| **Ajustes** | Ingreso (o **sube tu recibo de nómina** y sale exacto), ciclo, fondo de emergencia, **reglas** (las que aprendió de ti y las que escribes: varias palabras por regla, o «esto es un pago de tarjeta», aplicables a lo de antes eligiendo cuáles), **plantillas** para lo que se repite igualito, avisos, el puente de correo y respaldo en JSON |
 
 Cinco cosas mueven dinero: **gasto**, **ingreso**, **apartar**, **retirar** y **pagar una
 tarjeta** —que no es un gasto, sino dinero que cambia de lugar—. Las cuatro primeras salen del

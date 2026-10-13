@@ -61,10 +61,20 @@ test("una palabra no puede tener dos dueños", () => {
   assert.equal(r.datos, datos, "un error no cambia nada");
 });
 
-test("ni puede ser el comercio exacto de otra regla", () => {
-  const datos = recordar(datosDePrueba(), "OXXO 4412", "super", HOY);
+test("una regla escrita absorbe la aprendida de ese mismo comercio, y lo dice", () => {
+  const datos = recordar(datosDePrueba(), "OXXO 4412", "otros", HOY); // aceptado tal cual llegó
+  const r = guardarRegla(datos, { clave: "Tiendas", palabras: "oxxo", categoriaId: "super" }, null, HOY);
+  assert.equal(r.error, null);
+  assert.deepEqual(r.absorbidas, ["oxxo"]);
+  assert.deepEqual(r.datos.reglas.map((x) => x.clave), ["Tiendas"]);
+  assert.equal(sugerirCategoria(r.datos, "OXXO 4412").categoriaId, "super");
+});
+
+test("pero no pisa otra regla escrita por la persona", () => {
+  let datos = recordar(datosDePrueba(), "OXXO 4412", "super", HOY);
+  datos = conRegla(datos, { palabras: "oxxo gas", categoriaId: "transporte" }, "oxxo");
   const r = guardarRegla(datos, { clave: "Tiendas", palabras: "oxxo", categoriaId: "ocio" }, null, HOY);
-  assert.match(r.error, /ya tiene su propia regla/);
+  assert.match(r.error, /es el nombre de tu regla «oxxo»/);
 });
 
 test("lo que no sirve se dice: palabra corta, sin palabras, sin categoría, nombre repetido", () => {

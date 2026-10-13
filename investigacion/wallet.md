@@ -96,3 +96,10 @@ importa su propio JSON; el estado de cuenta en CSV/OFX que da cualquier banco me
 
 Las seis caben en las reglas de Grip: todo es determinista, local y cada resultado puede decir
 de dónde salió.
+
+## Estado
+
+Las seis están construidas: reglas con palabras (`motor/aprendizaje.js`), elegir qué cambiar
+hacia atrás, reglas de pago de tarjeta, importar CSV/OFX (`motor/importar.js`), contra la
+quincena pasada (`contraElCicloAnterior` en `motor/tendencia.js`) y plantillas
+(`motor/plantillas.js`). El documento sube a la versión 6.

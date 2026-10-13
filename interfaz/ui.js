@@ -11,7 +11,7 @@ import { formatear, aCentavos, plural } from "../motor/dinero.js";
 import { horaAhora, hoyISO, mesDe, cicloDe, vencimientoEnMes, sumarDias } from "../motor/ciclo.js";
 import {
   TIPOS, FRECUENCIAS, PLAZOS_MSI, agregarMovimiento, eliminarMovimiento, movimientosEntre, categoriaPorId, idNuevo,
-  datosVacios, ORIGENES, ESTADOS_BANDEJA, marcarBorrado, purgarBorrados,
+  datosVacios, ORIGENES, ESTADOS_BANDEJA, ACCIONES_REGLA, marcarBorrado, purgarBorrados,
 } from "../motor/modelo.js";
 import { claveDeTope } from "../motor/fusion.js";
 import { resumenPresupuesto, topesVariables, topeVigente } from "../motor/presupuesto.js";
@@ -35,8 +35,15 @@ import {
 } from "../motor/bandeja.js";
 import { montosFrecuentes } from "../motor/rapido.js";
 import { leerNomina, corteDeNomina } from "../motor/nomina.js";
-import { reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla } from "../motor/aprendizaje.js";
+import {
+  reglasAprendidas, olvidar, movimientosDeLaMarca, aplicarRegla, guardarRegla, movimientosDeLaRegla, aplicarReglaA,
+} from "../motor/aprendizaje.js";
+import { listaDePlantillas, guardarPlantilla, borrarPlantilla, usarPlantilla } from "../motor/plantillas.js";
+import {
+  esOFX, leerOFX, analizarCSV, filasAMovimientos, mandarABandeja, CAMPOS_IMPORTAR, TANDA_DE_IMPORTACION,
+} from "../motor/importar.js";
 import { marcaDe } from "../motor/lectura.js";
+import { esSinDatos } from "../motor/veredicto.js";
 import { recordatoriosDeHoy, avisoDeEntrada, barraDeHoy } from "../motor/recordatorios.js";
 import {
   estadoDeAvisos, encenderAvisos, apagarAvisos, avisarDe, ponerGlobo, ESPERA_ENTRE_REVISIONES,
@@ -44,7 +51,7 @@ import {
 } from "./avisos.js";
 import { drenarIntenciones } from "../almacen/intenciones.js";
 import { porRegistrar, subieronDePrecio, fijoDesdeRecurrente, totalRecurrenteMensual } from "../motor/recurrentes.js";
-import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon } from "../motor/tendencia.js";
+import { tendenciaPorCiclo, resumenTendencia, quincenasDeColchon, contraElCicloAnterior } from "../motor/tendencia.js";
 import { nombreDeBanco, bancosQueAvisan, bancosParciales } from "../motor/reglas-banco.js";
 import { abrirAlmacen, MODOS } from "../almacen/almacen.js";
 import { exportar, importar, nombreDeRespaldo, respaldoPendiente } from "../almacen/archivo.js";
@@ -572,9 +579,13 @@ function vistaHoy() {
   // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
   // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
   const frecuentes = montosFrecuentes(datos, hoy, 3, app.hora);
-  const rapido = frecuentes.length
+  // Y lo que la persona dijo que se repite: sus plantillas, con nombre, un toque cada una.
+  const plantillas = listaDePlantillas(datos);
+  const rapido = frecuentes.length || plantillas.length
     ? `<div class="tarjeta">
-        <div class="rotulo">Lo de siempre, en efectivo</div>
+        ${plantillas.length ? `<div class="rotulo">Tus plantillas</div>
+          <div class="acciones">${plantillas.map(botonPlantilla).join("")}</div>` : ""}
+        ${frecuentes.length ? `<div class="rotulo">Lo de siempre, en efectivo</div>` : ""}
         <div class="acciones">
           ${frecuentes.map((f) => {
             const categoria = categoriaPorId(datos, f.categoriaId);
@@ -679,7 +690,9 @@ function tarjetaEntrada(entrada) {
     fechaCorta(entrada.movimiento.fecha),
     entrada.banco ? nombreDeBanco(entrada.banco) || entrada.banco : null,
     entrada.ultimos4 ? `••${entrada.ultimos4}` : null,
-    entrada.origen === ORIGENES.CORREO ? "de tu correo" : entrada.origen === ORIGENES.COMPARTIDO ? "compartido" : null,
+    entrada.origen === ORIGENES.CORREO ? "de tu correo"
+      : entrada.origen === ORIGENES.COMPARTIDO ? "compartido"
+      : entrada.origen === ORIGENES.ARCHIVO ? "de tu estado de cuenta" : null,
   ].filter(Boolean).join(" · ");
 
   // Las categorías van como fichas para que aceptar sea un toque, no un formulario. Ésa es
@@ -738,6 +751,15 @@ function vistaBandeja() {
         <input id="captura" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
           hidden data-accion-archivo="captura">` : ""}
     </div>
+  </div>
+  <div class="tarjeta">
+    <div class="fila"><div class="crece">
+      <div class="nombre">Sube tu estado de cuenta</div>
+      <div class="sub">el CSV u OFX que deja bajar tu banco: meses de historial sin teclear nada. Llega aquí y tú confirmas.</div>
+    </div>
+    <button class="boton chico" data-accion="elegir-estado">Subir</button>
+    <input id="estado-cuenta" type="file" accept=".csv,.txt,.ofx,.qfx,text/csv,text/plain"
+      hidden data-accion-archivo="estado"></div>
   </div>`;
 
   // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
@@ -900,6 +922,38 @@ function tarjetaTendencia() {
     </div>`;
 }
 
+/** Una plantilla como botón: su nombre y su monto, para usarla de un toque. */
+function botonPlantilla(p) {
+  const categoria = p.tipo === TIPOS.GASTO ? categoriaPorId(app.datos, p.categoria) : null;
+  return `<button class="boton tenue" data-accion="usar-plantilla" data-id="${esc(p.id)}"
+    title="${p.tipo === TIPOS.INGRESO ? "ingreso" : "gasto"} de ${esc(monto(p.monto))}">${categoria ? `${categoria.emoji} ` : ""}${esc(p.nombre)} · ${p.tipo === TIPOS.INGRESO ? "+" : ""}${monto(p.monto)}</button>`;
+}
+
+/**
+ * ¿En qué estoy gastando más que la vez pasada? A la misma altura de la quincena: el día 4 de
+ * ésta contra los primeros 4 días de la anterior. Si la anterior no tiene nada, no aparece —
+ * una comparación contra cero sería un número sin contexto.
+ */
+function tarjetaContraAnterior() {
+  const r = contraElCicloAnterior(app.datos, app.hoy);
+  if (esSinDatos(r.veredicto) || (!r.totalAhora && !r.totalAntes)) return "";
+  const filas = r.filas.slice(0, 5).map((f) => {
+    const categoria = categoriaPorId(app.datos, f.categoriaId);
+    const subio = f.diferencia > 0;
+    return `<div class="fila">
+      <div class="crece"><div class="nombre">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : f.categoriaId)}</div>
+        <div class="sub">${monto(f.ahora)} ahora · ${monto(f.antes)} la vez pasada</div></div>
+      <div class="monto" style="color:var(${subio ? "--mal" : "--bien"})">${subio ? "+" : "−"}${monto(Math.abs(f.diferencia))}</div>
+    </div>`;
+  }).join("");
+  return `<div class="titulo-seccion">Contra la quincena pasada</div>
+    <div class="tarjeta">
+      <div class="rotulo">Lo que llevas gastado contra lo que llevabas a estas alturas</div>
+      ${filas}
+      ${veredictoHTML(r.veredicto)}
+    </div>`;
+}
+
 function vistaHistorial() {
   const filtro = app.filtro || { texto: "", tipo: "" };
   const meses = Object.keys(app.datos.movimientos).sort().reverse();
@@ -1000,6 +1054,7 @@ function vistaHistorial() {
     </div>`;
 
   return `<div class="acciones" style="margin:0 0 10px"><button class="boton tenue" data-accion="ir" data-vista="hoy">← Volver a Hoy</button></div>
+    ${tarjetaContraAnterior()}
     ${tarjetaTendencia()}
     ${buscador}
     ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}
@@ -1572,30 +1627,58 @@ function vistaAjustes() {
        </details>`
     : "";
 
+  // Las reglas: las que aprendí de tus correcciones y las que escribiste tú. Va siempre, aunque
+  // no haya ninguna todavía: es el lugar donde se crea la primera.
   const reglas = reglasAprendidas(app.datos);
-  const loAprendido = reglas.length
-    ? `<div class="titulo-seccion">Lo que aprendí de ti</div>
+  const loAprendido = `<div class="titulo-seccion">Reglas</div>
        <div class="tarjeta">
-         <div class="rotulo">Cuando un aviso venga de estos lugares, le pongo esta categoría sola.</div>
+         <div class="rotulo">Cuando un aviso coincida, hago esto solo. Las que dicen «aprendida» salieron
+           de tus correcciones; con palabras, atrapan al comercio aunque el banco lo escriba distinto.</div>
          ${reglas.map((r) => {
-           const categoria = categoriaPorId(app.datos, r.categoriaId);
-           return `<div class="fila">
-             <div class="crece"><div class="nombre">${esc(r.clave)}</div>
-               <div class="sub">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div></div>
-             ${(() => {
-               // Solo si de verdad quedó historial viejo detrás. Un botón que no hace nada es
-               // peor que no tener botón.
-               const atrasados = movimientosDeLaMarca(app.datos, r.clave, r.categoriaId).length;
-               return atrasados
-                 ? `<button class="boton chico tenue" data-accion="aplicar-regla-atras"
-                      data-clave="${esc(r.clave)}" data-categoria="${esc(r.categoriaId)}">Aplicar a ${atrasados}</button>`
-                 : "";
-             })()}
-             <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
+           const accion = r.accion === ACCIONES_REGLA.PAGO
+             ? (() => {
+               const tarjeta = (app.datos.tarjetas || []).find((t) => t.id === r.tarjetaId);
+               return `▭ pago a ${tarjeta ? tarjeta.nombre : "una tarjeta que ya no está"}`;
+             })()
+             : (() => {
+               const categoria = categoriaPorId(app.datos, r.categoriaId);
+               return categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId;
+             })();
+           const palabras = r.palabras.length ? ` · si dice ${r.palabras.map((p) => `«${p}»`).join(", ")}` : " · aprendida";
+           // Solo si de verdad quedó historial detrás. Un botón que no hace nada es peor que no
+           // tener botón.
+           const atrasados = movimientosDeLaRegla(app.datos, r.clave).length;
+           return `<div class="fila apilada">
+             <div class="linea"><div class="nombre">${esc(r.clave)}</div></div>
+             <div class="sub">${esc(accion)}${esc(palabras)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div>
+             <div class="acciones-fila">
+               ${atrasados ? `<button class="boton chico tenue" data-accion="aplicar-regla-atras"
+                    data-clave="${esc(r.clave)}">Aplicar a ${atrasados}</button>` : ""}
+               <button class="boton chico tenue" data-accion="editar-regla" data-clave="${esc(r.clave)}">Editar</button>
+               <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
+             </div>
            </div>`;
          }).join("")}
-       </div>`
-    : "";
+         ${reglas.length ? "" : vacio("Todavía no hay reglas. Corrige una categoría en la bandeja y aprendo sola, o escribe una.")}
+         <div class="acciones"><button class="boton tenue" data-accion="nueva-regla">Nueva regla</button></div>
+       </div>`;
+
+  const plantillas = listaDePlantillas(app.datos);
+  const seccionPlantillas = `<div class="titulo-seccion">Plantillas</div>
+    <div class="tarjeta">
+      <div class="rotulo">Lo que se repite igualito —la renta, la colegiatura, el camión— con nombre. Aparecen
+        en Hoy y en el teclado: un toque y queda capturado con la fecha de hoy.</div>
+      ${plantillas.map((p) => {
+        const categoria = p.tipo === TIPOS.GASTO ? categoriaPorId(app.datos, p.categoria) : null;
+        return `<div class="fila">
+          <div class="crece"><div class="nombre">${esc(p.nombre)}</div>
+            <div class="sub">${p.tipo === TIPOS.INGRESO ? "ingreso" : esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : p.categoria)} · ${monto(p.monto)}</div></div>
+          <button class="boton chico tenue" data-accion="editar-plantilla" data-id="${esc(p.id)}">Editar</button>
+          <button class="boton chico tenue" data-accion="borrar-plantilla" data-id="${esc(p.id)}">Borrar</button>
+        </div>`;
+      }).join("")}
+      <div class="acciones"><button class="boton tenue" data-accion="nueva-plantilla">Nueva plantilla</button></div>
+    </div>`;
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
@@ -1619,6 +1702,7 @@ function vistaAjustes() {
     ${seccionAvisos}
     ${seccionPuente}
     ${loAprendido}
+    ${seccionPlantillas}
 
     <div class="titulo-seccion">Tus datos</div>
     <div class="tarjeta">
@@ -2404,14 +2488,57 @@ const acciones = {
 
   // Lo mismo, desde la lista de reglas de Ajustes: para lo que se aprendió hace meses y dejó
   // historial viejo detrás.
-  async "aplicar-regla-atras"(el) {
-    const clave = el.dataset.clave;
-    const categoriaId = el.dataset.categoria;
-    const cuantos = movimientosDeLaMarca(app.datos, clave, categoriaId).length;
-    if (!cuantos) return;
-    await guardar(aplicarRegla(app.datos, clave, categoriaId));
-    app.aviso = `${cuantos} ${cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(categoriaId)}.`;
+  // Desde la lista de reglas de Ajustes: para lo que se aprendió hace meses y dejó historial
+  // viejo detrás. Se enseña la lista y se elige — no todo lo que coincide es lo que crees.
+  "aplicar-regla-atras"(el) {
+    hojaElegirAtras(el.dataset.clave);
+  },
+
+  "nueva-regla"() {
+    hojaRegla();
+  },
+
+  "editar-regla"(el) {
+    hojaRegla(el.dataset.clave);
+  },
+
+  async "usar-plantilla"(el) {
+    const { datos, movimiento, error } = usarPlantilla(app.datos, el.dataset.id, app.hoy, app.hora);
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    vibrar();
+    await guardar(datos);
+    app.aviso = `Listo: ${movimiento.nota} por ${monto(movimiento.monto)}.`;
     render();
+  },
+
+  "nueva-plantilla"() {
+    hojaPlantilla();
+  },
+
+  "editar-plantilla"(el) {
+    hojaPlantilla(el.dataset.id);
+  },
+
+  "borrar-plantilla"(el) {
+    const plantilla = (app.datos.plantillas || []).find((p) => p.id === el.dataset.id);
+    if (!plantilla) return;
+    confirmar({
+      titulo: "Borrar plantilla",
+      mensaje: `«${plantilla.nombre}» deja de aparecer en Hoy. Lo que ya capturaste con ella se queda.`,
+      textoBoton: "Borrar",
+      alConfirmar: async () => {
+        await guardar(borrarPlantilla(app.datos, plantilla.id));
+        return null;
+      },
+    });
+  },
+
+  "elegir-estado"() {
+    const campo = document.getElementById("estado-cuenta");
+    if (campo) campo.click();
   },
 
   "editar-entrada"(el) {
@@ -2991,6 +3118,313 @@ const TIPOS_CAPTURA = [
  * ya tecleaste. También sirve para CORREGIR un movimiento: conserva su id, así que editar
  * no es borrar y volver a capturar.
  */
+// --- Reglas ---
+
+/** Las opciones de "qué hace la regla": una categoría, o el pago de una tarjeta. */
+function opcionesDeAccion() {
+  const categorias = opcionesCategorias().map((o) => ({ valor: `cat:${o.valor}`, etiqueta: `Ponerle ${o.etiqueta}` }));
+  const tarjetas = (app.datos.tarjetas || []).filter((t) => t.activa)
+    .map((t) => ({ valor: `pago:${t.id}`, etiqueta: `Es pago de ${t.nombre}, no gasto` }));
+  return [...categorias, ...tarjetas];
+}
+
+/**
+ * Crear o editar una regla. Al guardar, si hay movimientos de antes que la regla cambiaría, se
+ * ofrecen — con la lista delante, para elegir cuáles.
+ */
+function hojaRegla(clave = null) {
+  const regla = clave ? (app.datos.reglas || []).find((r) => r.clave === clave) : null;
+  if (clave && !regla) return;
+  const accionActual = regla
+    ? regla.accion === ACCIONES_REGLA.PAGO ? `pago:${regla.tarjetaId}` : `cat:${regla.categoriaId}`
+    : `cat:${(opcionesCategorias()[0] || { valor: "otros" }).valor}`;
+
+  abrirHoja({
+    titulo: regla ? `Regla «${regla.clave}»` : "Nueva regla",
+    campos: [
+      ...(regla ? [] : [{ clave: "nombre", etiqueta: "Nombre", tipo: "texto", requerido: true, valor: "" }]),
+      {
+        clave: "palabras", etiqueta: "Si el aviso dice", tipo: "texto",
+        valor: regla ? regla.palabras.join(", ") : "",
+        ayuda: regla && !regla.palabras.length
+          ? `Ya atrapa todo lo que sea «${regla.clave}». Agrega otras formas en que lo escribe tu banco, separadas por coma.`
+          : "Una o varias, separadas por coma: oxxo, 7 eleven. Basta con que el aviso las contenga.",
+      },
+      { clave: "accion", etiqueta: "Entonces", tipo: "select", opciones: opcionesDeAccion(), valor: accionActual },
+    ],
+    alGuardar: async (valores) => {
+      const [tipo, id] = String(valores.accion || "").split(/:(.*)/s);
+      const { datos, regla: guardada, absorbidas, error } = guardarRegla(app.datos, {
+        clave: valores.nombre,
+        palabras: valores.palabras || "",
+        accion: tipo === "pago" ? ACCIONES_REGLA.PAGO : ACCIONES_REGLA.CATEGORIA,
+        categoriaId: tipo === "cat" ? id : null,
+        tarjetaId: tipo === "pago" ? id : null,
+      }, clave, app.hoy);
+      if (error) return error;
+      await guardar(datos);
+      if (absorbidas.length) {
+        app.aviso = `Lo que había aprendido de ${absorbidas.map((c) => `«${c}»`).join(", ")} ahora lo decide «${guardada.clave}».`;
+        render();
+      }
+      // La hoja se cierra al volver de aquí; la siguiente se abre después, o la cerraría.
+      if (movimientosDeLaRegla(app.datos, guardada.clave).length) setTimeout(() => hojaElegirAtras(guardada.clave), 0);
+      return null;
+    },
+  });
+}
+
+/** Cuántas filas se enseñan para elegir. Más no se leen; el resto se aplica igual si se pide. */
+const FILAS_PARA_ELEGIR = 60;
+
+/**
+ * Los movimientos de antes que la regla cambiaría, con una casilla cada uno. Todos marcados de
+ * entrada: lo normal es querer arreglarlos, y lo raro —el reembolso, el cargo que sí era otra
+ * cosa— se desmarca.
+ */
+function hojaElegirAtras(clave) {
+  const regla = (app.datos.reglas || []).find((r) => r.clave === clave);
+  const lista = movimientosDeLaRegla(app.datos, clave);
+  if (!regla || !lista.length) return;
+  const destino = regla.accion === ACCIONES_REGLA.PAGO
+    ? `pagos de ${((app.datos.tarjetas || []).find((t) => t.id === regla.tarjetaId) || { nombre: "tarjeta" }).nombre}`
+    : nombreCategoria(regla.categoriaId);
+  const visibles = lista.slice(0, FILAS_PARA_ELEGIR);
+
+  abrirHoja({
+    titulo: `${plural(lista.length, "movimiento coincide", "movimientos coinciden")}`,
+    textoGuardar: "Cambiar los marcados",
+    campos: [],
+    extra: `<p class="rotulo" style="margin:0 0 8px">Ya estaban capturados. Los marcados pasan a
+        <b>${esc(destino)}</b>; el monto, la fecha y la nota no se tocan.</p>
+      <div class="lista-elegir">
+        ${visibles.map((m) => `<label class="fila">
+          <input type="checkbox" data-elegir="${esc(m.id)}" checked>
+          <div class="crece"><div class="nombre">${esc(m.nota || "Sin nota")}</div>
+            <div class="sub">${fechaCorta(m.fecha)} · ${esc(nombreCategoria(m.categoria) || "")}</div></div>
+          <div class="monto">${monto(m.monto)}</div>
+        </label>`).join("")}
+      </div>
+      ${lista.length > visibles.length
+        ? `<label class="fila"><input type="checkbox" data-elegir-resto checked>
+            <div class="crece"><div class="sub">y los otros ${lista.length - visibles.length}, más viejos</div></div></label>`
+        : ""}`,
+    alGuardar: async () => {
+      const marcados = [...document.querySelectorAll("#hojas [data-elegir]:checked")].map((n) => n.dataset.elegir);
+      const resto = document.querySelector("#hojas [data-elegir-resto]:checked")
+        ? lista.slice(FILAS_PARA_ELEGIR).map((m) => m.id) : [];
+      const ids = [...marcados, ...resto];
+      if (!ids.length) return "No marcaste ninguno. Si no quieres cambiar nada, cancela.";
+      await guardar(aplicarReglaA(app.datos, clave, ids));
+      app.aviso = `${ids.length} ${ids.length === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${destino}.`;
+      render();
+      return null;
+    },
+  });
+}
+
+// --- Plantillas ---
+
+function hojaPlantilla(id = null) {
+  const plantilla = id ? (app.datos.plantillas || []).find((p) => p.id === id) : null;
+  if (id && !plantilla) return;
+  abrirHoja({
+    titulo: plantilla ? "Editar plantilla" : "Nueva plantilla",
+    campos: [
+      { clave: "nombre", etiqueta: "Nombre", tipo: "texto", requerido: true, valor: plantilla ? plantilla.nombre : "" },
+      { clave: "monto", etiqueta: "Monto", tipo: "monto", requerido: true, valor: plantilla ? comoCampo(plantilla.monto) : "" },
+      {
+        clave: "tipo", etiqueta: "Es", tipo: "chips",
+        opciones: [{ valor: TIPOS.GASTO, etiqueta: "Gasto" }, { valor: TIPOS.INGRESO, etiqueta: "Ingreso" }],
+        valor: plantilla ? plantilla.tipo : TIPOS.GASTO,
+      },
+      {
+        clave: "categoria", etiqueta: "Categoría (si es gasto)", tipo: "select", opciones: opcionesCategorias(),
+        valor: plantilla && plantilla.categoria ? plantilla.categoria : (opcionesCategorias()[0] || {}).valor,
+      },
+    ],
+    alGuardar: async (valores) => {
+      const { datos, error } = guardarPlantilla(app.datos, {
+        ...(plantilla || {}),
+        nombre: valores.nombre,
+        monto: valores.monto,
+        tipo: valores.tipo || TIPOS.GASTO,
+        categoria: valores.tipo === TIPOS.INGRESO ? null : valores.categoria,
+      });
+      if (error) return error;
+      await guardar(datos);
+      return null;
+    },
+  });
+}
+
+// --- Estado de cuenta ---
+
+/**
+ * El texto del archivo. Muchos bancos de aquí todavía exportan en Windows-1252, no en UTF-8: si
+ * se lee mal, "DESCRIPCIÓN" sale con un rombo y el encabezado ya no se reconoce.
+ */
+async function textoDeArchivo(archivo) {
+  const bytes = await archivo.arrayBuffer();
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (e) {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
+async function leerEstadoDeCuenta(archivo) {
+  if (/\.xlsx?$/i.test(archivo.name || "")) {
+    app.aviso = "Excel no lo puedo leer aquí. Tu banco deja bajar lo mismo en CSV (a veces dice «texto» o «separado por comas»): ése sí.";
+    return render();
+  }
+  if (archivo.size > 5 * 1024 * 1024) {
+    app.aviso = "Ese archivo es demasiado grande para un estado de cuenta. Baja uno de menos meses.";
+    return render();
+  }
+  let texto;
+  try {
+    texto = await textoDeArchivo(archivo);
+  } catch (e) {
+    app.aviso = "No se pudo abrir el archivo.";
+    return render();
+  }
+
+  if (esOFX(texto)) {
+    const { movimientos, descartadas } = leerOFX(texto);
+    return hojaConfirmarImportacion(movimientos, descartadas);
+  }
+
+  const analisis = analizarCSV(texto);
+  if (!analisis.filas.length) {
+    app.aviso = "No encontré movimientos en ese archivo. ¿Es el CSV de movimientos de tu banco?";
+    return render();
+  }
+  hojaMapeo(analisis);
+}
+
+/** Unas filas de muestra de lo que saldría, para ver antes de mandar nada. */
+function muestraImportacion(movimientos, descartadas) {
+  if (!movimientos.length) {
+    return `<div class="aviso malo">Con estas columnas no sale ningún movimiento. Revisa cuál es la fecha y cuál el monto.</div>`;
+  }
+  const gastos = movimientos.filter((m) => m.tipo === TIPOS.GASTO).reduce((t, m) => t + m.monto, 0);
+  const ingresos = movimientos.filter((m) => m.tipo === TIPOS.INGRESO).reduce((t, m) => t + m.monto, 0);
+  return `<div class="rotulo">Así quedan (${plural(movimientos.length, "movimiento", "movimientos")}${
+      descartadas ? `; ${descartadas} ${descartadas === 1 ? "renglón no es" : "renglones no son"} movimiento` : ""}):</div>
+    ${movimientos.slice(0, 5).map((m) => `<div class="fila">
+      <div class="crece"><div class="nombre">${esc(m.nota || "Sin descripción")}</div>
+        <div class="sub">${fechaLarga(m.fecha)}</div></div>
+      <div class="monto"${m.tipo === TIPOS.INGRESO ? ' style="color:var(--bien)"' : ""}>${m.tipo === TIPOS.INGRESO ? "+" : "−"}${monto(m.monto)}</div>
+    </div>`).join("")}
+    <div class="rotulo" style="margin-top:6px">En total: −${monto(gastos)} en gastos y +${monto(ingresos)} de ingresos.
+      Si los gastos salen como ingresos, marca «al revés».</div>`;
+}
+
+/**
+ * Qué columna es qué. Se propone lo que se pudo deducir del encabezado, y la persona lo confirma
+ * viendo cómo quedarían las primeras filas — la muestra se rehace con cada cambio.
+ */
+function hojaMapeo(analisis) {
+  const { encabezado, filas, mapeo, orden, ordenSeguro } = analisis;
+  const columnas = Math.max(...filas.slice(0, 50).map((f) => f.length));
+  const ejemplo = (j) => filas.slice(0, 5).map((f) => f[j]).find((v) => v) || "";
+  const opciones = [
+    { valor: "", etiqueta: "— ninguna —" },
+    ...Array.from({ length: columnas }, (_, j) => ({
+      valor: String(j),
+      etiqueta: `${encabezado && encabezado[j] ? encabezado[j] : `Columna ${j + 1}`}${ejemplo(j) ? ` (${String(ejemplo(j)).slice(0, 24)})` : ""}`,
+    })),
+  ];
+  const valor = (j) => (j === null || j === undefined ? "" : String(j));
+  const leerMapeo = (valores) => ({
+    fecha: valores.fecha, descripcion: valores.descripcion, monto: valores.monto,
+    cargo: valores.cargo, abono: valores.abono, referencia: valores.referencia,
+  });
+  const convertir = (valores) => filasAMovimientos(filas, leerMapeo(valores), {
+    orden: valores.orden || "dma",
+    invertir: valores.invertir === "si",
+  });
+
+  abrirHoja({
+    titulo: "¿Qué columna es qué?",
+    textoGuardar: "Mandar a la bandeja",
+    campos: [
+      ...CAMPOS_IMPORTAR.map((c) => ({
+        clave: c.clave,
+        etiqueta: c.clave === "monto" ? "Monto (si viene en una sola columna)" : c.etiqueta,
+        tipo: "select", opciones, valor: valor(mapeo[c.clave]),
+      })),
+      {
+        clave: "orden", etiqueta: ordenSeguro ? "Las fechas vienen" : "Las fechas vienen (revisa: no lo pude saber)", tipo: "chips",
+        opciones: [{ valor: "dma", etiqueta: "día/mes/año" }, { valor: "mda", etiqueta: "mes/día/año" }], valor: orden,
+      },
+      {
+        clave: "invertir", etiqueta: "Signo del monto", tipo: "chips",
+        opciones: [{ valor: "no", etiqueta: "negativo = gasto" }, { valor: "si", etiqueta: "al revés" }], valor: "no",
+      },
+    ],
+    extra: `<div id="muestra-importacion"></div>`,
+    alGuardar: async (valores) => {
+      const { movimientos } = convertir(valores);
+      if (!movimientos.length) return "Con estas columnas no sale ningún movimiento.";
+      return mandarImportacion(movimientos);
+    },
+  });
+
+  // La muestra, viva: cada cambio de columna la rehace. Se lee lo que hay en el formulario sin
+  // validar, igual que al guardar.
+  const formulario = document.querySelector("#hojas form");
+  const pintarMuestra = () => {
+    const valores = {};
+    for (const nodo of formulario.querySelectorAll("[data-clave]")) {
+      valores[nodo.dataset.clave] = nodo.classList.contains("chips") ? nodo.dataset.valor || "" : nodo.value || null;
+    }
+    const { movimientos, descartadas } = convertir(valores);
+    const caja = document.getElementById("muestra-importacion");
+    if (caja) caja.innerHTML = muestraImportacion(movimientos, descartadas);
+  };
+  formulario.addEventListener("change", pintarMuestra);
+  formulario.addEventListener("click", () => setTimeout(pintarMuestra, 0)); // las fichas no disparan change
+  pintarMuestra();
+}
+
+/** Un OFX no necesita mapeo: se enseña lo que salió y se confirma. */
+function hojaConfirmarImportacion(movimientos, descartadas) {
+  if (!movimientos.length) {
+    app.aviso = "No encontré movimientos en ese archivo.";
+    return render();
+  }
+  abrirHoja({
+    titulo: "Tu estado de cuenta",
+    textoGuardar: "Mandar a la bandeja",
+    campos: [],
+    extra: muestraImportacion(movimientos, descartadas),
+    alGuardar: async () => mandarImportacion(movimientos),
+  });
+}
+
+/** El último paso, igual para CSV y OFX: a la bandeja, y decir qué pasó con cada cosa. */
+async function mandarImportacion(movimientos) {
+  const r = mandarABandeja(app.datos, movimientos, app.hoy);
+  if (!r.nuevos) {
+    if (r.sinCupo) return `Ya hay ${TANDA_DE_IMPORTACION} movimientos del archivo esperando en la bandeja. Acéptalos y vuelve a subirlo.`;
+    app.aviso = r.repetidos ? `Ya había mandado ${r.repetidos === 1 ? "ese movimiento" : `esos ${r.repetidos}`}: no hay nada nuevo.` : "No hubo nada que mandar.";
+    render();
+    return null;
+  }
+  app.vista = "bandeja";
+  await guardar(r.datos);
+  app.aviso = [
+    `${r.nuevos} ${r.nuevos === 1 ? "movimiento llegó" : "movimientos llegaron"} a la bandeja.`,
+    r.parecidos ? `${r.parecidos} se ${r.parecidos === 1 ? "parece" : "parecen"} a algo que ya tenías: ${r.parecidos === 1 ? "está marcado" : "están marcados"} para revisar.` : "",
+    r.repetidos ? `${r.repetidos} ya los había mandado antes.` : "",
+    r.sinCupo ? `${r.sinCupo} no cupieron en esta tanda: acepta éstos y vuelve a subir el mismo archivo.` : "",
+  ].filter(Boolean).join(" ");
+  render();
+  return null;
+}
+
 /**
  * El teclado de efectivo. La pantalla donde se juega si esta app sirve o estorba.
  *
@@ -3007,6 +3441,7 @@ const TIPOS_CAPTURA = [
 function hojaTeclado() {
   const contenedor = document.getElementById("hojas");
   const sugeridos = montosFrecuentes(app.datos, app.hoy, 3, app.hora);
+  const plantillasTeclado = listaDePlantillas(app.datos);
   const categorias = categoriasACalce(sugeridos.length ? sugeridos[0].categoriaId : "");
 
   let tecleado = "";
@@ -3023,6 +3458,9 @@ function hojaTeclado() {
           data-categoria="${esc(f.categoriaId || "otros")}"
           title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
       }).join("")}</div>` : ""}
+    ${plantillasTeclado.length ? `<div class="rotulo" style="margin-top:10px">Tus plantillas</div>
+      <div class="chips apretados">${plantillasTeclado.map((p) => `<button type="button" class="chip"
+        data-plantilla="${esc(p.id)}">${esc(p.nombre)} · ${p.tipo === TIPOS.INGRESO ? "+" : ""}${monto(p.monto)}</button>`).join("")}</div>` : ""}
     <div class="rotulo" style="margin-top:10px">En qué</div>
     <div class="chips apretados" id="teclado-categorias">${categorias.map((c) => `
       <button type="button" class="chip" aria-pressed="${c.valor === elegida}"
@@ -3077,6 +3515,18 @@ function hojaTeclado() {
   contenedor.querySelector(".hoja").addEventListener("click", async (e) => {
     const boton = e.target.closest("button");
     if (!boton) return;
+
+    // Una plantilla: igual de corto, y además con el nombre que le puso la persona.
+    if (boton.dataset.plantilla) {
+      const { datos, error } = usarPlantilla(app.datos, boton.dataset.plantilla, app.hoy, app.hora);
+      if (error) {
+        app.aviso = error;
+        return render();
+      }
+      cerrarHoja();
+      vibrar();
+      return guardar(datos);
+    }
 
     // Un monto de los de siempre: un toque y ya está guardado. Ése es el camino de dos segundos.
     if (boton.dataset.repetir) {
@@ -3553,11 +4003,12 @@ export async function arrancar() {
   // no avisa de otra forma.
   document.addEventListener("change", (e) => {
     const cual = e.target.dataset.accionArchivo;
-    if (cual !== "captura" && cual !== "nomina") return;
+    if (cual !== "captura" && cual !== "nomina" && cual !== "estado") return;
     const archivo = e.target.files && e.target.files[0];
     e.target.value = ""; // que elegir el mismo archivo dos veces vuelva a disparar
     if (!archivo) return;
     if (cual === "captura") leerCaptura(archivo);
+    else if (cual === "estado") leerEstadoDeCuenta(archivo);
     else aplicarNomina(archivo);
   });
 
