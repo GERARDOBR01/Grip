@@ -10,10 +10,10 @@
 import { hoyISO, comparar, diasEntre } from "./ciclo.js";
 import {
   agregarMovimiento, eliminarMovimiento, normalizarEntrada,
-  ESTADOS_BANDEJA, ORIGENES, TIPOS, esperaRespuesta,
+  ESTADOS_BANDEJA, ORIGENES, TIPOS, ACCIONES_REGLA, esperaRespuesta,
 } from "./modelo.js";
 import { interpretar, posibleDuplicado, limpiarAviso } from "./lectura.js";
-import { sugerirCategoria, recordar } from "./aprendizaje.js";
+import { sugerirParaAviso, recordar } from "./aprendizaje.js";
 import { veredicto, ESTADOS, SEVERIDADES } from "./veredicto.js";
 
 /**
@@ -57,12 +57,19 @@ export function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEG
     return { datos, entrada: null, duplicado, error: null };
   }
 
-  const sugerida = lectura.movimiento.tipo === TIPOS.GASTO ? sugerirCategoria(datos, lectura.comercio) : null;
+  const sugerida = lectura.movimiento.tipo === TIPOS.GASTO ? sugerirParaAviso(datos, lectura.comercio) : null;
+  // Una regla de pago cambia el TIPO, no solo la categoría: el aviso dice "cargo" porque el
+  // dinero salió de tu cuenta, pero se fue a tu tarjeta. Contarlo como gasto sería contar dos
+  // veces lo que ya se contó el día de cada compra.
+  const esPago = Boolean(sugerida && sugerida.accion === ACCIONES_REGLA.PAGO);
+  const movimiento = esPago
+    ? { ...lectura.movimiento, tipo: TIPOS.PAGO, categoria: null, tarjetaId: sugerida.tarjetaId }
+    : { ...lectura.movimiento, categoria: sugerida ? sugerida.categoriaId : lectura.movimiento.categoria };
   const razones = lectura.veredicto.datos.razones || [];
   const entrada = normalizarEntrada({
     recibido: iso,
     estado: ESTADOS_BANDEJA.PENDIENTE,
-    movimiento: { ...lectura.movimiento, categoria: sugerida ? sugerida.categoriaId : lectura.movimiento.categoria },
+    movimiento,
     huella: lectura.huella,
     confianza: lectura.confianza,
     banco: lectura.banco,
@@ -72,7 +79,7 @@ export function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEG
     posibleTraspaso: lectura.posibleTraspaso,
     // Un cargo final NO es un gasto nuevo: sustituye a la preautorización que ya está.
     reemplaza: duplicado && duplicado.datos.motivo === "liquidacion" ? duplicado.datos.id : null,
-    aviso: [duplicado ? duplicado.motivo : "", ...razones].filter(Boolean).join(" "),
+    aviso: [duplicado ? duplicado.motivo : "", esPago ? sugerida.veredicto.motivo : "", ...razones].filter(Boolean).join(" "),
     // De una captura de pantalla SÍ se guarda la primera línea leída, y solo de ella. No es
     // para enseñarla bonito: es para que el ojo compare el monto grande contra lo que el OCR
     // creyó ver, antes de aceptarlo. Un correo no la necesita —lo leíste tú— y por eso ahí se

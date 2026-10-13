@@ -147,3 +147,80 @@ export function quincenasDeColchon(datos, iso = hoyISO(), n = 6) {
     ),
   };
 }
+
+// ── Contra la quincena pasada ──────────────────────────────────────────────
+//
+// La gráfica de arriba contesta "¿voy mejorando?". Ésta contesta la pregunta de todos los días:
+// "¿en qué estoy gastando más que la vez pasada?". Y la compara a la MISMA ALTURA: el día 4 de
+// esta quincena contra los primeros 4 días de la anterior. Comparar cuatro días contra quince
+// cerrados haría ver un ahorro donde solo hay días que todavía no pasan — la misma trampa que
+// la tendencia evita marcando el ciclo en curso como incompleto.
+
+/** Cuánto llevas gastado por categoría contra lo que llevabas a estas alturas del ciclo anterior. */
+export function contraElCicloAnterior(datos, iso = hoyISO()) {
+  const cortes = datos.perfil.cortes;
+  const actual = cicloDe(iso, cortes);
+  const anterior = cicloDe(sumarDias(actual.inicio, -1), cortes);
+  const dias = Math.min(actual.diasTranscurridos, anterior.dias);
+  const hastaAnterior = sumarDias(anterior.inicio, dias - 1);
+
+  const vacio = { actual, anterior, dias, hastaAnterior, filas: [], totalAhora: 0, totalAntes: 0, diferencia: 0 };
+  if (!movimientosEntre(datos, anterior.inicio, anterior.fin).length) {
+    return {
+      ...vacio,
+      veredicto: sinDatos(
+        "La quincena pasada no tiene nada capturado, así que no hay contra qué comparar.",
+        "sigue capturando: a la siguiente quincena ya sale",
+      ),
+    };
+  }
+
+  const porCategoria = (desde, hasta) => {
+    const mapa = new Map();
+    for (const m of movimientosEntre(datos, desde, hasta)) {
+      if (m.tipo !== TIPOS.GASTO) continue;
+      const id = m.categoria || "otros";
+      mapa.set(id, (mapa.get(id) || 0) + m.monto);
+    }
+    return mapa;
+  };
+  const ahora = porCategoria(actual.inicio, iso);
+  const antes = porCategoria(anterior.inicio, hastaAnterior);
+
+  const filas = [...new Set([...ahora.keys(), ...antes.keys()])]
+    .map((categoriaId) => {
+      const a = ahora.get(categoriaId) || 0;
+      const b = antes.get(categoriaId) || 0;
+      return { categoriaId, ahora: a, antes: b, diferencia: a - b };
+    })
+    .filter((f) => f.diferencia !== 0)
+    .sort((x, y) => y.diferencia - x.diferencia || (x.categoriaId < y.categoriaId ? -1 : 1));
+
+  const totalAhora = [...ahora.values()].reduce((t, v) => t + v, 0);
+  const totalAntes = [...antes.values()].reduce((t, v) => t + v, 0);
+  const diferencia = totalAhora - totalAntes;
+  const subio = filas[0] && filas[0].diferencia > 0 ? filas[0] : null;
+  const nombre = (id) => {
+    const c = (datos.categorias || []).find((x) => x.id === id);
+    return c ? c.nombre : id;
+  };
+  const enDias = `en ${dias} ${dias === 1 ? "día" : "días"}`;
+
+  return {
+    ...vacio,
+    filas,
+    totalAhora,
+    totalAntes,
+    diferencia,
+    veredicto: diferencia > 0
+      ? veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+        `Llevas ${formatear(diferencia)} más que a estas alturas de la quincena pasada (${enDias})` +
+          (subio ? `, sobre todo en ${nombre(subio.categoriaId)}.` : "."),
+        { diferencia, dias, categoriaId: subio ? subio.categoriaId : null })
+      : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK,
+        diferencia < 0
+          ? `Llevas ${formatear(-diferencia)} menos que a estas alturas de la quincena pasada (${enDias}).`
+          : `Vas exactamente igual que a estas alturas de la quincena pasada (${enDias}).`,
+        { diferencia, dias }),
+  };
+}

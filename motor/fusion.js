@@ -101,6 +101,7 @@ export function fusionar(a, b) {
     fijos: unirPorId(viejo.fijos, nuevo.fijos).filter(vivo),
     deudas: unirPorId(viejo.deudas, nuevo.deudas).filter(vivo),
     metas: unirPorId(viejo.metas, nuevo.metas).filter(vivo),
+    plantillas: unirPorId(viejo.plantillas, nuevo.plantillas).filter(vivo),
     // El catálogo también es una lista con id, y se quedó fuera de esta unión más tiempo del
     // que debió: una categoría creada en el celular desaparecía en cuanto la PC guardaba
     // después. Y no desaparecía sola — los movimientos que la usaban quedaban apuntando a una

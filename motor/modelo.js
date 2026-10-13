@@ -11,7 +11,7 @@ import { aCentavos, montoUtilizable } from "./dinero.js";
 import { hoyISO, mesDe, esISO, horaValida } from "./ciclo.js";
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-export const VERSION_DATOS = 5;
+export const VERSION_DATOS = 6;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -66,8 +66,12 @@ export function datosVacios(iso = hoyISO()) {
     // Lo que llegó solo y todavía no confirma nadie. Nada de aquí cuenta en ningún número
     // hasta que la persona lo acepta: un aviso mal leído no debe poder ensuciar las cuentas.
     bandeja: [],
-    // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría".
+    // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría". Y las
+    // que escribió la persona: varias palabras por regla, o "esto es un pago de tarjeta".
     reglas: [],
+    // Los movimientos que se repiten igualitos —la renta, el camión de cada día— con nombre,
+    // para capturarlos de un toque.
+    plantillas: [],
     // Lápidas. Sin ellas, borrar algo en un dispositivo lo resucitaría al sincronizar con otro
     // que todavía lo tiene: la unión no sabría distinguir "esto es nuevo" de "esto se borró".
     borrados: [],
@@ -159,6 +163,7 @@ export function normalizar(entrada) {
     metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
+    plantillas: (Array.isArray(datos.plantillas) ? datos.plantillas : []).map(normalizarPlantilla).filter(Boolean),
     borrados: (Array.isArray(datos.borrados) ? datos.borrados : []).map(normalizarLapida).filter(Boolean),
     // Escalar y opcional: un documento viejo que no lo traiga se lee igual, sin migración.
     ultimoRespaldo: datos.ultimoRespaldo ? String(datos.ultimoRespaldo).slice(0, 40) : null,
@@ -180,7 +185,9 @@ export const ESTADOS_BANDEJA = {
   // copia vieja de la app la descartaría al normalizar, en silencio.
   ILEGIBLE: "ilegible",
 };
-export const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo", IMAGEN: "imagen" };
+// ARCHIVO es un estado de cuenta subido entero (CSV u OFX): muchas entradas de golpe, cada una
+// esperando su sí como cualquier otro aviso.
+export const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo", IMAGEN: "imagen", ARCHIVO: "archivo" };
 
 /**
  * Una entrada de la bandeja: un movimiento propuesto, con de dónde salió y qué tan seguro
@@ -236,14 +243,76 @@ export function esperaRespuesta(entrada) {
   );
 }
 
-/** Una regla aprendida: "cuando veas este comercio, es esta categoría". */
+/** Qué hace una regla cuando encuentra su comercio. */
+export const ACCIONES_REGLA = { CATEGORIA: "categoria", PAGO: "pago" };
+
+/** Lo más corto que puede ser una palabra de regla. Con dos letras, "ox" se comería medio mundo. */
+export const PALABRA_MINIMA = 3;
+
+/**
+ * Una palabra de regla en su forma canónica: minúsculas, sin acentos ni signos, espacios
+ * sencillos. Es la misma forma en que se compara contra el comercio, así que "Café Punta del
+ * Cielo" y "cafe punta del cielo" son la misma palabra y no pueden vivir en dos reglas.
+ */
+export function canonizarPalabra(texto) {
+  return String(texto || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 40);
+}
+
+/**
+ * Una regla: "cuando veas este comercio, haz esto".
+ *
+ * `clave` es su nombre y su identidad. Las que aprende la app sola usan la marca del comercio
+ * como clave, y con eso les basta. Las que escribe la persona llevan además `palabras`: basta
+ * con que el comercio CONTENGA una de ellas — los bancos escriben el mismo lugar de mil formas
+ * ("OXXO 1234 MTY", "OXXO GASOLINERA") y una regla por cada forma no la mantiene nadie.
+ *
+ * `accion` decide qué se hace: ponerle categoría, o marcarlo como PAGO de una tarjeta. Lo
+ * segundo existe porque el aviso de "transferiste $3,000" a tu tarjeta llega como gasto, y no
+ * lo es: es dinero que cambia de lugar.
+ */
 export function normalizarRegla(r) {
-  if (!r || !r.clave || !r.categoriaId) return null;
+  if (!r || !r.clave) return null;
+  const accion = r.accion === ACCIONES_REGLA.PAGO ? ACCIONES_REGLA.PAGO : ACCIONES_REGLA.CATEGORIA;
+  if (accion === ACCIONES_REGLA.CATEGORIA && !r.categoriaId) return null;
+  if (accion === ACCIONES_REGLA.PAGO && !r.tarjetaId) return null;
+  const palabras = [...new Set((Array.isArray(r.palabras) ? r.palabras : [])
+    .map(canonizarPalabra)
+    .filter((p) => p.length >= PALABRA_MINIMA))].slice(0, 20);
   return {
     clave: String(r.clave).slice(0, 60),
-    categoriaId: String(r.categoriaId),
+    accion,
+    categoriaId: accion === ACCIONES_REGLA.CATEGORIA ? String(r.categoriaId) : null,
+    tarjetaId: accion === ACCIONES_REGLA.PAGO ? String(r.tarjetaId) : null,
+    palabras,
     veces: Number.isInteger(r.veces) && r.veces > 0 ? r.veces : 1,
     ultima: esISO(r.ultima) ? r.ultima : null,
+  };
+}
+
+/** Los tipos que puede llevar una plantilla. Apartar y pagar tarjeta tienen su propio camino. */
+const TIPOS_PLANTILLA = ["gasto", "ingreso"];
+
+/** Una plantilla: un movimiento que se repite igualito, con nombre, para capturarlo de un toque. */
+export function normalizarPlantilla(p) {
+  if (!p || !p.nombre) return null;
+  const monto = entero(p.monto, null);
+  if (monto === null || monto === 0) return null;
+  const tipo = TIPOS_PLANTILLA.includes(p.tipo) ? p.tipo : TIPOS.GASTO;
+  return {
+    id: p.id || idNuevo("pla"),
+    nombre: String(p.nombre).slice(0, 40),
+    monto: Math.abs(monto),
+    tipo,
+    categoria: tipo === TIPOS.GASTO ? String(p.categoria || "otros") : p.categoria ? String(p.categoria) : null,
+    metodo: p.metodo ? String(p.metodo) : null,
+    tarjetaId: p.tarjetaId || null,
+    nota: p.nota ? String(p.nota).slice(0, 280) : "",
   };
 }
 
