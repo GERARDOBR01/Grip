@@ -457,3 +457,8 @@ details.cargos summary { font-size: 13px; color: var(--acento); cursor: pointer;
 .lista-ayuda { margin: 12px 0 0; padding-left: 18px; font-size: 13px; color: var(--tinta-2); line-height: 1.5; }
 .lista-ayuda li { margin-bottom: 8px; }
 .lista-ayuda b { color: var(--tinta); }
+
+/* Elegir qué movimientos cambia una regla: una lista con casillas que no se come la hoja. */
+.lista-elegir { max-height: 46vh; overflow-y: auto; margin: 0 -4px; }
+label.fila { cursor: pointer; gap: 10px; }
+label.fila input[type="checkbox"] { width: 20px; height: 20px; flex: none; padding: 0; margin: 0; accent-color: var(--acento); }

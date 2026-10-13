@@ -39,12 +39,14 @@ const MODULOS = [
   "motor/reglas-banco.js",
   "motor/campos.js",
   "motor/rapido.js",
+  "motor/plantillas.js",
   "motor/lectura.js",
   "motor/aprendizaje.js",
   "motor/nomina.js",
   "motor/recurrentes.js",
   "motor/tendencia.js",
   "motor/bandeja.js",
+  "motor/importar.js", // después de aprendizaje: sugiere con sus mismas reglas
   "motor/recordatorios.js", // después de fijos y bandeja: lee de los dos
   "almacen/intenciones.js",
   "almacen/archivo.js",

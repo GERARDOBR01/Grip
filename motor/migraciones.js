@@ -46,6 +46,17 @@ export const MIGRACIONES = {
     tarjetas: Array.isArray(datos.tarjetas) ? datos.tarjetas : [],
     plazos: Array.isArray(datos.plazos) ? datos.plazos : [],
   }),
+
+  // v5 → v6: las reglas aprenden palabras y la acción "pago de tarjeta", y aparecen las
+  // plantillas. Las reglas viejas siguen tal cual —su clave sigue siendo su comercio, sin
+  // palabras de más— y las plantillas nacen vacías. La versión sube por lo mismo que subió en
+  // la v4: una regla de pago no trae categoría, y una copia v5 de la app la tiraría al
+  // normalizar sin decir nada. Con el número arriba, esa copia se niega a abrir.
+  5: (datos) => ({
+    ...datos,
+    reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map((r) => ({ palabras: [], ...r })),
+    plantillas: Array.isArray(datos.plantillas) ? datos.plantillas : [],
+  }),
 };
 
 export function migrar(entrada) {

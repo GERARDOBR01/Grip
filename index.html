@@ -473,10 +473,15 @@ details.cargos summary { font-size: 13px; color: var(--acento); cursor: pointer;
 .lista-ayuda { margin: 12px 0 0; padding-left: 18px; font-size: 13px; color: var(--tinta-2); line-height: 1.5; }
 .lista-ayuda li { margin-bottom: 8px; }
 .lista-ayuda b { color: var(--tinta); }
+
+/* Elegir qué movimientos cambia una regla: una lista con casillas que no se come la hoja. */
+.lista-elegir { max-height: 46vh; overflow-y: auto; margin: 0 -4px; }
+label.fila { cursor: pointer; gap: 10px; }
+label.fila input[type="checkbox"] { width: 20px; height: 20px; flex: none; padding: 0; margin: 0; accent-color: var(--acento); }
 </style>
 </head>
 <body>
-<!-- Armado desde finanzas/, versión ea51b2c9. No editar a mano: se regenera con armar.mjs. -->
+<!-- Armado desde finanzas/, versión a1593423. No editar a mano: se regenera con armar.mjs. -->
 <div id="raiz"></div>
 <div id="hojas"></div>
 <noscript>
@@ -883,7 +888,7 @@ function vencimientoEnMes(mes, diaCorte) {
 
 
 /** Versión del esquema. Sube de uno en uno, con su migración escrita. */
-const VERSION_DATOS = 5;
+const VERSION_DATOS = 6;
 
 // AHORRO aparta dinero; RETIRO lo saca de vuelta. Sin RETIRO, sacar de una meta obligaba
 // a borrar el apartado original, y el historial acababa mintiendo sobre lo que pasó.
@@ -938,8 +943,12 @@ function datosVacios(iso = hoyISO()) {
     // Lo que llegó solo y todavía no confirma nadie. Nada de aquí cuenta en ningún número
     // hasta que la persona lo acepta: un aviso mal leído no debe poder ensuciar las cuentas.
     bandeja: [],
-    // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría".
+    // Lo que la app aprendió de sus correcciones: "este comercio es de esta categoría". Y las
+    // que escribió la persona: varias palabras por regla, o "esto es un pago de tarjeta".
     reglas: [],
+    // Los movimientos que se repiten igualitos —la renta, el camión de cada día— con nombre,
+    // para capturarlos de un toque.
+    plantillas: [],
     // Lápidas. Sin ellas, borrar algo en un dispositivo lo resucitaría al sincronizar con otro
     // que todavía lo tiene: la unión no sabría distinguir "esto es nuevo" de "esto se borró".
     borrados: [],
@@ -1031,6 +1040,7 @@ function normalizar(entrada) {
     metas: (Array.isArray(datos.metas) ? datos.metas : []).map(normalizarMeta).filter(Boolean),
     bandeja: (Array.isArray(datos.bandeja) ? datos.bandeja : []).map(normalizarEntrada).filter(Boolean),
     reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map(normalizarRegla).filter(Boolean),
+    plantillas: (Array.isArray(datos.plantillas) ? datos.plantillas : []).map(normalizarPlantilla).filter(Boolean),
     borrados: (Array.isArray(datos.borrados) ? datos.borrados : []).map(normalizarLapida).filter(Boolean),
     // Escalar y opcional: un documento viejo que no lo traiga se lee igual, sin migración.
     ultimoRespaldo: datos.ultimoRespaldo ? String(datos.ultimoRespaldo).slice(0, 40) : null,
@@ -1052,7 +1062,9 @@ const ESTADOS_BANDEJA = {
   // copia vieja de la app la descartaría al normalizar, en silencio.
   ILEGIBLE: "ilegible",
 };
-const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo", IMAGEN: "imagen" };
+// ARCHIVO es un estado de cuenta subido entero (CSV u OFX): muchas entradas de golpe, cada una
+// esperando su sí como cualquier otro aviso.
+const ORIGENES = { PEGADO: "pegado", COMPARTIDO: "compartido", CORREO: "correo", IMAGEN: "imagen", ARCHIVO: "archivo" };
 
 /**
  * Una entrada de la bandeja: un movimiento propuesto, con de dónde salió y qué tan seguro
@@ -1108,14 +1120,76 @@ function esperaRespuesta(entrada) {
   );
 }
 
-/** Una regla aprendida: "cuando veas este comercio, es esta categoría". */
+/** Qué hace una regla cuando encuentra su comercio. */
+const ACCIONES_REGLA = { CATEGORIA: "categoria", PAGO: "pago" };
+
+/** Lo más corto que puede ser una palabra de regla. Con dos letras, "ox" se comería medio mundo. */
+const PALABRA_MINIMA = 3;
+
+/**
+ * Una palabra de regla en su forma canónica: minúsculas, sin acentos ni signos, espacios
+ * sencillos. Es la misma forma en que se compara contra el comercio, así que "Café Punta del
+ * Cielo" y "cafe punta del cielo" son la misma palabra y no pueden vivir en dos reglas.
+ */
+function canonizarPalabra(texto) {
+  return String(texto || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 40);
+}
+
+/**
+ * Una regla: "cuando veas este comercio, haz esto".
+ *
+ * `clave` es su nombre y su identidad. Las que aprende la app sola usan la marca del comercio
+ * como clave, y con eso les basta. Las que escribe la persona llevan además `palabras`: basta
+ * con que el comercio CONTENGA una de ellas — los bancos escriben el mismo lugar de mil formas
+ * ("OXXO 1234 MTY", "OXXO GASOLINERA") y una regla por cada forma no la mantiene nadie.
+ *
+ * `accion` decide qué se hace: ponerle categoría, o marcarlo como PAGO de una tarjeta. Lo
+ * segundo existe porque el aviso de "transferiste $3,000" a tu tarjeta llega como gasto, y no
+ * lo es: es dinero que cambia de lugar.
+ */
 function normalizarRegla(r) {
-  if (!r || !r.clave || !r.categoriaId) return null;
+  if (!r || !r.clave) return null;
+  const accion = r.accion === ACCIONES_REGLA.PAGO ? ACCIONES_REGLA.PAGO : ACCIONES_REGLA.CATEGORIA;
+  if (accion === ACCIONES_REGLA.CATEGORIA && !r.categoriaId) return null;
+  if (accion === ACCIONES_REGLA.PAGO && !r.tarjetaId) return null;
+  const palabras = [...new Set((Array.isArray(r.palabras) ? r.palabras : [])
+    .map(canonizarPalabra)
+    .filter((p) => p.length >= PALABRA_MINIMA))].slice(0, 20);
   return {
     clave: String(r.clave).slice(0, 60),
-    categoriaId: String(r.categoriaId),
+    accion,
+    categoriaId: accion === ACCIONES_REGLA.CATEGORIA ? String(r.categoriaId) : null,
+    tarjetaId: accion === ACCIONES_REGLA.PAGO ? String(r.tarjetaId) : null,
+    palabras,
     veces: Number.isInteger(r.veces) && r.veces > 0 ? r.veces : 1,
     ultima: esISO(r.ultima) ? r.ultima : null,
+  };
+}
+
+/** Los tipos que puede llevar una plantilla. Apartar y pagar tarjeta tienen su propio camino. */
+const TIPOS_PLANTILLA = ["gasto", "ingreso"];
+
+/** Una plantilla: un movimiento que se repite igualito, con nombre, para capturarlo de un toque. */
+function normalizarPlantilla(p) {
+  if (!p || !p.nombre) return null;
+  const monto = entero(p.monto, null);
+  if (monto === null || monto === 0) return null;
+  const tipo = TIPOS_PLANTILLA.includes(p.tipo) ? p.tipo : TIPOS.GASTO;
+  return {
+    id: p.id || idNuevo("pla"),
+    nombre: String(p.nombre).slice(0, 40),
+    monto: Math.abs(monto),
+    tipo,
+    categoria: tipo === TIPOS.GASTO ? String(p.categoria || "otros") : p.categoria ? String(p.categoria) : null,
+    metodo: p.metodo ? String(p.metodo) : null,
+    tarjetaId: p.tarjetaId || null,
+    nota: p.nota ? String(p.nota).slice(0, 280) : "",
   };
 }
 
@@ -1392,6 +1466,17 @@ const MIGRACIONES = {
     tarjetas: Array.isArray(datos.tarjetas) ? datos.tarjetas : [],
     plazos: Array.isArray(datos.plazos) ? datos.plazos : [],
   }),
+
+  // v5 → v6: las reglas aprenden palabras y la acción "pago de tarjeta", y aparecen las
+  // plantillas. Las reglas viejas siguen tal cual —su clave sigue siendo su comercio, sin
+  // palabras de más— y las plantillas nacen vacías. La versión sube por lo mismo que subió en
+  // la v4: una regla de pago no trae categoría, y una copia v5 de la app la tiraría al
+  // normalizar sin decir nada. Con el número arriba, esa copia se niega a abrir.
+  5: (datos) => ({
+    ...datos,
+    reglas: (Array.isArray(datos.reglas) ? datos.reglas : []).map((r) => ({ palabras: [], ...r })),
+    plantillas: Array.isArray(datos.plantillas) ? datos.plantillas : [],
+  }),
 };
 
 function migrar(entrada) {
@@ -1530,6 +1615,7 @@ function fusionar(a, b) {
     fijos: unirPorId(viejo.fijos, nuevo.fijos).filter(vivo),
     deudas: unirPorId(viejo.deudas, nuevo.deudas).filter(vivo),
     metas: unirPorId(viejo.metas, nuevo.metas).filter(vivo),
+    plantillas: unirPorId(viejo.plantillas, nuevo.plantillas).filter(vivo),
     // El catálogo también es una lista con id, y se quedó fuera de esta unión más tiempo del
     // que debió: una categoría creada en el celular desaparecía en cuanto la PC guardaba
     // después. Y no desaparecía sola — los movimientos que la usaban quedaban apuntando a una
@@ -3647,6 +3733,88 @@ function categoriaProbable(datos, centavos, iso = hoyISO()) {
   return grupo ? categoriaDominante(grupo.gastos) : null;
 }
 
+// ═══ motor/plantillas.js ═══
+// Plantillas — lo que se repite igualito, con nombre.
+//
+// La captura rápida ya ofrece los montos de siempre sacándolos del historial, y eso cubre los
+// tacos y el camión. Lo que no cubre es lo que la persona SABE que se repite aunque el historial
+// todavía no lo diga: la colegiatura, la renta que se paga en efectivo, el súper de los sábados.
+// Una plantilla es eso dicho una vez: nombre, monto y categoría. Usarla es un toque.
+//
+// Usar una plantilla no la cambia ni la aprende: crea un movimiento con HOY como fecha y nada
+// más. Si ese mes la renta subió, se edita el movimiento — la plantilla sigue diciendo lo que la
+// persona le dijo, hasta que ella la cambie.
+
+
+
+/** Cuántas plantillas caben. Más que eso deja de ser un atajo y se vuelve otra lista que leer. */
+const MAXIMO_DE_PLANTILLAS = 12;
+
+/** Las plantillas, por nombre. */
+function listaDePlantillas(datos) {
+  return [...(datos.plantillas || [])].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+}
+
+/**
+ * Crea o reemplaza una plantilla. Devuelve `{ datos, plantilla, error }`.
+ * Con `id` se edita la que ya estaba; sin él, nace una nueva.
+ */
+function guardarPlantilla(datos, propuesta) {
+  const plantilla = normalizarPlantilla(propuesta);
+  if (!plantilla) {
+    return { datos, plantilla: null, error: "Una plantilla necesita nombre y un monto mayor a cero." };
+  }
+  const otras = (datos.plantillas || []).filter((p) => p.id !== plantilla.id);
+  if (otras.some((p) => p.nombre.toLowerCase() === plantilla.nombre.toLowerCase())) {
+    return { datos, plantilla: null, error: `Ya tienes una plantilla que se llama «${plantilla.nombre}».` };
+  }
+  if (otras.length >= MAXIMO_DE_PLANTILLAS) {
+    return { datos, plantilla: null, error: `Caben ${MAXIMO_DE_PLANTILLAS} plantillas. Borra una que ya no uses.` };
+  }
+  if (plantilla.tipo === TIPOS.GASTO && !(datos.categorias || []).some((c) => c.id === plantilla.categoria)) {
+    return { datos, plantilla: null, error: "Elige la categoría de la plantilla." };
+  }
+  return { datos: { ...datos, plantillas: [...otras, plantilla] }, plantilla, error: null };
+}
+
+/** Borra una plantilla y deja su lápida, para que el otro dispositivo no la reviva. */
+function borrarPlantilla(datos, id, cuando = new Date().toISOString()) {
+  if (!(datos.plantillas || []).some((p) => p.id === id)) return datos;
+  return marcarBorrado({ ...datos, plantillas: datos.plantillas.filter((p) => p.id !== id) }, id, cuando);
+}
+
+/**
+ * Registra el movimiento de una plantilla con fecha de hoy. Devuelve `{ datos, movimiento,
+ * error }`, igual que capturarlo a mano.
+ */
+function usarPlantilla(datos, id, iso = hoyISO(), hora = "") {
+  const plantilla = (datos.plantillas || []).find((p) => p.id === id);
+  if (!plantilla) return { datos, movimiento: null, error: "Esa plantilla ya no existe." };
+  return agregarMovimiento(datos, {
+    fecha: iso,
+    hora,
+    monto: plantilla.monto,
+    tipo: plantilla.tipo,
+    categoria: plantilla.categoria,
+    metodo: plantilla.metodo,
+    tarjetaId: plantilla.tarjetaId,
+    nota: plantilla.nota || plantilla.nombre,
+  });
+}
+
+/** Una plantilla a partir de un movimiento que ya existe: "esto se repite". */
+function plantillaDesdeMovimiento(movimiento, nombre) {
+  return {
+    nombre: nombre || movimiento.nota || "Sin nombre",
+    monto: movimiento.monto,
+    tipo: movimiento.tipo,
+    categoria: movimiento.categoria,
+    metodo: movimiento.metodo,
+    tarjetaId: movimiento.tarjetaId,
+    nota: movimiento.nota,
+  };
+}
+
 // ═══ motor/lectura.js ═══
 // Lectura de avisos — convertir el texto de un banco en un movimiento.
 //
@@ -4210,27 +4378,98 @@ function categoriaMasUsada(datos, clave) {
   return mejor && mejor.veces >= MINIMO_PARA_DEDUCIR ? mejor : null;
 }
 
-/**
- * Qué categoría le toca a este comercio. Devuelve `{ categoriaId, veredicto }` o null.
- * Primero lo que la persona dijo, después lo que la persona hizo. Nunca inventa.
- */
-function sugerirCategoria(datos, comercio) {
-  const clave = marcaDe(comercio);
-  if (!clave) return null;
+// ── Qué regla le toca ──────────────────────────────────────────────────────
+//
+// Dos formas de coincidir:
+//   1. Por clave: la marca del comercio es exactamente la clave de la regla. Es lo que aprende
+//      la app sola.
+//   2. Por palabra: el comercio CONTIENE una de las palabras de la regla, al inicio de una de
+//      sus palabras. "oxxo" atrapa "OXXO 1234 MTY" y "OXXO GASOLINERA"; "uber" atrapa "UBER
+//      EATS" pero no "SUPERBIA".
+//
+// Si varias atrapan el mismo cargo, gana la que dijo MÁS: el texto más largo. "oxxo gas" le
+// gana a "oxxo" en la gasolinera y "oxxo" se queda con el resto de las tiendas. Ante empate
+// gana la clave —lo que corregiste a mano sobre ese comercio exacto— y después la primera
+// por nombre. Nunca al azar.
 
-  const regla = (datos.reglas || []).find((r) => r.clave === clave);
-  if (regla) {
+/** El texto del comercio tal como se compara: la misma forma que una palabra de regla, completo. */
+function comparableParaReglas(comercio) {
+  return String(comercio || "")
+    .slice(0, 280)
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** ¿El texto contiene esta palabra, empezando donde empieza una de las suyas? */
+function contienePalabra(texto, palabra) {
+  return palabra.length >= PALABRA_MINIMA && ` ${texto}`.includes(` ${palabra}`);
+}
+
+/**
+ * La regla que manda sobre este comercio, o null.
+ * Devuelve `{ regla, por: "clave" | "palabra", palabra }` para poder decir de dónde salió.
+ */
+function reglaPara(datos, comercio) {
+  const reglas = datos.reglas || [];
+  const clave = marcaDe(comercio);
+  const exacta = clave ? reglas.find((r) => r.clave === clave) : null;
+  let mejor = exacta ? { regla: exacta, por: "clave", palabra: null, largo: clave.length } : null;
+
+  const texto = comparableParaReglas(comercio);
+  if (!texto) return mejor && { regla: mejor.regla, por: mejor.por, palabra: mejor.palabra };
+  for (const regla of reglas) {
+    for (const palabra of regla.palabras || []) {
+      if (!contienePalabra(texto, palabra)) continue;
+      const gana = !mejor ||
+        palabra.length > mejor.largo ||
+        (palabra.length === mejor.largo && mejor.por === "palabra" && regla.clave < mejor.regla.clave);
+      if (gana) mejor = { regla, por: "palabra", palabra, largo: palabra.length };
+    }
+  }
+  return mejor && { regla: mejor.regla, por: mejor.por, palabra: mejor.palabra };
+}
+
+/**
+ * Qué hacer con un aviso de este comercio. Devuelve `{ accion, categoriaId, tarjetaId,
+ * veredicto }` o null. Primero lo que la persona dijo, después lo que la persona hizo. Nunca
+ * inventa.
+ */
+function sugerirParaAviso(datos, comercio) {
+  const encontrada = reglaPara(datos, comercio);
+  if (encontrada) {
+    const { regla, por, palabra } = encontrada;
+    const porQue = por === "palabra" ? `Dice «${palabra}», y tu regla «${regla.clave}»` : "Ya me habías dicho que";
+    if (regla.accion === ACCIONES_REGLA.PAGO) {
+      const tarjeta = (datos.tarjetas || []).find((t) => t.id === regla.tarjetaId);
+      return {
+        accion: ACCIONES_REGLA.PAGO,
+        categoriaId: null,
+        tarjetaId: regla.tarjetaId,
+        veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK,
+          `${por === "palabra" ? `${porQue} dice que es` : "Ya me habías dicho que esto es"} un pago${tarjeta ? ` a ${tarjeta.nombre}` : " de tarjeta"}, no un gasto.`,
+          { clave: regla.clave, palabra, fuente: "regla" }),
+      };
+    }
     return {
+      accion: ACCIONES_REGLA.CATEGORIA,
       categoriaId: regla.categoriaId,
+      tarjetaId: null,
       veredicto: veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK,
-        `Ya me habías dicho que ${comercio} va aquí.`, { clave, veces: regla.veces, fuente: "regla" }),
+        por === "palabra" ? `${porQue} lo manda a esta categoría.` : `Ya me habías dicho que ${comercio} va aquí.`,
+        { clave: regla.clave, palabra, veces: regla.veces, fuente: "regla" }),
     };
   }
 
+  const clave = marcaDe(comercio);
   const deducida = categoriaMasUsada(datos, clave);
   if (deducida) {
     return {
+      accion: ACCIONES_REGLA.CATEGORIA,
       categoriaId: deducida.categoria,
+      tarjetaId: null,
       veredicto: veredicto(ESTADOS.AJUSTADO, SEVERIDADES.INFO,
         `Tus últimos ${deducida.veces} movimientos de ${comercio} fueron de esta categoría.`,
         { clave, veces: deducida.veces, fuente: "historial" }),
@@ -4241,9 +4480,23 @@ function sugerirCategoria(datos, comercio) {
 }
 
 /**
+ * Qué categoría le toca a este comercio. Devuelve `{ categoriaId, veredicto }` o null.
+ * Una regla de pago no da categoría: lo que dice es que esto no es un gasto.
+ */
+function sugerirCategoria(datos, comercio) {
+  const sugerida = sugerirParaAviso(datos, comercio);
+  if (!sugerida || sugerida.accion !== ACCIONES_REGLA.CATEGORIA) return null;
+  return { categoriaId: sugerida.categoriaId, veredicto: sugerida.veredicto };
+}
+
+/**
  * Guarda la corrección. Devuelve datos nuevos; no muta lo recibido.
  * Si la regla ya existía con otra categoría, gana la última: la persona cambió de opinión y
  * la app no está para discutir con ella.
+ *
+ * Si una regla de palabras ya mandaba este comercio a la misma categoría, no nace otra: se le
+ * suma una vez a esa. Si lo mandaba a OTRA, sí nace una regla propia para este comercio — es
+ * más específica, y por eso gana sin tocar la de palabras, que sigue sirviendo para el resto.
  */
 function recordar(datos, comercio, categoriaId, iso = hoyISO()) {
   const clave = marcaDe(comercio);
@@ -4251,14 +4504,102 @@ function recordar(datos, comercio, categoriaId, iso = hoyISO()) {
 
   const previas = datos.reglas || [];
   const anterior = previas.find((r) => r.clave === clave);
+
+  if (!anterior) {
+    const porPalabra = reglaPara(datos, comercio);
+    if (porPalabra && porPalabra.regla.accion === ACCIONES_REGLA.CATEGORIA && porPalabra.regla.categoriaId === categoriaId) {
+      const regla = porPalabra.regla;
+      return {
+        ...datos,
+        reglas: previas.map((r) => (r.clave === regla.clave ? { ...r, veces: r.veces + 1, ultima: iso } : r)),
+      };
+    }
+  }
+
   const nueva = normalizarRegla({
     clave,
     categoriaId,
+    palabras: anterior ? anterior.palabras : [],
     veces: anterior && anterior.categoriaId === categoriaId ? anterior.veces + 1 : 1,
     ultima: iso,
   });
 
   return { ...datos, reglas: [nueva, ...previas.filter((r) => r.clave !== clave)] };
+}
+
+/** Las palabras que escribió la persona, separadas por coma, punto y coma o renglón. */
+function partirPalabras(texto) {
+  const lista = Array.isArray(texto) ? texto : String(texto || "").split(/[,;\n]+/);
+  return lista.map((p) => String(p).trim()).filter(Boolean);
+}
+
+/**
+ * Crea o edita una regla escrita por la persona. Devuelve `{ datos, regla, error }`.
+ *
+ * `propuesta` = `{ clave, palabras, accion, categoriaId, tarjetaId }`. Con `claveOriginal` se
+ * edita la que ya estaba (su nombre no cambia: es su identidad, y la que aprendió la app sola
+ * es la marca del comercio).
+ *
+ * Una palabra no puede estar en dos reglas. Si pudiera, el mismo cargo tendría dos dueños y
+ * cuál gana dependería de un desempate que nadie ve. Wallet hace lo mismo, y por la misma razón.
+ *
+ * Si la palabra es el comercio de una regla APRENDIDA (sin palabras propias), esa regla se
+ * absorbe: la persona acaba de decir explícitamente qué hacer con ese comercio, y eso es más
+ * nuevo y más claro que una corrección de hace semanas. Se devuelven en `absorbidas` para
+ * poder decirlo. Si la otra también la escribió ella, no se pisa: se le pregunta.
+ */
+function guardarRegla(datos, propuesta, claveOriginal = null, iso = hoyISO()) {
+  const falla = (error) => ({ datos, regla: null, absorbidas: [], error });
+  const previas = datos.reglas || [];
+  const original = claveOriginal ? previas.find((r) => r.clave === claveOriginal) : null;
+  if (claveOriginal && !original) return falla("Esa regla ya no existe.");
+
+  const clave = original ? original.clave : String((propuesta && propuesta.clave) || "").trim().slice(0, 60);
+  if (!clave) return falla("Ponle un nombre a la regla.");
+  const otras = previas.filter((r) => r.clave !== clave);
+  if (!original && previas.some((r) => r.clave.toLowerCase() === clave.toLowerCase())) {
+    return falla(`Ya hay una regla que se llama «${clave}».`);
+  }
+
+  const escritas = partirPalabras(propuesta.palabras);
+  const palabras = [];
+  const absorbidas = [];
+  for (const escrita of escritas) {
+    const palabra = canonizarPalabra(escrita);
+    if (palabra.length < PALABRA_MINIMA) {
+      return falla(`«${escrita}» es muy corta: usa al menos ${PALABRA_MINIMA} letras, o atraparía de todo.`);
+    }
+    if (palabras.includes(palabra)) continue;
+    const duena = otras.find((r) => (r.palabras || []).includes(palabra));
+    if (duena) return falla(`«${escrita}» ya está en la regla «${duena.clave}». Una palabra solo puede tener un dueño.`);
+    const propia = otras.find((r) => r.clave === palabra);
+    if (propia && propia.palabras.length) {
+      return falla(`«${escrita}» es el nombre de tu regla «${propia.clave}». Agrégale ahí la palabra, o usa otra.`);
+    }
+    if (propia) absorbidas.push(propia.clave);
+    palabras.push(palabra);
+  }
+  if (!palabras.length && !original) return falla("Escribe al menos una palabra que aparezca en el aviso.");
+
+  const accion = propuesta.accion === ACCIONES_REGLA.PAGO ? ACCIONES_REGLA.PAGO : ACCIONES_REGLA.CATEGORIA;
+  if (accion === ACCIONES_REGLA.CATEGORIA && !(datos.categorias || []).some((c) => c.id === propuesta.categoriaId)) {
+    return falla("Elige a qué categoría manda la regla.");
+  }
+  if (accion === ACCIONES_REGLA.PAGO && !(datos.tarjetas || []).some((t) => t.id === propuesta.tarjetaId)) {
+    return falla("Elige qué tarjeta se está pagando.");
+  }
+
+  const regla = normalizarRegla({
+    clave,
+    accion,
+    categoriaId: propuesta.categoriaId,
+    tarjetaId: propuesta.tarjetaId,
+    palabras,
+    veces: original ? original.veces : 1,
+    ultima: iso,
+  });
+  const quedan = otras.filter((r) => !absorbidas.includes(r.clave));
+  return { datos: { ...datos, reglas: [regla, ...quedan] }, regla, absorbidas, error: null };
 }
 
 /** Borrar una regla tiene que ser tan fácil como crearla. */
@@ -4319,6 +4660,62 @@ function aplicarRegla(datos, clave, categoriaId) {
   }
 
   return tocados ? { ...datos, movimientos } : datos;
+}
+
+/** ¿Este movimiento ya está como la regla lo dejaría? */
+function yaCumpleLaRegla(regla, m) {
+  if (m.tipo !== TIPOS.GASTO) return true; // solo los gastos se tocan: ni ingresos ni lo ya pagado
+  return regla.accion === ACCIONES_REGLA.CATEGORIA && m.categoria === regla.categoriaId;
+}
+
+/**
+ * Los movimientos ya capturados que esta regla cambiaría, del más nuevo al más viejo.
+ *
+ * Un movimiento es de esta regla solo si es la que MANDA sobre él: si otra regla más específica
+ * lo atrapa, aquí no sale. Así lo que se ofrece arreglar es exactamente lo que pasaría si ese
+ * aviso llegara hoy.
+ */
+function movimientosDeLaRegla(datos, clave) {
+  const regla = (datos.reglas || []).find((r) => r.clave === clave);
+  if (!regla) return [];
+  const encontrados = [];
+  for (const [mes, lista] of Object.entries(datos.movimientos || {})) {
+    for (const m of lista) {
+      if (yaCumpleLaRegla(regla, m)) continue;
+      const manda = reglaPara(datos, m.nota);
+      if (!manda || manda.regla.clave !== clave) continue;
+      encontrados.push({ ...m, mes });
+    }
+  }
+  return encontrados.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+}
+
+/**
+ * Aplica la regla a lo ya capturado — a todo, o solo a los `ids` que la persona eligió.
+ * Devuelve datos nuevos; no muta lo recibido.
+ *
+ * Una regla de categoría solo cambia la categoría. Una de pago convierte el gasto en el pago
+ * de esa tarjeta, que es lo que era desde el principio. El monto, la fecha y la nota no se
+ * tocan: son lo que pasó.
+ */
+function aplicarReglaA(datos, clave, ids = null) {
+  const regla = (datos.reglas || []).find((r) => r.clave === clave);
+  if (!regla) return datos;
+  const elegidos = new Set(movimientosDeLaRegla(datos, clave)
+    .map((m) => m.id)
+    .filter((id) => !ids || ids.includes(id)));
+  if (!elegidos.size) return datos;
+
+  const movimientos = {};
+  for (const [mes, lista] of Object.entries(datos.movimientos || {})) {
+    movimientos[mes] = lista.map((m) => {
+      if (!elegidos.has(m.id)) return m;
+      return regla.accion === ACCIONES_REGLA.PAGO
+        ? { ...m, tipo: TIPOS.PAGO, categoria: null, tarjetaId: regla.tarjetaId }
+        : { ...m, categoria: regla.categoriaId };
+    });
+  }
+  return { ...datos, movimientos };
 }
 
 // ═══ motor/nomina.js ═══
@@ -4755,6 +5152,83 @@ function quincenasDeColchon(datos, iso = hoyISO(), n = 6) {
   };
 }
 
+// ── Contra la quincena pasada ──────────────────────────────────────────────
+//
+// La gráfica de arriba contesta "¿voy mejorando?". Ésta contesta la pregunta de todos los días:
+// "¿en qué estoy gastando más que la vez pasada?". Y la compara a la MISMA ALTURA: el día 4 de
+// esta quincena contra los primeros 4 días de la anterior. Comparar cuatro días contra quince
+// cerrados haría ver un ahorro donde solo hay días que todavía no pasan — la misma trampa que
+// la tendencia evita marcando el ciclo en curso como incompleto.
+
+/** Cuánto llevas gastado por categoría contra lo que llevabas a estas alturas del ciclo anterior. */
+function contraElCicloAnterior(datos, iso = hoyISO()) {
+  const cortes = datos.perfil.cortes;
+  const actual = cicloDe(iso, cortes);
+  const anterior = cicloDe(sumarDias(actual.inicio, -1), cortes);
+  const dias = Math.min(actual.diasTranscurridos, anterior.dias);
+  const hastaAnterior = sumarDias(anterior.inicio, dias - 1);
+
+  const vacio = { actual, anterior, dias, hastaAnterior, filas: [], totalAhora: 0, totalAntes: 0, diferencia: 0 };
+  if (!movimientosEntre(datos, anterior.inicio, anterior.fin).length) {
+    return {
+      ...vacio,
+      veredicto: sinDatos(
+        "La quincena pasada no tiene nada capturado, así que no hay contra qué comparar.",
+        "sigue capturando: a la siguiente quincena ya sale",
+      ),
+    };
+  }
+
+  const porCategoria = (desde, hasta) => {
+    const mapa = new Map();
+    for (const m of movimientosEntre(datos, desde, hasta)) {
+      if (m.tipo !== TIPOS.GASTO) continue;
+      const id = m.categoria || "otros";
+      mapa.set(id, (mapa.get(id) || 0) + m.monto);
+    }
+    return mapa;
+  };
+  const ahora = porCategoria(actual.inicio, iso);
+  const antes = porCategoria(anterior.inicio, hastaAnterior);
+
+  const filas = [...new Set([...ahora.keys(), ...antes.keys()])]
+    .map((categoriaId) => {
+      const a = ahora.get(categoriaId) || 0;
+      const b = antes.get(categoriaId) || 0;
+      return { categoriaId, ahora: a, antes: b, diferencia: a - b };
+    })
+    .filter((f) => f.diferencia !== 0)
+    .sort((x, y) => y.diferencia - x.diferencia || (x.categoriaId < y.categoriaId ? -1 : 1));
+
+  const totalAhora = [...ahora.values()].reduce((t, v) => t + v, 0);
+  const totalAntes = [...antes.values()].reduce((t, v) => t + v, 0);
+  const diferencia = totalAhora - totalAntes;
+  const subio = filas[0] && filas[0].diferencia > 0 ? filas[0] : null;
+  const nombre = (id) => {
+    const c = (datos.categorias || []).find((x) => x.id === id);
+    return c ? c.nombre : id;
+  };
+  const enDias = `en ${dias} ${dias === 1 ? "día" : "días"}`;
+
+  return {
+    ...vacio,
+    filas,
+    totalAhora,
+    totalAntes,
+    diferencia,
+    veredicto: diferencia > 0
+      ? veredicto(ESTADOS.AJUSTADO, SEVERIDADES.MEDIA,
+        `Llevas ${formatear(diferencia)} más que a estas alturas de la quincena pasada (${enDias})` +
+          (subio ? `, sobre todo en ${nombre(subio.categoriaId)}.` : "."),
+        { diferencia, dias, categoriaId: subio ? subio.categoriaId : null })
+      : veredicto(ESTADOS.VA_BIEN, SEVERIDADES.OK,
+        diferencia < 0
+          ? `Llevas ${formatear(-diferencia)} menos que a estas alturas de la quincena pasada (${enDias}).`
+          : `Vas exactamente igual que a estas alturas de la quincena pasada (${enDias}).`,
+        { diferencia, dias }),
+  };
+}
+
 // ═══ motor/bandeja.js ═══
 // La bandeja — lo que llegó solo, esperando que tú digas que sí.
 //
@@ -4811,12 +5285,19 @@ function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, is
     return { datos, entrada: null, duplicado, error: null };
   }
 
-  const sugerida = lectura.movimiento.tipo === TIPOS.GASTO ? sugerirCategoria(datos, lectura.comercio) : null;
+  const sugerida = lectura.movimiento.tipo === TIPOS.GASTO ? sugerirParaAviso(datos, lectura.comercio) : null;
+  // Una regla de pago cambia el TIPO, no solo la categoría: el aviso dice "cargo" porque el
+  // dinero salió de tu cuenta, pero se fue a tu tarjeta. Contarlo como gasto sería contar dos
+  // veces lo que ya se contó el día de cada compra.
+  const esPago = Boolean(sugerida && sugerida.accion === ACCIONES_REGLA.PAGO);
+  const movimiento = esPago
+    ? { ...lectura.movimiento, tipo: TIPOS.PAGO, categoria: null, tarjetaId: sugerida.tarjetaId }
+    : { ...lectura.movimiento, categoria: sugerida ? sugerida.categoriaId : lectura.movimiento.categoria };
   const razones = lectura.veredicto.datos.razones || [];
   const entrada = normalizarEntrada({
     recibido: iso,
     estado: ESTADOS_BANDEJA.PENDIENTE,
-    movimiento: { ...lectura.movimiento, categoria: sugerida ? sugerida.categoriaId : lectura.movimiento.categoria },
+    movimiento,
     huella: lectura.huella,
     confianza: lectura.confianza,
     banco: lectura.banco,
@@ -4826,7 +5307,7 @@ function recibirAviso(datos, texto, remitente = "", origen = ORIGENES.PEGADO, is
     posibleTraspaso: lectura.posibleTraspaso,
     // Un cargo final NO es un gasto nuevo: sustituye a la preautorización que ya está.
     reemplaza: duplicado && duplicado.datos.motivo === "liquidacion" ? duplicado.datos.id : null,
-    aviso: [duplicado ? duplicado.motivo : "", ...razones].filter(Boolean).join(" "),
+    aviso: [duplicado ? duplicado.motivo : "", esPago ? sugerida.veredicto.motivo : "", ...razones].filter(Boolean).join(" "),
     // De una captura de pantalla SÍ se guarda la primera línea leída, y solo de ella. No es
     // para enseñarla bonito: es para que el ojo compare el monto grande contra lo que el OCR
     // creyó ver, antes de aceptarlo. Un correo no la necesita —lo leíste tú— y por eso ahí se
@@ -5135,6 +5616,446 @@ function absorberAvisos(datos, avisos, iso = hoyISO()) {
   }
 
   return { datos: acumulado, nuevos, repetidos, sinLeer };
+}
+
+// ═══ motor/importar.js ═══
+// Importar un estado de cuenta — meses de historial sin teclear uno solo.
+//
+// Todos los bancos de aquí dejan bajar los movimientos en CSV, y varios en OFX. Es la forma más
+// rápida de que la app sepa a dónde se va el dinero desde el primer día, en vez de esperar a
+// que se junten tres quincenas de avisos.
+//
+// La regla de la casa no cambia: lo que entra de un archivo va a la BANDEJA, como cualquier
+// aviso, y no cuenta en ningún número hasta que la persona dice que sí. Y antes de eso, la
+// persona confirma qué columna es qué — un CSV no trae instrucciones, y adivinar en silencio
+// que la tercera columna es el monto es la clase de suposición que esta app no hace.
+//
+// Lo que NO lee: Excel (.xls/.xlsx). Es un formato binario que pide una dependencia, y el mismo
+// banco que lo ofrece ofrece CSV. Se dice así en pantalla, en vez de fallar raro.
+
+
+
+
+
+/** Cuántas filas se miran, como mucho, buscando el encabezado. Los bancos ponen un preámbulo. */
+const FILAS_DE_PREAMBULO = 25;
+
+/** Lo más que se acepta de un archivo. Un año de movimientos de alguien muy activo cabe holgado. */
+const MAXIMO_DE_FILAS = 3000;
+
+/**
+ * Cuántas entradas pueden estar esperando en la bandeja por culpa de un archivo. La bandeja
+ * viaja entera en un solo documento cuando hay sincronización, y ese documento tiene tope
+ * (~570 entradas). Un año de movimientos de golpe lo rompería. Se manda una tanda, la persona
+ * la acepta, y vuelve a subir el mismo archivo: lo ya mandado no se repite.
+ */
+const TANDA_DE_IMPORTACION = 300;
+
+/** Los campos que se pueden mapear, en el orden en que se piden en pantalla. */
+const CAMPOS_IMPORTAR = [
+  { clave: "fecha", etiqueta: "Fecha" },
+  { clave: "descripcion", etiqueta: "Descripción" },
+  { clave: "monto", etiqueta: "Monto (con signo)" },
+  { clave: "cargo", etiqueta: "Cargo / retiro" },
+  { clave: "abono", etiqueta: "Abono / depósito" },
+  { clave: "referencia", etiqueta: "Referencia" },
+];
+
+// ── Partir el texto ────────────────────────────────────────────────────────
+
+/** ¿Es un OFX? Se reconoce por su cabecera, no por la extensión: los nombres mienten. */
+function esOFX(texto) {
+  return /OFXHEADER|<OFX>/i.test(String(texto || "").slice(0, 2000));
+}
+
+/** El separador que más filas parte en el mismo número de columnas. */
+function separadorDelCSV(texto) {
+  const lineas = texto.split(/\r?\n/).filter((l) => l.trim()).slice(0, 30);
+  let mejor = { sep: ",", puntos: -1 };
+  for (const sep of [",", ";", "\t", "|"]) {
+    const cuentas = lineas.map((l) => partirLineaCSV(l, sep).length).filter((n) => n > 1);
+    if (!cuentas.length) continue;
+    const moda = cuentas.sort((a, b) => cuentas.filter((x) => x === b).length - cuentas.filter((x) => x === a).length)[0];
+    const puntos = cuentas.filter((n) => n === moda).length * 10 + moda;
+    if (puntos > mejor.puntos) mejor = { sep, puntos };
+  }
+  return mejor.sep;
+}
+
+/** Una línea de CSV en celdas, respetando comillas. Una sola línea: no se cruzan renglones. */
+function partirLineaCSV(linea, sep) {
+  const celdas = [];
+  let actual = "";
+  let entreComillas = false;
+  for (let i = 0; i < linea.length; i++) {
+    const c = linea[i];
+    if (entreComillas) {
+      if (c === '"' && linea[i + 1] === '"') { actual += '"'; i++; }
+      else if (c === '"') entreComillas = false;
+      else actual += c;
+    } else if (c === '"') entreComillas = true;
+    else if (c === sep) { celdas.push(actual.trim()); actual = ""; }
+    else actual += c;
+  }
+  celdas.push(actual.trim());
+  return celdas;
+}
+
+/**
+ * El CSV en filas de celdas. Las comillas pueden contener saltos de línea (hay bancos que meten
+ * la descripción en dos renglones), así que se junta lo que quedó con una comilla abierta.
+ */
+function partirCSV(texto) {
+  const limpio = String(texto || "").replace(/^﻿/, "");
+  const sep = separadorDelCSV(limpio);
+  const filas = [];
+  let pendiente = "";
+  for (const linea of limpio.split(/\r?\n/)) {
+    pendiente = pendiente ? `${pendiente}\n${linea}` : linea;
+    if ((pendiente.match(/"/g) || []).length % 2 === 1) continue; // comilla abierta: sigue
+    if (pendiente.trim()) filas.push(partirLineaCSV(pendiente, sep));
+    pendiente = "";
+    if (filas.length > MAXIMO_DE_FILAS + FILAS_DE_PREAMBULO) break;
+  }
+  if (pendiente.trim()) filas.push(partirLineaCSV(pendiente, sep));
+  return filas;
+}
+
+// ── Leer celdas ────────────────────────────────────────────────────────────
+
+const MESES_DE_ARCHIVO = {
+  ene: 1, jan: 1, feb: 2, mar: 3, abr: 4, apr: 4, may: 5, jun: 6, jul: 7, ago: 8, aug: 8,
+  sep: 9, set: 9, oct: 10, nov: 11, dic: 12, dec: 12,
+};
+
+function anioDeArchivo(a) {
+  const n = Number(a);
+  return a.length <= 2 ? 2000 + n : n;
+}
+
+/**
+ * Una fecha de banco a ISO, o null. `orden` dice cómo leer "03/04/2026": "dma" (como se escribe
+ * aquí) o "mda" (como lo exportan algunos sistemas gringos).
+ */
+function leerFecha(texto, orden = "dma") {
+  const t = String(texto || "").trim().toLowerCase();
+  if (!t) return null;
+  let anio, mes, dia;
+
+  let m = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) [anio, mes, dia] = [Number(m[1]), Number(m[2]), Number(m[3])];
+
+  if (!m && (m = t.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})\b/))) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    [dia, mes] = orden === "mda" ? [b, a] : [a, b];
+    anio = anioDeArchivo(m[3]);
+  }
+
+  if (!m && (m = t.match(/^(\d{1,2})[-/. ]+([a-z]{3})[a-z]*\.?[-/. ]+(\d{2,4})\b/))) {
+    mes = MESES_DE_ARCHIVO[m[2]];
+    dia = Number(m[1]);
+    anio = anioDeArchivo(m[3]);
+  }
+
+  if (!m && (m = t.match(/^(\d{4})(\d{2})(\d{2})/))) [anio, mes, dia] = [Number(m[1]), Number(m[2]), Number(m[3])];
+
+  if (!m || !mes) return null;
+  const iso = armarISO(anio, mes, dia);
+  return esISO(iso) ? iso : null;
+}
+
+/**
+ * Cómo vienen las fechas de esta columna. Si algún primer número pasa de 12, es día primero; si
+ * algún segundo, mes primero. Si ninguno lo delata, se supone el de aquí — y la pantalla lo
+ * enseña para que la persona lo cambie si no.
+ */
+function ordenDeFechas(valores) {
+  let dma = false;
+  let mda = false;
+  for (const v of valores) {
+    const m = String(v || "").trim().match(/^(\d{1,2})[-/.](\d{1,2})[-/.]\d{2,4}/);
+    if (!m) continue;
+    if (Number(m[1]) > 12) dma = true;
+    if (Number(m[2]) > 12) mda = true;
+  }
+  return { orden: mda && !dma ? "mda" : "dma", seguro: dma !== mda };
+}
+
+/**
+ * Un monto de estado de cuenta a centavos CON signo, o null.
+ * Acepta "$1,234.50", "-1234.5", "(1,234.50)" y "1,234.50-" (negativos de contador), y
+ * "1.234,50" (coma decimal).
+ */
+function leerMonto(texto) {
+  let t = String(texto || "").replace(/\s|\$|mxn|mn/gi, "");
+  if (!t) return null;
+  let negativo = false;
+  if (/^\(.*\)$/.test(t)) { negativo = true; t = t.slice(1, -1); }
+  if (/-$/.test(t)) { negativo = true; t = t.slice(0, -1); }
+  if (t.startsWith("-")) { negativo = !negativo; t = t.slice(1); }
+  if (t.startsWith("+")) t = t.slice(1);
+  if (/^\d{1,3}(\.\d{3})+(,\d{1,2})?$/.test(t) || /^\d+,\d{1,2}$/.test(t)) {
+    t = t.replace(/\./g, "").replace(",", ".");
+  }
+  const centavos = aCentavos(t);
+  if (centavos === null) return null;
+  return negativo ? -centavos : centavos;
+}
+
+// ── Qué columna es qué ─────────────────────────────────────────────────────
+
+function sinAcentosCSV(texto) {
+  return String(texto || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").trim();
+}
+
+const PISTAS_DE_COLUMNA = {
+  fecha: /\b(fecha|date|dia)\b/,
+  cargo: /\b(cargos?|retiros?|debitos?|debits?|egresos?|salidas?)\b/,
+  abono: /\b(abonos?|depositos?|creditos?|credits?|ingresos?|entradas?)\b/,
+  monto: /\b(importe|monto|amount|cantidad|valor)\b/,
+  descripcion: /\b(descripcion|concepto|detalle|description|memo|beneficiario|comercio|establecimiento|movimiento)\b/,
+  referencia: /\b(referencia|folio|rastreo|autorizacion|reference)\b/,
+  saldo: /\b(saldo|balance)\b/,
+};
+
+/** ¿Esta fila es el encabezado? Tiene que nombrar una fecha y algo de dinero. */
+function pareceEncabezado(fila) {
+  const celdas = fila.map(sinAcentosCSV);
+  const fecha = celdas.some((c) => PISTAS_DE_COLUMNA.fecha.test(c));
+  const dinero = celdas.some((c) => PISTAS_DE_COLUMNA.monto.test(c) || PISTAS_DE_COLUMNA.cargo.test(c) || PISTAS_DE_COLUMNA.abono.test(c));
+  return fecha && dinero;
+}
+
+/** Propone qué columna es cada campo a partir de los nombres del encabezado. */
+function mapeoPorNombres(encabezado) {
+  const mapeo = { fecha: null, descripcion: null, monto: null, cargo: null, abono: null, referencia: null };
+  const tomada = new Set();
+  const tomar = (campo, prueba) => {
+    if (mapeo[campo] !== null) return;
+    const i = encabezado.findIndex((c, j) => !tomada.has(j) && prueba(sinAcentosCSV(c)));
+    if (i >= 0) { mapeo[campo] = i; tomada.add(i); }
+  };
+  // El saldo se aparta primero: "saldo" nunca es un movimiento, y "abono" no debe tragárselo.
+  encabezado.forEach((c, j) => { if (PISTAS_DE_COLUMNA.saldo.test(sinAcentosCSV(c))) tomada.add(j); });
+  tomar("fecha", (c) => PISTAS_DE_COLUMNA.fecha.test(c));
+  // Una columna que dice "cargo/abono" no es ni cargo ni abono: es el monto con su sentido.
+  tomar("cargo", (c) => PISTAS_DE_COLUMNA.cargo.test(c) && !PISTAS_DE_COLUMNA.abono.test(c));
+  tomar("abono", (c) => PISTAS_DE_COLUMNA.abono.test(c) && !PISTAS_DE_COLUMNA.cargo.test(c));
+  tomar("monto", (c) => PISTAS_DE_COLUMNA.monto.test(c) || (PISTAS_DE_COLUMNA.cargo.test(c) && PISTAS_DE_COLUMNA.abono.test(c)));
+  tomar("descripcion", (c) => PISTAS_DE_COLUMNA.descripcion.test(c));
+  tomar("referencia", (c) => PISTAS_DE_COLUMNA.referencia.test(c));
+  if (mapeo.cargo !== null && mapeo.abono !== null) mapeo.monto = null;
+  return mapeo;
+}
+
+/** Sin encabezado: se adivina por el contenido, y la pantalla lo enseña para corregirlo. */
+function mapeoPorContenido(filas) {
+  const columnas = Math.max(...filas.map((f) => f.length));
+  const proporcion = (j, prueba) => {
+    const valores = filas.map((f) => f[j]).filter((v) => v !== undefined && v !== "");
+    return valores.length ? valores.filter(prueba).length / valores.length : 0;
+  };
+  const mapeo = { fecha: null, descripcion: null, monto: null, cargo: null, abono: null, referencia: null };
+  for (let j = 0; j < columnas && mapeo.fecha === null; j++) {
+    if (proporcion(j, (v) => leerFecha(v) !== null) >= 0.6) mapeo.fecha = j;
+  }
+  const numericas = [];
+  for (let j = 0; j < columnas; j++) {
+    if (j !== mapeo.fecha && proporcion(j, (v) => leerMonto(v) !== null) >= 0.6) numericas.push(j);
+  }
+  // La última columna numérica de un estado de cuenta suele ser el saldo: no se usa como monto
+  // si hay otra antes.
+  mapeo.monto = numericas.length ? numericas[0] : null;
+  let largo = -1;
+  for (let j = 0; j < columnas; j++) {
+    if (j === mapeo.fecha || numericas.includes(j)) continue;
+    const promedio = filas.reduce((t, f) => t + String(f[j] || "").length, 0) / filas.length;
+    if (promedio > largo) { largo = promedio; mapeo.descripcion = j; }
+  }
+  return mapeo;
+}
+
+/**
+ * Lee un CSV y propone cómo interpretarlo. Devuelve `{ encabezado, filas, mapeo, orden,
+ * ordenSeguro }`: las filas son las de DATOS (sin preámbulo ni encabezado).
+ */
+function analizarCSV(texto) {
+  const todas = partirCSV(texto);
+  const indice = todas.slice(0, FILAS_DE_PREAMBULO).findIndex(pareceEncabezado);
+  const encabezado = indice >= 0 ? todas[indice] : null;
+  let filas = indice >= 0 ? todas.slice(indice + 1) : todas;
+  // Sin encabezado, lo de antes de la primera fecha es preámbulo.
+  if (!encabezado) {
+    const primera = filas.findIndex((f) => f.some((c) => leerFecha(c) !== null));
+    filas = primera >= 0 ? filas.slice(primera) : [];
+  }
+  filas = filas.filter((f) => f.some((c) => c !== "")).slice(0, MAXIMO_DE_FILAS);
+  const mapeo = encabezado ? mapeoPorNombres(encabezado) : mapeoPorContenido(filas.slice(0, 50));
+  const { orden, seguro } = ordenDeFechas(mapeo.fecha === null ? [] : filas.map((f) => f[mapeo.fecha]));
+  return { encabezado, filas, mapeo, orden, ordenSeguro: seguro };
+}
+
+/**
+ * Las filas, ya convertidas a movimientos con el mapeo que confirmó la persona.
+ * Devuelve `{ movimientos, descartadas }`. Una fila que no tiene fecha o monto que se pueda leer
+ * no se inventa: se cuenta como descartada (son los totales y renglones de pie de página).
+ *
+ * `invertir` es para los bancos que exportan los cargos en positivo en la columna de monto.
+ */
+function filasAMovimientos(filas, mapeo, { orden = "dma", invertir = false } = {}) {
+  const movimientos = [];
+  let descartadas = 0;
+  const usada = (j) => j !== null && j !== undefined && j !== "";
+  const celda = (fila, j) => (usada(j) ? fila[Number(j)] ?? "" : "");
+  const separadas = usada(mapeo.cargo) || usada(mapeo.abono);
+
+  for (const fila of filas) {
+    const fecha = leerFecha(celda(fila, mapeo.fecha), orden);
+    let firmado = null;
+    if (separadas) {
+      const cargo = leerMonto(celda(fila, mapeo.cargo));
+      const abono = leerMonto(celda(fila, mapeo.abono));
+      if (cargo) firmado = -Math.abs(cargo);
+      else if (abono) firmado = Math.abs(abono);
+    } else {
+      firmado = leerMonto(celda(fila, mapeo.monto));
+      if (firmado !== null && invertir) firmado = -firmado;
+    }
+    if (!fecha || !firmado) {
+      descartadas++;
+      continue;
+    }
+    const nota = String(celda(fila, mapeo.descripcion)).replace(/\s+/g, " ").trim().slice(0, 120);
+    const ref = String(celda(fila, mapeo.referencia)).trim().slice(0, 40) || null;
+    movimientos.push({
+      fecha,
+      monto: Math.abs(firmado),
+      tipo: firmado < 0 ? TIPOS.GASTO : TIPOS.INGRESO,
+      nota,
+      ref,
+    });
+  }
+  return { movimientos, descartadas };
+}
+
+/** El valor de una etiqueta OFX dentro de un bloque. OFX 1 no cierra sus etiquetas. */
+function etiquetaOFX(bloque, nombre) {
+  const m = bloque.match(new RegExp(`<${nombre}>([^<\\r\\n]*)`, "i"));
+  return m ? m[1].trim() : "";
+}
+
+/** Lee un OFX. No pide mapeo: el formato ya dice qué es cada cosa. */
+function leerOFX(texto) {
+  const movimientos = [];
+  let descartadas = 0;
+  const bloques = String(texto || "").split(/<STMTTRN>/i).slice(1, MAXIMO_DE_FILAS + 1);
+  for (const crudo of bloques) {
+    const bloque = crudo.split(/<\/STMTTRN>/i)[0];
+    const fecha = leerFecha(etiquetaOFX(bloque, "DTPOSTED").slice(0, 8));
+    const firmado = leerMonto(etiquetaOFX(bloque, "TRNAMT"));
+    if (!fecha || !firmado) {
+      descartadas++;
+      continue;
+    }
+    const nombre = etiquetaOFX(bloque, "NAME");
+    const memo = etiquetaOFX(bloque, "MEMO");
+    const nota = (nombre && memo && !memo.toLowerCase().includes(nombre.toLowerCase()) ? `${nombre} ${memo}` : nombre || memo)
+      .replace(/\s+/g, " ").slice(0, 120);
+    movimientos.push({
+      fecha,
+      monto: Math.abs(firmado),
+      tipo: firmado < 0 ? TIPOS.GASTO : TIPOS.INGRESO,
+      nota,
+      ref: etiquetaOFX(bloque, "FITID").slice(0, 40) || null,
+    });
+  }
+  return { movimientos, descartadas };
+}
+
+// ── A la bandeja ───────────────────────────────────────────────────────────
+
+/** Qué tan lejos puede estar un movimiento ya capturado para sospechar que es el mismo. */
+const DIAS_DE_PARECIDO = 2;
+
+function claveDeFila(texto) {
+  return sinAcentosCSV(texto).replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Manda los movimientos del archivo a la bandeja. Devuelve `{ datos, nuevos, repetidos,
+ * parecidos, sinCupo }`. `sinCupo` son los que no cupieron en esta tanda.
+ *
+ * Volver a subir el mismo archivo no duplica nada: cada fila lleva una huella (su FITID, o su
+ * fecha+monto+descripción con el número de vez que aparece en el archivo), y lo que ya pasó por
+ * la bandeja no vuelve a entrar. Lo que se parece a algo que ya capturaste —mismo monto, mismo
+ * sentido, a dos días o menos— entra, pero marcado para revisar a mano: puede ser el mismo
+ * movimiento que llegó por correo, o dos cafés iguales. Eso no lo decide la app.
+ */
+function mandarABandeja(datos, movimientos, iso = hoyISO(), tanda = TANDA_DE_IMPORTACION) {
+  const esperando = (datos.bandeja || []).filter((e) => e.origen === ORIGENES.ARCHIVO && esperaRespuesta(e)).length;
+  const cupo = Math.max(0, tanda - esperando);
+  let sinCupo = 0;
+  const huellasVistas = new Set((datos.bandeja || []).map((e) => e.huella).filter(Boolean));
+  const refs = new Set(Object.values(datos.movimientos || {}).flat().map((m) => m.ref).filter(Boolean));
+  const capturados = Object.values(datos.movimientos || {}).flat();
+  const veces = new Map();
+  const nuevas = [];
+  let repetidos = 0;
+  let parecidos = 0;
+
+  for (const m of movimientos) {
+    const base = `${m.fecha}|${m.tipo}|${m.monto}|${claveDeFila(m.nota)}`;
+    const vez = (veces.get(base) || 0) + 1;
+    veces.set(base, vez);
+    const huella = m.ref ? `archivo:${m.ref}` : `archivo:${base}#${vez}`;
+    if (huellasVistas.has(huella) || (m.ref && refs.has(m.ref))) {
+      repetidos++;
+      continue;
+    }
+    if (nuevas.length >= cupo) {
+      sinCupo++;
+      continue;
+    }
+    huellasVistas.add(huella);
+
+    const parecido = capturados.find((c) =>
+      c.monto === m.monto &&
+      (c.tipo === m.tipo || (m.tipo === TIPOS.GASTO && c.tipo === TIPOS.PAGO)) &&
+      Math.abs(diasEntre(c.fecha, m.fecha)) <= DIAS_DE_PARECIDO);
+    if (parecido) parecidos++;
+
+    const sugerida = m.tipo === TIPOS.GASTO ? sugerirParaAviso(datos, m.nota) : null;
+    const esPago = Boolean(sugerida && sugerida.accion === ACCIONES_REGLA.PAGO);
+    const movimiento = esPago
+      ? { ...m, tipo: TIPOS.PAGO, categoria: null, tarjetaId: sugerida.tarjetaId }
+      : { ...m, categoria: sugerida ? sugerida.categoriaId : m.tipo === TIPOS.GASTO ? "otros" : null };
+
+    const entrada = normalizarEntrada({
+      recibido: iso,
+      estado: ESTADOS_BANDEJA.PENDIENTE,
+      movimiento,
+      huella,
+      // Un archivo del banco no es un OCR ni un correo que hubo que interpretar: el monto y la
+      // fecha son los del banco. Lo único que deja la confianza en baja es parecerse a algo
+      // que ya está, porque eso sí hay que mirarlo.
+      confianza: parecido ? "baja" : "alta",
+      comercio: m.nota ? m.nota.slice(0, 60) : null,
+      origen: ORIGENES.ARCHIVO,
+      aviso: [
+        parecido ? `Ya tienes ${parecido.tipo === TIPOS.INGRESO ? "un ingreso" : "un movimiento"} de ${formatear(parecido.monto)} el ${parecido.fecha}: si es el mismo, descártalo.` : "",
+        esPago ? sugerida.veredicto.motivo : "",
+      ].filter(Boolean).join(" "),
+    });
+    if (entrada) nuevas.push(entrada);
+  }
+
+  return {
+    datos: nuevas.length ? { ...datos, bandeja: [...nuevas, ...(datos.bandeja || [])] } : datos,
+    nuevos: nuevas.length,
+    repetidos,
+    parecidos,
+    sinCupo,
+  };
 }
 
 // ═══ motor/recordatorios.js ═══
@@ -6835,6 +7756,9 @@ async function soltarMotor(cliente, seColgo) {
 
 
 
+
+
+
 const app = {
   // Los ids de lo último aceptado en lote, para poder revertirlo entero.
   ultimaTanda: null,
@@ -7358,9 +8282,13 @@ function vistaHoy() {
   // repite cantidades— y si todavía no hay historial, aquí no aparece nada: inventarle un
   // "$50 comida" a quien nunca ha gastado eso es la misma mentira que un cero disfrazado.
   const frecuentes = montosFrecuentes(datos, hoy, 3, app.hora);
-  const rapido = frecuentes.length
+  // Y lo que la persona dijo que se repite: sus plantillas, con nombre, un toque cada una.
+  const plantillas = listaDePlantillas(datos);
+  const rapido = frecuentes.length || plantillas.length
     ? `<div class="tarjeta">
-        <div class="rotulo">Lo de siempre, en efectivo</div>
+        ${plantillas.length ? `<div class="rotulo">Tus plantillas</div>
+          <div class="acciones">${plantillas.map(botonPlantilla).join("")}</div>` : ""}
+        ${frecuentes.length ? `<div class="rotulo">Lo de siempre, en efectivo</div>` : ""}
         <div class="acciones">
           ${frecuentes.map((f) => {
             const categoria = categoriaPorId(datos, f.categoriaId);
@@ -7465,7 +8393,9 @@ function tarjetaEntrada(entrada) {
     fechaCorta(entrada.movimiento.fecha),
     entrada.banco ? nombreDeBanco(entrada.banco) || entrada.banco : null,
     entrada.ultimos4 ? `••${entrada.ultimos4}` : null,
-    entrada.origen === ORIGENES.CORREO ? "de tu correo" : entrada.origen === ORIGENES.COMPARTIDO ? "compartido" : null,
+    entrada.origen === ORIGENES.CORREO ? "de tu correo"
+      : entrada.origen === ORIGENES.COMPARTIDO ? "compartido"
+      : entrada.origen === ORIGENES.ARCHIVO ? "de tu estado de cuenta" : null,
   ].filter(Boolean).join(" · ");
 
   // Las categorías van como fichas para que aceptar sea un toque, no un formulario. Ésa es
@@ -7524,6 +8454,15 @@ function vistaBandeja() {
         <input id="captura" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
           hidden data-accion-archivo="captura">` : ""}
     </div>
+  </div>
+  <div class="tarjeta">
+    <div class="fila"><div class="crece">
+      <div class="nombre">Sube tu estado de cuenta</div>
+      <div class="sub">el CSV u OFX que deja bajar tu banco: meses de historial sin teclear nada. Llega aquí y tú confirmas.</div>
+    </div>
+    <button class="boton chico" data-accion="elegir-estado">Subir</button>
+    <input id="estado-cuenta" type="file" accept=".csv,.txt,.ofx,.qfx,text/csv,text/plain"
+      hidden data-accion-archivo="estado"></div>
   </div>`;
 
   // Los que llegaron y no supe leer. Van ARRIBA de todo: son los únicos donde, si nadie hace
@@ -7686,6 +8625,38 @@ function tarjetaTendencia() {
     </div>`;
 }
 
+/** Una plantilla como botón: su nombre y su monto, para usarla de un toque. */
+function botonPlantilla(p) {
+  const categoria = p.tipo === TIPOS.GASTO ? categoriaPorId(app.datos, p.categoria) : null;
+  return `<button class="boton tenue" data-accion="usar-plantilla" data-id="${esc(p.id)}"
+    title="${p.tipo === TIPOS.INGRESO ? "ingreso" : "gasto"} de ${esc(monto(p.monto))}">${categoria ? `${categoria.emoji} ` : ""}${esc(p.nombre)} · ${p.tipo === TIPOS.INGRESO ? "+" : ""}${monto(p.monto)}</button>`;
+}
+
+/**
+ * ¿En qué estoy gastando más que la vez pasada? A la misma altura de la quincena: el día 4 de
+ * ésta contra los primeros 4 días de la anterior. Si la anterior no tiene nada, no aparece —
+ * una comparación contra cero sería un número sin contexto.
+ */
+function tarjetaContraAnterior() {
+  const r = contraElCicloAnterior(app.datos, app.hoy);
+  if (esSinDatos(r.veredicto) || (!r.totalAhora && !r.totalAntes)) return "";
+  const filas = r.filas.slice(0, 5).map((f) => {
+    const categoria = categoriaPorId(app.datos, f.categoriaId);
+    const subio = f.diferencia > 0;
+    return `<div class="fila">
+      <div class="crece"><div class="nombre">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : f.categoriaId)}</div>
+        <div class="sub">${monto(f.ahora)} ahora · ${monto(f.antes)} la vez pasada</div></div>
+      <div class="monto" style="color:var(${subio ? "--mal" : "--bien"})">${subio ? "+" : "−"}${monto(Math.abs(f.diferencia))}</div>
+    </div>`;
+  }).join("");
+  return `<div class="titulo-seccion">Contra la quincena pasada</div>
+    <div class="tarjeta">
+      <div class="rotulo">Lo que llevas gastado contra lo que llevabas a estas alturas</div>
+      ${filas}
+      ${veredictoHTML(r.veredicto)}
+    </div>`;
+}
+
 function vistaHistorial() {
   const filtro = app.filtro || { texto: "", tipo: "" };
   const meses = Object.keys(app.datos.movimientos).sort().reverse();
@@ -7786,6 +8757,7 @@ function vistaHistorial() {
     </div>`;
 
   return `<div class="acciones" style="margin:0 0 10px"><button class="boton tenue" data-accion="ir" data-vista="hoy">← Volver a Hoy</button></div>
+    ${tarjetaContraAnterior()}
     ${tarjetaTendencia()}
     ${buscador}
     ${bloques || `<div class="tarjeta">${vacio("Nada coincide con esa búsqueda.")}</div>`}
@@ -8358,30 +9330,58 @@ function vistaAjustes() {
        </details>`
     : "";
 
+  // Las reglas: las que aprendí de tus correcciones y las que escribiste tú. Va siempre, aunque
+  // no haya ninguna todavía: es el lugar donde se crea la primera.
   const reglas = reglasAprendidas(app.datos);
-  const loAprendido = reglas.length
-    ? `<div class="titulo-seccion">Lo que aprendí de ti</div>
+  const loAprendido = `<div class="titulo-seccion">Reglas</div>
        <div class="tarjeta">
-         <div class="rotulo">Cuando un aviso venga de estos lugares, le pongo esta categoría sola.</div>
+         <div class="rotulo">Cuando un aviso coincida, hago esto solo. Las que dicen «aprendida» salieron
+           de tus correcciones; con palabras, atrapan al comercio aunque el banco lo escriba distinto.</div>
          ${reglas.map((r) => {
-           const categoria = categoriaPorId(app.datos, r.categoriaId);
-           return `<div class="fila">
-             <div class="crece"><div class="nombre">${esc(r.clave)}</div>
-               <div class="sub">${esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div></div>
-             ${(() => {
-               // Solo si de verdad quedó historial viejo detrás. Un botón que no hace nada es
-               // peor que no tener botón.
-               const atrasados = movimientosDeLaMarca(app.datos, r.clave, r.categoriaId).length;
-               return atrasados
-                 ? `<button class="boton chico tenue" data-accion="aplicar-regla-atras"
-                      data-clave="${esc(r.clave)}" data-categoria="${esc(r.categoriaId)}">Aplicar a ${atrasados}</button>`
-                 : "";
-             })()}
-             <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
+           const accion = r.accion === ACCIONES_REGLA.PAGO
+             ? (() => {
+               const tarjeta = (app.datos.tarjetas || []).find((t) => t.id === r.tarjetaId);
+               return `▭ pago a ${tarjeta ? tarjeta.nombre : "una tarjeta que ya no está"}`;
+             })()
+             : (() => {
+               const categoria = categoriaPorId(app.datos, r.categoriaId);
+               return categoria ? `${categoria.emoji} ${categoria.nombre}` : r.categoriaId;
+             })();
+           const palabras = r.palabras.length ? ` · si dice ${r.palabras.map((p) => `«${p}»`).join(", ")}` : " · aprendida";
+           // Solo si de verdad quedó historial detrás. Un botón que no hace nada es peor que no
+           // tener botón.
+           const atrasados = movimientosDeLaRegla(app.datos, r.clave).length;
+           return `<div class="fila apilada">
+             <div class="linea"><div class="nombre">${esc(r.clave)}</div></div>
+             <div class="sub">${esc(accion)}${esc(palabras)}${r.veces > 1 ? ` · ${r.veces} veces` : ""}</div>
+             <div class="acciones-fila">
+               ${atrasados ? `<button class="boton chico tenue" data-accion="aplicar-regla-atras"
+                    data-clave="${esc(r.clave)}">Aplicar a ${atrasados}</button>` : ""}
+               <button class="boton chico tenue" data-accion="editar-regla" data-clave="${esc(r.clave)}">Editar</button>
+               <button class="boton chico tenue" data-accion="olvidar-regla" data-clave="${esc(r.clave)}">Olvidar</button>
+             </div>
            </div>`;
          }).join("")}
-       </div>`
-    : "";
+         ${reglas.length ? "" : vacio("Todavía no hay reglas. Corrige una categoría en la bandeja y aprendo sola, o escribe una.")}
+         <div class="acciones"><button class="boton tenue" data-accion="nueva-regla">Nueva regla</button></div>
+       </div>`;
+
+  const plantillas = listaDePlantillas(app.datos);
+  const seccionPlantillas = `<div class="titulo-seccion">Plantillas</div>
+    <div class="tarjeta">
+      <div class="rotulo">Lo que se repite igualito —la renta, la colegiatura, el camión— con nombre. Aparecen
+        en Hoy y en el teclado: un toque y queda capturado con la fecha de hoy.</div>
+      ${plantillas.map((p) => {
+        const categoria = p.tipo === TIPOS.GASTO ? categoriaPorId(app.datos, p.categoria) : null;
+        return `<div class="fila">
+          <div class="crece"><div class="nombre">${esc(p.nombre)}</div>
+            <div class="sub">${p.tipo === TIPOS.INGRESO ? "ingreso" : esc(categoria ? `${categoria.emoji} ${categoria.nombre}` : p.categoria)} · ${monto(p.monto)}</div></div>
+          <button class="boton chico tenue" data-accion="editar-plantilla" data-id="${esc(p.id)}">Editar</button>
+          <button class="boton chico tenue" data-accion="borrar-plantilla" data-id="${esc(p.id)}">Borrar</button>
+        </div>`;
+      }).join("")}
+      <div class="acciones"><button class="boton tenue" data-accion="nueva-plantilla">Nueva plantilla</button></div>
+    </div>`;
 
   return `<div class="tarjeta">
       <div class="fila"><div class="crece"><div class="nombre">Ingreso por quincena</div>
@@ -8405,6 +9405,7 @@ function vistaAjustes() {
     ${seccionAvisos}
     ${seccionPuente}
     ${loAprendido}
+    ${seccionPlantillas}
 
     <div class="titulo-seccion">Tus datos</div>
     <div class="tarjeta">
@@ -9190,14 +10191,57 @@ const acciones = {
 
   // Lo mismo, desde la lista de reglas de Ajustes: para lo que se aprendió hace meses y dejó
   // historial viejo detrás.
-  async "aplicar-regla-atras"(el) {
-    const clave = el.dataset.clave;
-    const categoriaId = el.dataset.categoria;
-    const cuantos = movimientosDeLaMarca(app.datos, clave, categoriaId).length;
-    if (!cuantos) return;
-    await guardar(aplicarRegla(app.datos, clave, categoriaId));
-    app.aviso = `${cuantos} ${cuantos === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${nombreCategoria(categoriaId)}.`;
+  // Desde la lista de reglas de Ajustes: para lo que se aprendió hace meses y dejó historial
+  // viejo detrás. Se enseña la lista y se elige — no todo lo que coincide es lo que crees.
+  "aplicar-regla-atras"(el) {
+    hojaElegirAtras(el.dataset.clave);
+  },
+
+  "nueva-regla"() {
+    hojaRegla();
+  },
+
+  "editar-regla"(el) {
+    hojaRegla(el.dataset.clave);
+  },
+
+  async "usar-plantilla"(el) {
+    const { datos, movimiento, error } = usarPlantilla(app.datos, el.dataset.id, app.hoy, app.hora);
+    if (error) {
+      app.aviso = error;
+      return render();
+    }
+    vibrar();
+    await guardar(datos);
+    app.aviso = `Listo: ${movimiento.nota} por ${monto(movimiento.monto)}.`;
     render();
+  },
+
+  "nueva-plantilla"() {
+    hojaPlantilla();
+  },
+
+  "editar-plantilla"(el) {
+    hojaPlantilla(el.dataset.id);
+  },
+
+  "borrar-plantilla"(el) {
+    const plantilla = (app.datos.plantillas || []).find((p) => p.id === el.dataset.id);
+    if (!plantilla) return;
+    confirmar({
+      titulo: "Borrar plantilla",
+      mensaje: `«${plantilla.nombre}» deja de aparecer en Hoy. Lo que ya capturaste con ella se queda.`,
+      textoBoton: "Borrar",
+      alConfirmar: async () => {
+        await guardar(borrarPlantilla(app.datos, plantilla.id));
+        return null;
+      },
+    });
+  },
+
+  "elegir-estado"() {
+    const campo = document.getElementById("estado-cuenta");
+    if (campo) campo.click();
   },
 
   "editar-entrada"(el) {
@@ -9777,6 +10821,313 @@ const TIPOS_CAPTURA = [
  * ya tecleaste. También sirve para CORREGIR un movimiento: conserva su id, así que editar
  * no es borrar y volver a capturar.
  */
+// --- Reglas ---
+
+/** Las opciones de "qué hace la regla": una categoría, o el pago de una tarjeta. */
+function opcionesDeAccion() {
+  const categorias = opcionesCategorias().map((o) => ({ valor: `cat:${o.valor}`, etiqueta: `Ponerle ${o.etiqueta}` }));
+  const tarjetas = (app.datos.tarjetas || []).filter((t) => t.activa)
+    .map((t) => ({ valor: `pago:${t.id}`, etiqueta: `Es pago de ${t.nombre}, no gasto` }));
+  return [...categorias, ...tarjetas];
+}
+
+/**
+ * Crear o editar una regla. Al guardar, si hay movimientos de antes que la regla cambiaría, se
+ * ofrecen — con la lista delante, para elegir cuáles.
+ */
+function hojaRegla(clave = null) {
+  const regla = clave ? (app.datos.reglas || []).find((r) => r.clave === clave) : null;
+  if (clave && !regla) return;
+  const accionActual = regla
+    ? regla.accion === ACCIONES_REGLA.PAGO ? `pago:${regla.tarjetaId}` : `cat:${regla.categoriaId}`
+    : `cat:${(opcionesCategorias()[0] || { valor: "otros" }).valor}`;
+
+  abrirHoja({
+    titulo: regla ? `Regla «${regla.clave}»` : "Nueva regla",
+    campos: [
+      ...(regla ? [] : [{ clave: "nombre", etiqueta: "Nombre", tipo: "texto", requerido: true, valor: "" }]),
+      {
+        clave: "palabras", etiqueta: "Si el aviso dice", tipo: "texto",
+        valor: regla ? regla.palabras.join(", ") : "",
+        ayuda: regla && !regla.palabras.length
+          ? `Ya atrapa todo lo que sea «${regla.clave}». Agrega otras formas en que lo escribe tu banco, separadas por coma.`
+          : "Una o varias, separadas por coma: oxxo, 7 eleven. Basta con que el aviso las contenga.",
+      },
+      { clave: "accion", etiqueta: "Entonces", tipo: "select", opciones: opcionesDeAccion(), valor: accionActual },
+    ],
+    alGuardar: async (valores) => {
+      const [tipo, id] = String(valores.accion || "").split(/:(.*)/s);
+      const { datos, regla: guardada, absorbidas, error } = guardarRegla(app.datos, {
+        clave: valores.nombre,
+        palabras: valores.palabras || "",
+        accion: tipo === "pago" ? ACCIONES_REGLA.PAGO : ACCIONES_REGLA.CATEGORIA,
+        categoriaId: tipo === "cat" ? id : null,
+        tarjetaId: tipo === "pago" ? id : null,
+      }, clave, app.hoy);
+      if (error) return error;
+      await guardar(datos);
+      if (absorbidas.length) {
+        app.aviso = `Lo que había aprendido de ${absorbidas.map((c) => `«${c}»`).join(", ")} ahora lo decide «${guardada.clave}».`;
+        render();
+      }
+      // La hoja se cierra al volver de aquí; la siguiente se abre después, o la cerraría.
+      if (movimientosDeLaRegla(app.datos, guardada.clave).length) setTimeout(() => hojaElegirAtras(guardada.clave), 0);
+      return null;
+    },
+  });
+}
+
+/** Cuántas filas se enseñan para elegir. Más no se leen; el resto se aplica igual si se pide. */
+const FILAS_PARA_ELEGIR = 60;
+
+/**
+ * Los movimientos de antes que la regla cambiaría, con una casilla cada uno. Todos marcados de
+ * entrada: lo normal es querer arreglarlos, y lo raro —el reembolso, el cargo que sí era otra
+ * cosa— se desmarca.
+ */
+function hojaElegirAtras(clave) {
+  const regla = (app.datos.reglas || []).find((r) => r.clave === clave);
+  const lista = movimientosDeLaRegla(app.datos, clave);
+  if (!regla || !lista.length) return;
+  const destino = regla.accion === ACCIONES_REGLA.PAGO
+    ? `pagos de ${((app.datos.tarjetas || []).find((t) => t.id === regla.tarjetaId) || { nombre: "tarjeta" }).nombre}`
+    : nombreCategoria(regla.categoriaId);
+  const visibles = lista.slice(0, FILAS_PARA_ELEGIR);
+
+  abrirHoja({
+    titulo: `${plural(lista.length, "movimiento coincide", "movimientos coinciden")}`,
+    textoGuardar: "Cambiar los marcados",
+    campos: [],
+    extra: `<p class="rotulo" style="margin:0 0 8px">Ya estaban capturados. Los marcados pasan a
+        <b>${esc(destino)}</b>; el monto, la fecha y la nota no se tocan.</p>
+      <div class="lista-elegir">
+        ${visibles.map((m) => `<label class="fila">
+          <input type="checkbox" data-elegir="${esc(m.id)}" checked>
+          <div class="crece"><div class="nombre">${esc(m.nota || "Sin nota")}</div>
+            <div class="sub">${fechaCorta(m.fecha)} · ${esc(nombreCategoria(m.categoria) || "")}</div></div>
+          <div class="monto">${monto(m.monto)}</div>
+        </label>`).join("")}
+      </div>
+      ${lista.length > visibles.length
+        ? `<label class="fila"><input type="checkbox" data-elegir-resto checked>
+            <div class="crece"><div class="sub">y los otros ${lista.length - visibles.length}, más viejos</div></div></label>`
+        : ""}`,
+    alGuardar: async () => {
+      const marcados = [...document.querySelectorAll("#hojas [data-elegir]:checked")].map((n) => n.dataset.elegir);
+      const resto = document.querySelector("#hojas [data-elegir-resto]:checked")
+        ? lista.slice(FILAS_PARA_ELEGIR).map((m) => m.id) : [];
+      const ids = [...marcados, ...resto];
+      if (!ids.length) return "No marcaste ninguno. Si no quieres cambiar nada, cancela.";
+      await guardar(aplicarReglaA(app.datos, clave, ids));
+      app.aviso = `${ids.length} ${ids.length === 1 ? "movimiento pasó" : "movimientos pasaron"} a ${destino}.`;
+      render();
+      return null;
+    },
+  });
+}
+
+// --- Plantillas ---
+
+function hojaPlantilla(id = null) {
+  const plantilla = id ? (app.datos.plantillas || []).find((p) => p.id === id) : null;
+  if (id && !plantilla) return;
+  abrirHoja({
+    titulo: plantilla ? "Editar plantilla" : "Nueva plantilla",
+    campos: [
+      { clave: "nombre", etiqueta: "Nombre", tipo: "texto", requerido: true, valor: plantilla ? plantilla.nombre : "" },
+      { clave: "monto", etiqueta: "Monto", tipo: "monto", requerido: true, valor: plantilla ? comoCampo(plantilla.monto) : "" },
+      {
+        clave: "tipo", etiqueta: "Es", tipo: "chips",
+        opciones: [{ valor: TIPOS.GASTO, etiqueta: "Gasto" }, { valor: TIPOS.INGRESO, etiqueta: "Ingreso" }],
+        valor: plantilla ? plantilla.tipo : TIPOS.GASTO,
+      },
+      {
+        clave: "categoria", etiqueta: "Categoría (si es gasto)", tipo: "select", opciones: opcionesCategorias(),
+        valor: plantilla && plantilla.categoria ? plantilla.categoria : (opcionesCategorias()[0] || {}).valor,
+      },
+    ],
+    alGuardar: async (valores) => {
+      const { datos, error } = guardarPlantilla(app.datos, {
+        ...(plantilla || {}),
+        nombre: valores.nombre,
+        monto: valores.monto,
+        tipo: valores.tipo || TIPOS.GASTO,
+        categoria: valores.tipo === TIPOS.INGRESO ? null : valores.categoria,
+      });
+      if (error) return error;
+      await guardar(datos);
+      return null;
+    },
+  });
+}
+
+// --- Estado de cuenta ---
+
+/**
+ * El texto del archivo. Muchos bancos de aquí todavía exportan en Windows-1252, no en UTF-8: si
+ * se lee mal, "DESCRIPCIÓN" sale con un rombo y el encabezado ya no se reconoce.
+ */
+async function textoDeArchivo(archivo) {
+  const bytes = await archivo.arrayBuffer();
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (e) {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
+async function leerEstadoDeCuenta(archivo) {
+  if (/\.xlsx?$/i.test(archivo.name || "")) {
+    app.aviso = "Excel no lo puedo leer aquí. Tu banco deja bajar lo mismo en CSV (a veces dice «texto» o «separado por comas»): ése sí.";
+    return render();
+  }
+  if (archivo.size > 5 * 1024 * 1024) {
+    app.aviso = "Ese archivo es demasiado grande para un estado de cuenta. Baja uno de menos meses.";
+    return render();
+  }
+  let texto;
+  try {
+    texto = await textoDeArchivo(archivo);
+  } catch (e) {
+    app.aviso = "No se pudo abrir el archivo.";
+    return render();
+  }
+
+  if (esOFX(texto)) {
+    const { movimientos, descartadas } = leerOFX(texto);
+    return hojaConfirmarImportacion(movimientos, descartadas);
+  }
+
+  const analisis = analizarCSV(texto);
+  if (!analisis.filas.length) {
+    app.aviso = "No encontré movimientos en ese archivo. ¿Es el CSV de movimientos de tu banco?";
+    return render();
+  }
+  hojaMapeo(analisis);
+}
+
+/** Unas filas de muestra de lo que saldría, para ver antes de mandar nada. */
+function muestraImportacion(movimientos, descartadas) {
+  if (!movimientos.length) {
+    return `<div class="aviso malo">Con estas columnas no sale ningún movimiento. Revisa cuál es la fecha y cuál el monto.</div>`;
+  }
+  const gastos = movimientos.filter((m) => m.tipo === TIPOS.GASTO).reduce((t, m) => t + m.monto, 0);
+  const ingresos = movimientos.filter((m) => m.tipo === TIPOS.INGRESO).reduce((t, m) => t + m.monto, 0);
+  return `<div class="rotulo">Así quedan (${plural(movimientos.length, "movimiento", "movimientos")}${
+      descartadas ? `; ${descartadas} ${descartadas === 1 ? "renglón no es" : "renglones no son"} movimiento` : ""}):</div>
+    ${movimientos.slice(0, 5).map((m) => `<div class="fila">
+      <div class="crece"><div class="nombre">${esc(m.nota || "Sin descripción")}</div>
+        <div class="sub">${fechaLarga(m.fecha)}</div></div>
+      <div class="monto"${m.tipo === TIPOS.INGRESO ? ' style="color:var(--bien)"' : ""}>${m.tipo === TIPOS.INGRESO ? "+" : "−"}${monto(m.monto)}</div>
+    </div>`).join("")}
+    <div class="rotulo" style="margin-top:6px">En total: −${monto(gastos)} en gastos y +${monto(ingresos)} de ingresos.
+      Si los gastos salen como ingresos, marca «al revés».</div>`;
+}
+
+/**
+ * Qué columna es qué. Se propone lo que se pudo deducir del encabezado, y la persona lo confirma
+ * viendo cómo quedarían las primeras filas — la muestra se rehace con cada cambio.
+ */
+function hojaMapeo(analisis) {
+  const { encabezado, filas, mapeo, orden, ordenSeguro } = analisis;
+  const columnas = Math.max(...filas.slice(0, 50).map((f) => f.length));
+  const ejemplo = (j) => filas.slice(0, 5).map((f) => f[j]).find((v) => v) || "";
+  const opciones = [
+    { valor: "", etiqueta: "— ninguna —" },
+    ...Array.from({ length: columnas }, (_, j) => ({
+      valor: String(j),
+      etiqueta: `${encabezado && encabezado[j] ? encabezado[j] : `Columna ${j + 1}`}${ejemplo(j) ? ` (${String(ejemplo(j)).slice(0, 24)})` : ""}`,
+    })),
+  ];
+  const valor = (j) => (j === null || j === undefined ? "" : String(j));
+  const leerMapeo = (valores) => ({
+    fecha: valores.fecha, descripcion: valores.descripcion, monto: valores.monto,
+    cargo: valores.cargo, abono: valores.abono, referencia: valores.referencia,
+  });
+  const convertir = (valores) => filasAMovimientos(filas, leerMapeo(valores), {
+    orden: valores.orden || "dma",
+    invertir: valores.invertir === "si",
+  });
+
+  abrirHoja({
+    titulo: "¿Qué columna es qué?",
+    textoGuardar: "Mandar a la bandeja",
+    campos: [
+      ...CAMPOS_IMPORTAR.map((c) => ({
+        clave: c.clave,
+        etiqueta: c.clave === "monto" ? "Monto (si viene en una sola columna)" : c.etiqueta,
+        tipo: "select", opciones, valor: valor(mapeo[c.clave]),
+      })),
+      {
+        clave: "orden", etiqueta: ordenSeguro ? "Las fechas vienen" : "Las fechas vienen (revisa: no lo pude saber)", tipo: "chips",
+        opciones: [{ valor: "dma", etiqueta: "día/mes/año" }, { valor: "mda", etiqueta: "mes/día/año" }], valor: orden,
+      },
+      {
+        clave: "invertir", etiqueta: "Signo del monto", tipo: "chips",
+        opciones: [{ valor: "no", etiqueta: "negativo = gasto" }, { valor: "si", etiqueta: "al revés" }], valor: "no",
+      },
+    ],
+    extra: `<div id="muestra-importacion"></div>`,
+    alGuardar: async (valores) => {
+      const { movimientos } = convertir(valores);
+      if (!movimientos.length) return "Con estas columnas no sale ningún movimiento.";
+      return mandarImportacion(movimientos);
+    },
+  });
+
+  // La muestra, viva: cada cambio de columna la rehace. Se lee lo que hay en el formulario sin
+  // validar, igual que al guardar.
+  const formulario = document.querySelector("#hojas form");
+  const pintarMuestra = () => {
+    const valores = {};
+    for (const nodo of formulario.querySelectorAll("[data-clave]")) {
+      valores[nodo.dataset.clave] = nodo.classList.contains("chips") ? nodo.dataset.valor || "" : nodo.value || null;
+    }
+    const { movimientos, descartadas } = convertir(valores);
+    const caja = document.getElementById("muestra-importacion");
+    if (caja) caja.innerHTML = muestraImportacion(movimientos, descartadas);
+  };
+  formulario.addEventListener("change", pintarMuestra);
+  formulario.addEventListener("click", () => setTimeout(pintarMuestra, 0)); // las fichas no disparan change
+  pintarMuestra();
+}
+
+/** Un OFX no necesita mapeo: se enseña lo que salió y se confirma. */
+function hojaConfirmarImportacion(movimientos, descartadas) {
+  if (!movimientos.length) {
+    app.aviso = "No encontré movimientos en ese archivo.";
+    return render();
+  }
+  abrirHoja({
+    titulo: "Tu estado de cuenta",
+    textoGuardar: "Mandar a la bandeja",
+    campos: [],
+    extra: muestraImportacion(movimientos, descartadas),
+    alGuardar: async () => mandarImportacion(movimientos),
+  });
+}
+
+/** El último paso, igual para CSV y OFX: a la bandeja, y decir qué pasó con cada cosa. */
+async function mandarImportacion(movimientos) {
+  const r = mandarABandeja(app.datos, movimientos, app.hoy);
+  if (!r.nuevos) {
+    if (r.sinCupo) return `Ya hay ${TANDA_DE_IMPORTACION} movimientos del archivo esperando en la bandeja. Acéptalos y vuelve a subirlo.`;
+    app.aviso = r.repetidos ? `Ya había mandado ${r.repetidos === 1 ? "ese movimiento" : `esos ${r.repetidos}`}: no hay nada nuevo.` : "No hubo nada que mandar.";
+    render();
+    return null;
+  }
+  app.vista = "bandeja";
+  await guardar(r.datos);
+  app.aviso = [
+    `${r.nuevos} ${r.nuevos === 1 ? "movimiento llegó" : "movimientos llegaron"} a la bandeja.`,
+    r.parecidos ? `${r.parecidos} se ${r.parecidos === 1 ? "parece" : "parecen"} a algo que ya tenías: ${r.parecidos === 1 ? "está marcado" : "están marcados"} para revisar.` : "",
+    r.repetidos ? `${r.repetidos} ya los había mandado antes.` : "",
+    r.sinCupo ? `${r.sinCupo} no cupieron en esta tanda: acepta éstos y vuelve a subir el mismo archivo.` : "",
+  ].filter(Boolean).join(" ");
+  render();
+  return null;
+}
+
 /**
  * El teclado de efectivo. La pantalla donde se juega si esta app sirve o estorba.
  *
@@ -9793,6 +11144,7 @@ const TIPOS_CAPTURA = [
 function hojaTeclado() {
   const contenedor = document.getElementById("hojas");
   const sugeridos = montosFrecuentes(app.datos, app.hoy, 3, app.hora);
+  const plantillasTeclado = listaDePlantillas(app.datos);
   const categorias = categoriasACalce(sugeridos.length ? sugeridos[0].categoriaId : "");
 
   let tecleado = "";
@@ -9809,6 +11161,9 @@ function hojaTeclado() {
           data-categoria="${esc(f.categoriaId || "otros")}"
           title="lo has gastado ${f.veces} veces">${monto(f.monto)}${categoria ? ` ${categoria.emoji}` : ""}</button>`;
       }).join("")}</div>` : ""}
+    ${plantillasTeclado.length ? `<div class="rotulo" style="margin-top:10px">Tus plantillas</div>
+      <div class="chips apretados">${plantillasTeclado.map((p) => `<button type="button" class="chip"
+        data-plantilla="${esc(p.id)}">${esc(p.nombre)} · ${p.tipo === TIPOS.INGRESO ? "+" : ""}${monto(p.monto)}</button>`).join("")}</div>` : ""}
     <div class="rotulo" style="margin-top:10px">En qué</div>
     <div class="chips apretados" id="teclado-categorias">${categorias.map((c) => `
       <button type="button" class="chip" aria-pressed="${c.valor === elegida}"
@@ -9863,6 +11218,18 @@ function hojaTeclado() {
   contenedor.querySelector(".hoja").addEventListener("click", async (e) => {
     const boton = e.target.closest("button");
     if (!boton) return;
+
+    // Una plantilla: igual de corto, y además con el nombre que le puso la persona.
+    if (boton.dataset.plantilla) {
+      const { datos, error } = usarPlantilla(app.datos, boton.dataset.plantilla, app.hoy, app.hora);
+      if (error) {
+        app.aviso = error;
+        return render();
+      }
+      cerrarHoja();
+      vibrar();
+      return guardar(datos);
+    }
 
     // Un monto de los de siempre: un toque y ya está guardado. Ése es el camino de dos segundos.
     if (boton.dataset.repetir) {
@@ -10339,11 +11706,12 @@ async function arrancar() {
   // no avisa de otra forma.
   document.addEventListener("change", (e) => {
     const cual = e.target.dataset.accionArchivo;
-    if (cual !== "captura" && cual !== "nomina") return;
+    if (cual !== "captura" && cual !== "nomina" && cual !== "estado") return;
     const archivo = e.target.files && e.target.files[0];
     e.target.value = ""; // que elegir el mismo archivo dos veces vuelva a disparar
     if (!archivo) return;
     if (cual === "captura") leerCaptura(archivo);
+    else if (cual === "estado") leerEstadoDeCuenta(archivo);
     else aplicarNomina(archivo);
   });
 
