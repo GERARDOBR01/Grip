@@ -15,11 +15,8 @@ teclado propio en dos toques. Y tu ingreso sale del XML de tu recibo de nómina:
 Contesta lo que importa a diario: a dónde se va el dinero, cuánto puedes gastar hoy sin
 quedarte corto, y si una meta de ahorro de verdad alcanza o no.
 
-**[Abrir la app](https://gerardobr01.github.io/grip/)** · desde el celular, *Añadir a
+**[Abrir la app](https://gerardobr01.github.io/Grip/)** · desde el celular, *Añadir a
 pantalla de inicio* y queda instalada con su ícono, funcionando sin conexión.
-
-<sub>La dirección va en minúscula aunque el repositorio se llame `Grip`: así la publica GitHub
-Pages. No es una errata.</sub>
 
 **Sin servidor, sin cuenta y sin dependencias.** No hay registro ni login. Los datos se
 guardan en el navegador de quien la usa: aquí no hay backend al que mandarlos.
