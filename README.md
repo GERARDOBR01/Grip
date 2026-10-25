@@ -1,3 +1,5 @@
+<img src="docs/banner.svg" alt="Grip: finanzas personales sin cuenta ni servidor" width="100%">
+
 # Grip
 
 App de finanzas personales para quien no tiene tiempo de llevarlas. **Le pasas la captura de
@@ -6,8 +8,9 @@ confirmas. Si prefieres, pegas el correo. Y aprende: si corriges una categoría 
 vuelve a preguntar — ni por los cargos que vienen, ni por los que ya estaban, que se ofrece a
 arreglar de un toque.
 
-El efectivo, que en México es el **78%** de los pagos, se anota con un teclado propio en dos
-toques. Y tu ingreso sale del XML de tu recibo de nómina: exacto, sin teclearlo.
+El efectivo, que en México sigue siendo el medio de pago más usado (según la ENIF 2021, el
+**78.7 %** de las personas de 18 a 70 años lo usa en pagos de más de 501 pesos), se anota con un
+teclado propio en dos toques. Y tu ingreso sale del XML de tu recibo de nómina: exacto, sin teclearlo.
 
 Contesta lo que importa a diario: a dónde se va el dinero, cuánto puedes gastar hoy sin
 quedarte corto, y si una meta de ahorro de verdad alcanza o no.
